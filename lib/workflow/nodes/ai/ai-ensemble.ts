@@ -171,7 +171,8 @@ export async function defaultAiEnsembleDeps(ctx: StepExecutionContext): Promise<
         >["customProviders"],
       }
     : {}
-  const runPrompt = await defaultCouncilRunPrompt(ledger)
+  const { workflowExecutionRunId } = await import("@/lib/execution/workflow-bridge")
+  const runPrompt = await defaultCouncilRunPrompt(ledger, workflowExecutionRunId(ctx.runId))
 
   return {
     runAgent: async (input) => {

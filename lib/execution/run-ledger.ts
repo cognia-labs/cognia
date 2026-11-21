@@ -61,7 +61,12 @@ export interface RunBudgetHold {
   readonly holdId: string
   readonly amounts: RunBudgetAmountsV1
   readonly deadlineAt?: number
-  report(usage: RunBudgetAmountsV1): Promise<void>
+  /**
+   * Record what this execution has spent so far. Resolves what it may still
+   * spend itself: its amount less what children it lent to hold now, so a
+   * holder that lent part of its money stops before spending it a second time.
+   */
+  report(usage: RunBudgetAmountsV1): Promise<RunBudgetAmountsV1>
   /** What this hold and everything lent from it spent so far. */
   spent(): Promise<RunBudgetAmountsV1>
   finish(usage: RunBudgetAmountsV1 | undefined, confirmedStopped: boolean): Promise<void>
@@ -70,6 +75,20 @@ export interface RunBudgetHold {
 type Db = ReturnType<typeof getDb>
 const DIMENSIONS = ["tokens", "costUsd"] as const
 const WAIT_MS = 250
+
+/**
+ * The ledger tags the key of a hold that an execution spends from itself (a
+ * reservation that names its model) with this prefix. Another spending
+ * execution of the same run is its sibling, not its borrower: two parallel
+ * calls of one run lending from each other were each granted the whole
+ * allowance (F25). A hold without the tag is a pool (a declared budget) that
+ * its run's executions borrow from.
+ */
+const SPENDING_HOLD_PREFIX = "call:"
+
+function isSpendingHold(holdId: string): boolean {
+  return holdId.startsWith(SPENDING_HOLD_PREFIX)
+}
 
 function positive(value: number | undefined): value is number {
   return value !== undefined && Number.isFinite(value) && value >= 0
@@ -100,14 +119,45 @@ async function poolChain(
 /**
  * The nearest live hold on the chain, the run itself first: a second
  * execution of a run that already holds lends from that hold instead of
- * waiting behind it.
+ * waiting behind it — unless both spend themselves. A spending execution of
+ * the run never lends to another spending execution of the same run: they
+ * are parallel calls, siblings under the hold that lends to the run.
  */
-function parentHold(ledger: RunLedgerV1, chain: ExecutionRun[]): string | undefined {
-  for (const ancestor of chain) {
-    const holdId = Object.keys(ledger.holds).find((id) => ledger.holds[id].runId === ancestor.id)
+function parentHold(
+  ledger: RunLedgerV1,
+  chain: ExecutionRun[],
+  spending: boolean
+): string | undefined {
+  for (const [index, ancestor] of chain.entries()) {
+    const holdId = Object.keys(ledger.holds).find(
+      (id) =>
+        ledger.holds[id].runId === ancestor.id && !(spending && index === 0 && isSpendingHold(id))
+    )
     if (holdId) return holdId
   }
   return undefined
+}
+
+/** What `holdId`'s live children borrowed from it, per dimension. */
+function lentFrom(ledger: RunLedgerV1, holdId: string | undefined): RunBudgetAmountsV1 {
+  const lent: RunBudgetAmountsV1 = {}
+  for (const field of DIMENSIONS)
+    lent[field] = Object.values(ledger.holds)
+      .filter((hold) => hold.parentHoldId === holdId)
+      .reduce((sum, hold) => sum + (hold.amounts[field] ?? 0), 0)
+  return lent
+}
+
+/** Whether a USD amount bounds a reservation under `holdId` or the reservation itself. */
+function usdBounded(
+  ledger: RunLedgerV1,
+  holdId: string | undefined,
+  caps: RunBudgetCaps | undefined
+): boolean {
+  if (ledger.limits.costUsd !== undefined || isCap(caps?.costUsd)) return true
+  for (let id = holdId; id; id = ledger.holds[id].parentHoldId)
+    if (ledger.holds[id].amounts.costUsd !== undefined) return true
+  return false
 }
 
 function available(ledger: RunLedgerV1, parentHoldId: string | undefined): RunBudgetAmountsV1 {
@@ -122,10 +172,7 @@ function available(ledger: RunLedgerV1, parentHoldId: string | undefined): RunBu
         ? undefined
         : ledger.limits[field]! - ledger.spent[field]
     if (base === undefined) continue
-    const lent = Object.values(ledger.holds)
-      .filter((hold) => hold.parentHoldId === parentHoldId)
-      .reduce((sum, hold) => sum + (hold.amounts[field] ?? 0), 0)
-    result[field] = Math.max(0, base - lent)
+    result[field] = Math.max(0, base - (lentFrom(ledger, parentHoldId)[field] ?? 0))
   }
   return result
 }
@@ -166,14 +213,16 @@ type Admission =
 function admission(
   ledger: RunLedgerV1,
   chain: ExecutionRun[],
-  options: Pick<ReserveRunBudgetOptions, "model" | "pricing">
+  options: Pick<ReserveRunBudgetOptions, "model" | "pricing" | "caps">
 ): Admission {
-  const parentHoldId = parentHold(ledger, chain)
+  const parentHoldId = parentHold(ledger, chain, Boolean(options.model))
   const deadlineAt = holdDeadline(ledger, parentHoldId)
   if (deadlineAt !== undefined && deadlineAt <= Date.now()) return { refusal: "deadline_exceeded" }
+  // A USD bound anywhere above the call (the tree's limit, a declared budget
+  // it borrows under, its own cap) cannot meter a model it cannot price.
   if (
-    ledger.limits.costUsd !== undefined &&
     options.model &&
+    usdBounded(ledger, parentHoldId, options.caps) &&
     !resolveModelPricingUsd(options.model.providerId, options.model.modelId, options.pricing)
   )
     return { refusal: "pricing_unknown" }
@@ -205,7 +254,7 @@ export async function reserveRunBudget(
   options: ReserveRunBudgetOptions = {}
 ): Promise<RunBudgetHold | undefined> {
   const db = getDb()
-  const holdId = crypto.randomUUID()
+  const holdId = `${options.model ? SPENDING_HOLD_PREFIX : ""}${crypto.randomUUID()}`
   // The claim outlives this window only as long as the hold: recovery settles
   // a hold nobody claims as an unconfirmed stop.
   const releaseClaim = await holdChildRunOwnership(`budget:${holdId}`)
@@ -277,13 +326,21 @@ function holdHandle(
   return {
     ...granted,
     holdId,
-    report: (usage) =>
-      mutate((_ledger, hold) => {
+    report: async (usage) => {
+      let own: RunBudgetAmountsV1 = { ...granted.amounts }
+      await mutate((ledger, hold) => {
         hold.observed ??= {}
         for (const field of DIMENSIONS)
           if (positive(usage[field]))
             hold.observed[field] = Math.max(hold.observed[field] ?? 0, usage[field]!)
-      }),
+        const lent = lentFrom(ledger, holdId)
+        own = {}
+        for (const field of DIMENSIONS)
+          if (hold.amounts[field] !== undefined)
+            own[field] = Math.max(0, hold.amounts[field]! - (lent[field] ?? 0))
+      })
+      return own
+    },
     spent: async () => {
       const hold = (await db.executionRuns.get(granted.rootRunId))?.runLedger?.holds[holdId]
       const spent: RunBudgetAmountsV1 = {}
@@ -457,9 +514,9 @@ export async function readRunBudget(
     if (!found) return undefined
     const ledger = found.root.runLedger
     return {
-      ...available(ledger, parentHold(ledger, found.chain)),
+      ...available(ledger, parentHold(ledger, found.chain, false)),
       spent: ledger.spent,
-      deadlineAt: holdDeadline(ledger, parentHold(ledger, found.chain)),
+      deadlineAt: holdDeadline(ledger, parentHold(ledger, found.chain, false)),
     }
   })
 }

@@ -131,6 +131,32 @@ describe("budgetedLlmClient", () => {
     return { calls, wrapped }
   }
 
+  it("counts the prompt against a token cap, and refuses a call it cannot afford (F25)", async () => {
+    await declareRunBudget("root", { tokens: 3 })
+    const { calls, wrapped } = client(async () => "ok")
+    await expect(
+      budgetedLlmClient(wrapped, "call", PRICED).complete(
+        "ten tokens of prompt text here, roughly",
+        {}
+      )
+    ).rejects.toMatchObject({ reason: "budget_exhausted" })
+    expect(calls).toEqual([])
+    // Nothing was sent, so nothing was charged.
+    expect((await spent())?.tokens).toBe(0)
+  })
+
+  it("aborts a call once what it may still spend is lent to a child (F25)", async () => {
+    await declareRunBudget("root", { tokens: 100 })
+    const budget = (await beginRailBudget("call", PRICED))!
+    const { reserveRunBudget } = await import("./run-ledger")
+    await mockDb.executionRuns.put(row("child", "call"))
+    const child = (await reserveRunBudget("child", { caps: { tokens: 80 }, model: PRICED }))!
+    await budget.observe({ inputTokens: 15, outputTokens: 5 })
+    expect(budget.signal.aborted).toBe(true)
+    await child.finish({ tokens: 80 }, true)
+    await budget.finish({ inputTokens: 15, outputTokens: 5 }, true)
+  })
+
   it("leaves the call untouched without a budget", async () => {
     const { calls, wrapped } = client(async () => "ok")
     await budgetedLlmClient(wrapped, "call", PRICED).complete("p", { maxTokens: 50 })
@@ -146,7 +172,8 @@ describe("budgetedLlmClient", () => {
     })
     const onUsage = jest.fn()
     await budgetedLlmClient(wrapped, "call", PRICED).complete("p", { maxTokens: 500, onUsage })
-    expect(calls[0]).toMatchObject({ maxTokens: 100, maxRetries: 0 })
+    // The 100-token hold pays for the prompt too: one token for "p".
+    expect(calls[0]).toMatchObject({ maxTokens: 99, maxRetries: 0 })
     expect(onUsage).toHaveBeenCalledWith(usage)
     expect((await spent())?.tokens).toBe(30)
   })

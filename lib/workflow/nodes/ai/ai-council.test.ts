@@ -1,9 +1,12 @@
-const mockDefaultCouncilRunPrompt = jest.fn(async (_ledger: unknown) => async () => ({
-  completion: "x",
-}))
+const mockDefaultCouncilRunPrompt = jest.fn(
+  async (_ledger: unknown, _runId?: string) => async () => ({
+    completion: "x",
+  })
+)
 jest.mock("@/lib/ai/council/run-council", () => ({
   ...jest.requireActual("@/lib/ai/council/run-council"),
-  defaultCouncilRunPrompt: (ledger: unknown) => mockDefaultCouncilRunPrompt(ledger),
+  defaultCouncilRunPrompt: (ledger: unknown, runId?: string) =>
+    mockDefaultCouncilRunPrompt(ledger, runId),
 }))
 
 import { defaultAiCouncilDeps, executeAiCouncil, type AiCouncilParams } from "./ai-council"
@@ -159,11 +162,15 @@ describe("defaultAiCouncilDeps", () => {
   it("ledgers every councillor and synthesizer call as this step's agentsWorkflows work", async () => {
     const { ctx } = makeCtx(baseParams, { projectId: "ws-2" })
     await defaultAiCouncilDeps(ctx)
-    expect(mockDefaultCouncilRunPrompt).toHaveBeenCalledWith({
-      surface: "agentsWorkflows",
-      origin: "workflow",
-      featureId: "workflow:step1",
-      workspaceId: "ws-2",
-    })
+    // Every call reserves from the workflow run's tree budget (ADR-0243).
+    expect(mockDefaultCouncilRunPrompt).toHaveBeenCalledWith(
+      {
+        surface: "agentsWorkflows",
+        origin: "workflow",
+        featureId: "workflow:step1",
+        workspaceId: "ws-2",
+      },
+      `execution:workflow:${ctx.runId}`
+    )
   })
 })

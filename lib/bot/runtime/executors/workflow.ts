@@ -23,6 +23,8 @@ export interface WorkflowExecutorDeps {
     entrypoint: "bot"
     caller: string
     idempotencyKey: string
+    /** The Bot run the workflow runs under (its run budget and authority parent). */
+    authorityParentRunId: string
     triggerKind: "trigger.integration.event"
     triggerId?: string
     payload: unknown
@@ -83,6 +85,9 @@ export function createWorkflowBotExecutor(deps: WorkflowExecutorDeps = {}): BotE
       caller: `bot:${ctx.installation.id}`,
       // The Bot run id, so a redelivered event cannot start the workflow twice.
       idempotencyKey: ctx.runId,
+      // The workflow is the Bot run's work: it runs under the Bot run, so the
+      // Bot's run budget bounds every model call the workflow makes.
+      authorityParentRunId: ctx.runId,
       triggerKind: "trigger.integration.event",
       triggerId: ctx.event.triggerId,
       payload: { event: ctx.event, config: ctx.config },

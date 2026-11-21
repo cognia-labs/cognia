@@ -131,6 +131,8 @@ describe("createWorkflowBotExecutor", () => {
         caller: "bot:boti_1",
         // A redelivered event must not start the workflow twice.
         idempotencyKey: "run_bot_bdl_1",
+        // It runs under the Bot run, so the Bot's run budget bounds it.
+        authorityParentRunId: "run_bot_bdl_1",
       })
     )
     expect(result).toMatchObject({ output: { workflowRunId: "wfr_1" } })

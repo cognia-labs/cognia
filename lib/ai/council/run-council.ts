@@ -314,13 +314,22 @@ export async function runCouncil(
  * synthesizer and each of their fallback attempts is its own reservation on
  * that surface. The `ai.council` / `ai.ensemble` nodes and Agent auto-compose
  * pass `agentsWorkflows`; the `/council` slash command passes `utilityLedger`.
+ *
+ * `executionRunId` is the run whose tree budget every one of those calls
+ * reserves from (ADR-0243): a council inside a capped workflow spends from
+ * that cap, never beside it.
  */
 export async function defaultCouncilRunPrompt(
-  ledger: RoutedPromptLedger
+  ledger: RoutedPromptLedger,
+  executionRunId?: string
 ): Promise<RunCouncilDeps["runPrompt"]> {
   const { runRoutedPrompt, defaultRoutedPromptDeps } =
     await import("@/lib/workflow/nodes/ai/ai-prompt-routed")
-  const routedDeps = await defaultRoutedPromptDeps({ routingSurface: "council", ledger })
+  const routedDeps = await defaultRoutedPromptDeps({
+    routingSurface: "council",
+    ledger,
+    ...(executionRunId ? { executionRunId } : {}),
+  })
   return async (input: RunPromptInput): Promise<RunPromptOutput> => {
     const out = await runRoutedPrompt(
       {

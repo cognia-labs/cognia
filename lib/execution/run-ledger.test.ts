@@ -267,3 +267,56 @@ it("reports what a declaration spent when it is released", async () => {
   await sibling.finish({ tokens: 2 }, true)
   expect(await releaseRoot()).toEqual({ tokens: 6, costUsd: 0 })
 })
+
+describe("parallel spending in one run (F25)", () => {
+  const model = { modelId: "priced" }
+
+  it("makes two parallel calls of one run siblings, not lender and borrower", async () => {
+    await declareRunBudget("root", { tokens: 100 })
+    const first = (await reserveRunBudget("a", { model }))!
+    expect(first.amounts).toEqual({ tokens: 100 })
+    let granted = false
+    const second = reserveRunBudget("a", { model }).then((hold) => ((granted = true), hold))
+    await new Promise((resolve) => setTimeout(resolve, 300))
+    // It waits: the first call may still spend all 100.
+    expect(granted).toBe(false)
+    await first.finish({ tokens: 70 }, true)
+    const next = (await second)!
+    expect(next.amounts).toEqual({ tokens: 30 })
+    await next.finish({ tokens: 30 }, true)
+    expect((await ledger())?.spent.tokens).toBe(100)
+  })
+
+  it("still lends a run's declared budget to its own calls", async () => {
+    await declareRunBudget("root", { tokens: 100 })
+    const release = await declareRunBudget("a", { tokens: 40 })
+    const call = (await reserveRunBudget("a", { model }))!
+    expect(call.amounts).toEqual({ tokens: 40 })
+    await call.finish({ tokens: 10 }, true)
+    await release()
+  })
+
+  it("tells a holder what it may still spend once a child borrowed from it", async () => {
+    await declareRunBudget("root", { tokens: 100 })
+    const parent = (await reserveRunBudget("a", { model }))!
+    const child = (await reserveRunBudget("a1", { caps: { tokens: 60 }, model }))!
+    expect(child.amounts).toEqual({ tokens: 60 })
+    await expect(parent.report({ tokens: 10 })).resolves.toEqual({ tokens: 40 })
+    await child.finish({ tokens: 60 }, true)
+    await parent.finish({ tokens: 40 }, true)
+    expect((await ledger())?.spent.tokens).toBe(100)
+  })
+
+  it("refuses an unpriced model under a declared USD budget the tree's limit lacks", async () => {
+    await declareRunBudget("root", { tokens: 1_000 })
+    const release = await declareRunBudget("a", { costUsd: 0.01 })
+    await expect(reserveRunBudget("a1", { model: { modelId: "unpriced" } })).rejects.toMatchObject({
+      reason: "pricing_unknown",
+    })
+    // Its own USD cap needs a price too.
+    await expect(
+      reserveRunBudget("b", { model: { modelId: "unpriced" }, caps: { costUsd: 0.01 } })
+    ).rejects.toMatchObject({ reason: "pricing_unknown" })
+    await release()
+  })
+})

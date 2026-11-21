@@ -10,9 +10,12 @@ jest.mock("@/lib/db/settings", () => ({
   })),
 }))
 const mockCouncilRunPrompt = jest.fn(async () => ({ completion: "merged-by-council" }))
-const mockDefaultCouncilRunPrompt = jest.fn(async (_ledger: unknown) => mockCouncilRunPrompt)
+const mockDefaultCouncilRunPrompt = jest.fn(
+  async (_ledger: unknown, _runId?: string) => mockCouncilRunPrompt
+)
 jest.mock("@/lib/ai/council/run-council", () => ({
-  defaultCouncilRunPrompt: (ledger: unknown) => mockDefaultCouncilRunPrompt(ledger),
+  defaultCouncilRunPrompt: (ledger: unknown, runId?: string) =>
+    mockDefaultCouncilRunPrompt(ledger, runId),
 }))
 const mockExecuteDeployedWorkflow = jest.fn()
 jest.mock("@/lib/workflow/runtime/execution-authority", () => ({
@@ -416,12 +419,15 @@ describe("defaultAiEnsembleDeps", () => {
         ledger: { featureId: "workflow:n1", origin: "workflow", workspaceId: "ws-3" },
       })
     )
-    expect(mockDefaultCouncilRunPrompt).toHaveBeenCalledWith({
-      surface: "agentsWorkflows",
-      origin: "workflow",
-      featureId: "workflow:n1",
-      workspaceId: "ws-3",
-    })
+    expect(mockDefaultCouncilRunPrompt).toHaveBeenCalledWith(
+      {
+        surface: "agentsWorkflows",
+        origin: "workflow",
+        featureId: "workflow:n1",
+        workspaceId: "ws-3",
+      },
+      `execution:workflow:${ctx.runId}`
+    )
   })
 
   it("runPrompt delegates to the council runPrompt", async () => {

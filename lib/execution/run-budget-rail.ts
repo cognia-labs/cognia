@@ -12,6 +12,8 @@ import {
   tokenAllowanceForUsd,
   type ResolvePricingOptions,
 } from "@/lib/usage/pricing"
+import { estimateTokens } from "@cognia/router-fusion"
+
 import { reserveRunBudget, RunBudgetError, type RunBudgetCaps } from "./run-ledger"
 
 /** Usage as rails meter it. Missing fields are unknown, not zero. */
@@ -130,17 +132,19 @@ export async function beginRailBudget(
     signal: controller.signal,
     ...(hold.deadlineAt !== undefined ? { deadlineAt: hold.deadlineAt } : {}),
     ...(Number.isFinite(tokens) ? { tokens } : {}),
-    report: (usage) => hold.report(price(usage)),
-    observe(usage) {
+    report: async (usage) => {
+      await hold.report(price(usage))
+    },
+    async observe(usage) {
       const spent = price(usage)
-      if (
+      const exhausted = (limit: RunBudgetAmountsV1) =>
         (["tokens", "costUsd"] as const).some(
-          (field) =>
-            hold.amounts[field] !== undefined && (spent[field] ?? 0) >= hold.amounts[field]!
+          (field) => limit[field] !== undefined && (spent[field] ?? 0) >= limit[field]!
         )
-      )
-        controller.abort(new RunBudgetError("budget_exhausted"))
-      return hold.report(spent)
+      if (exhausted(hold.amounts)) controller.abort(new RunBudgetError("budget_exhausted"))
+      // What it may still spend itself shrinks by what children borrowed from it.
+      const own = await hold.report(spent)
+      if (exhausted(own)) controller.abort(new RunBudgetError("budget_exhausted"))
     },
     async finish(usage, confirmedStopped) {
       clearTimeout(timer)
@@ -156,7 +160,7 @@ export async function beginRailBudget(
  * budget the call is untouched.
  */
 export function budgetedLlmClient(client: LlmClient, runId: string, model: RailModel): LlmClient {
-  const begin = async (options: LlmClientCallOptions | undefined) => {
+  const begin = async (prompt: string, options: LlmClientCallOptions | undefined) => {
     const budget = await beginRailBudget(
       runId,
       model,
@@ -164,7 +168,17 @@ export function budgetedLlmClient(client: LlmClient, runId: string, model: RailM
     )
     if (!budget) return { options, finish: async () => undefined }
     let usage: UsageDelta | undefined
-    const { tokens } = budget
+    // The prompt is read too: a token allowance spent on output alone let a
+    // 10-token prompt and a 3-token answer through a 3-token cap.
+    const tokens =
+      budget.tokens === undefined
+        ? undefined
+        : budget.tokens - estimateTokens(`${options?.system ?? ""}\n${prompt}`)
+    if (tokens !== undefined && tokens < 1) {
+      // Nothing was sent: the hold is settled at nothing, not charged whole.
+      await budget.finish({ inputTokens: 0, outputTokens: 0, costUsd: 0 }, true)
+      throw new RunBudgetError("budget_exhausted")
+    }
     return {
       options: {
         ...options,
@@ -185,7 +199,7 @@ export function budgetedLlmClient(client: LlmClient, runId: string, model: RailM
   return {
     ...client,
     async complete(prompt, options) {
-      const call = await begin(options)
+      const call = await begin(prompt, options)
       let answered = false
       try {
         const text = await client.complete(prompt, call.options)
@@ -198,7 +212,7 @@ export function budgetedLlmClient(client: LlmClient, runId: string, model: RailM
     ...(client.stream
       ? {
           async *stream(prompt: string, options?: LlmClientCallOptions) {
-            const call = await begin(options)
+            const call = await begin(prompt, options)
             let answered = false
             try {
               yield* client.stream!(prompt, call.options)

@@ -317,12 +317,31 @@ describe("executeAgent", () => {
         { providerId: "openai", modelId: "gpt-4o" },
         expect.objectContaining({ signal: expect.any(AbortSignal) })
       )
-      expect(mockStreamText.mock.calls[0][0]).toMatchObject({ maxOutputTokens: 25 })
+      // 25.7 tokens left, one of them the prompt's ("hi"): 24 for the answer (F25).
+      expect(mockStreamText.mock.calls[0][0]).toMatchObject({ maxOutputTokens: 24 })
       expect(mockStreamText.mock.calls[0][0].abortSignal).toBe(signal)
       expect(finish).toHaveBeenCalledWith(
         expect.objectContaining({ inputTokens: 40, outputTokens: 2 }),
         true
       )
+    })
+
+    it("refuses a step whose prompt alone spends the hold's tokens, unsent and free (F25)", async () => {
+      primeTextChannel(["raw"])
+      const finish = jest.fn(async () => undefined)
+      mockBeginRailBudget.mockResolvedValueOnce({
+        signal: new AbortController().signal,
+        tokens: 1,
+        report: jest.fn(),
+        finish,
+      })
+      await expect(
+        runCompletionRail("a prompt longer than the one token left", {
+          executionIdentity: { runId: "execution:job:tiny" },
+        } as never)
+      ).rejects.toMatchObject({ reason: "budget_exhausted" })
+      expect(mockStreamText).not.toHaveBeenCalled()
+      expect(finish).toHaveBeenCalledWith({ inputTokens: 0, outputTokens: 0 }, true)
     })
 
     it("settles a step refused before dispatch as stopped and free", async () => {

@@ -1259,11 +1259,20 @@ export async function runCompletionRail(
       )
       if (budget) {
         options.abortSignal = budget.signal
-        if (budget.tokens !== undefined)
+        if (budget.tokens !== undefined) {
+          // The hold's tokens pay for the prompt as well as the answer.
+          const { estimateTokens } = await import("@cognia/router-fusion")
+          const left = budget.tokens - estimateTokens(`${system ?? ""}\n${ledgerText}`)
+          // Not sent: the catch below settles the hold at nothing.
+          if (left < 1) {
+            const { RunBudgetError } = await import("@/lib/execution/run-ledger")
+            throw new RunBudgetError("budget_exhausted")
+          }
           options.maxOutputTokens = Math.max(
             1,
-            Math.min(Number(options.maxOutputTokens ?? Infinity), Math.floor(budget.tokens))
+            Math.min(Number(options.maxOutputTokens ?? Infinity), Math.floor(left))
           )
+        }
       }
 
       // This rail makes exactly one model step and exposes no tools. Gate that

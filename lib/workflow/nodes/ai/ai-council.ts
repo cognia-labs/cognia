@@ -38,7 +38,13 @@ export interface AiCouncilParams {
  */
 export async function defaultAiCouncilDeps(ctx: StepExecutionContext): Promise<RunCouncilDeps> {
   const { workflowNodeLedger } = await import("./ai-prompt-routed")
-  return { runPrompt: await defaultCouncilRunPrompt(workflowNodeLedger(ctx)) }
+  const { workflowExecutionRunId } = await import("@/lib/execution/workflow-bridge")
+  return {
+    runPrompt: await defaultCouncilRunPrompt(
+      workflowNodeLedger(ctx),
+      workflowExecutionRunId(ctx.runId)
+    ),
+  }
 }
 
 export async function executeAiCouncil(

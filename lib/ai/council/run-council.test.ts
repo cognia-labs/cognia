@@ -358,4 +358,19 @@ describe("defaultCouncilRunPrompt", () => {
       { routed: true }
     )
   })
+
+  it("reserves every call from the caller's run tree budget when it names a run", async () => {
+    const ledger = {
+      surface: "agentsWorkflows" as const,
+      origin: "workflow" as const,
+      featureId: "workflow:c1",
+      workspaceId: null,
+    }
+    await defaultCouncilRunPrompt(ledger, "execution:workflow:run-1")
+    expect(mockDefaultRoutedPromptDeps).toHaveBeenLastCalledWith({
+      routingSurface: "council",
+      ledger,
+      executionRunId: "execution:workflow:run-1",
+    })
+  })
 })
