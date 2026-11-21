@@ -19,14 +19,15 @@ import {
   type UsageSourceStateRow,
   type UsageSourceStatus,
 } from "@/lib/db/usage-source-states"
-import { getDb } from "@/lib/db/schema"
+import { activeDatabaseName, getDb } from "@/lib/db/schema"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
-import { commitUsageRows } from "@/lib/usage/usage-ledger"
+import { commitUsageRows, UsageLedgerDatabaseChangedError } from "@/lib/usage/usage-ledger"
 import { getSessionSources } from "@/lib/session-import/registry"
 import { scanSourceUsage } from "@/lib/session-import/usage-scan"
 import type {
   AgentSessionSourceAdapter,
   SessionScanInput,
+  SessionSummary,
   UsageScanQuery,
 } from "@/lib/session-import/types"
 
@@ -87,23 +88,33 @@ export function scanDue(state: UsageSourceStateRow | null, now: number, force = 
 }
 
 /**
- * Persist one batch's rows and, when the scan read the source to the end,
- * retire rows for sessions that no longer exist upstream.
+ * Persist a scan's rows for one source, replacing exactly the upstream
+ * sessions it read and retiring the ones it established are gone.
  *
- * The deletion is gated on completeness for a reason. A truncated batch has
- * seen only a slice of the corpus, so "not in this batch" does not mean "gone",
- * and deleting on it would erase most of a source's history on every partial
- * scan.
+ * `parsedSessions` are the sessions read in full: their old rows that the
+ * scan no longer produced are deleted. `goneSessions` are sessions confirmed
+ * absent upstream: all their rows go. A session in neither (not read this
+ * time, a read that failed, outside the query window) keeps every row.
+ * Whole-source retirement on "absent from this scan" erased history on any
+ * transient failure, root that briefly did not list, or narrowed window.
  */
 export async function persistScanRows(
   sourceId: string,
   rows: readonly SessionUsageRow[],
-  opts: { complete: boolean }
+  opts: {
+    parsedSessions: readonly string[]
+    goneSessions?: readonly string[]
+    expectDatabase?: string
+  }
 ): Promise<{ written: number; removed: number }> {
   // The ledger's bulk door (ADR-0253 D07): these rows are imported by
   // construction and so leave the budget projection alone, but a source's
   // rows are still written, replaced and retired by the one usage writer.
-  return commitUsageRows(rows, opts.complete ? { retireSource: sourceId } : {})
+  const retireSessions = [...new Set([...opts.parsedSessions, ...(opts.goneSessions ?? [])])]
+  return commitUsageRows(rows, {
+    ...(retireSessions.length > 0 ? { retireSource: sourceId, retireSessions } : {}),
+    ...(opts.expectDatabase !== undefined ? { expectDatabase: opts.expectDatabase } : {}),
+  })
 }
 
 /** Coverage window of the rows an index holds for one source. */
@@ -157,6 +168,11 @@ export async function scanOneSource(
     return { ...base, status: "picker-only", skipped: "picker-only" }
   }
 
+  // The account this scan reads for. A switch while it runs refuses its writes
+  // whole, rows and source state alike, rather than booking them elsewhere.
+  const databaseName = activeDatabaseName()
+  const pinned = { expectDatabase: databaseName }
+
   const prior = await getUsageSourceState(adapter.id)
   if (!scanDue(prior, now, opts.force)) {
     return { ...base, status: prior?.status ?? "unknown", skipped: "fresh" }
@@ -166,14 +182,41 @@ export async function scanOneSource(
   // re-parsed corpus would mix two parsers' output into one total.
   let cursor =
     prior && prior.parserVersion === USAGE_SCAN_PARSER_VERSION ? (prior.cursor ?? null) : null
-  const startedFromTop = cursor === null
+
+  // One listing per refresh, so every batch below walks the same snapshot.
+  // A source with its own `scanUsage` lists for itself.
+  let listing: SessionSummary[] | undefined
+  if (!adapter.scanUsage) {
+    try {
+      listing = await adapter.listSessions(input)
+    } catch {
+      listing = undefined
+    }
+    if (listing === undefined) {
+      // The root is gone, unreadable, or the vendor changed its layout. The
+      // rows already held stay: "could not look" is not "nothing there".
+      await updateUsageSourceState(
+        adapter.id,
+        {
+          status: "unavailable",
+          parserVersion: USAGE_SCAN_PARSER_VERSION,
+          lastScanAt: now,
+          degradedReason: "root-missing",
+        },
+        pinned
+      )
+      return { ...base, status: "unavailable" }
+    }
+  }
 
   // Drain the source across bounded batches rather than in one unbounded read.
   // Each batch yields to the event loop between locators, and the batch ceiling
   // caps a single refresh so a pathological corpus cannot pin the main thread
   // indefinitely. What it costs is that such a corpus takes several refreshes
   // to converge, which the `partial` status says out loud.
+  const startedFromTop = cursor === null
   const rows: SessionUsageRow[] = []
+  const parsedSessions = new Set<string>()
   let parsed = 0
   let failed = 0
   let truncated = false
@@ -185,9 +228,11 @@ export async function scanOneSource(
       adapter,
       input,
       { ...opts.query, signal: opts.signal ?? opts.query?.signal },
-      cursor
+      cursor,
+      listing
     )
     rows.push(...batch.rows)
+    for (const id of batch.parsedSessionIds) parsedSessions.add(id)
     parsed += batch.parsed
     failed += batch.failed
     if (batch.fingerprint) fingerprint = batch.fingerprint
@@ -207,29 +252,68 @@ export async function scanOneSource(
     }
   }
 
-  // Deletion needs the WHOLE corpus in hand. A run that resumed mid-corpus, or
-  // stopped early, has seen a slice, and "absent from this slice" is not
-  // "gone upstream" — pruning on it would erase most of the source's history.
-  const complete = startedFromTop && cursor === null && !truncated
-  const { written } = await persistScanRows(adapter.id, rows, { complete })
-  const status = statusFor({ truncated, failed, degradedReason })
+  // Which held sessions are gone upstream. The generic driver knows from this
+  // refresh's listing; a source with its own scan only from a run that read
+  // it whole without a failure. An empty listing while rows are held proves
+  // nothing (an unmounted home, a root not yet created) and retires nothing.
+  const heldSessions = new Set(
+    (await rowsForSource(adapter.id)).flatMap((row) =>
+      row.sourceSessionId ? [row.sourceSessionId] : []
+    )
+  )
+  let seen: Set<string> | null = null
+  if (listing) {
+    if (listing.length > 0 || heldSessions.size === 0) {
+      seen = new Set(listing.map((summary) => summary.ref.originalSessionId))
+    } else {
+      degradedReason = degradedReason ?? "root-missing"
+    }
+  } else if (startedFromTop && cursor === null && !truncated && failed === 0) {
+    seen = parsedSessions
+  }
+  const listed = seen
+  const absentNow = listed
+    ? [...heldSessions].filter((id) => !listed.has(id) && !parsedSessions.has(id))
+    : []
+  // Gone only when the previous listing missed it too.
+  const absentBefore = new Set(listed ? (prior?.absentSessions ?? []) : [])
+  const goneSessions = absentNow.filter((id) => absentBefore.has(id))
+  const stillAbsent = listed
+    ? absentNow.filter((id) => !absentBefore.has(id))
+    : (prior?.absentSessions ?? [])
+
+  const complete = cursor === null && !truncated && failed === 0 && listed !== null
+  const { written } = await persistScanRows(adapter.id, rows, {
+    parsedSessions: [...parsedSessions],
+    goneSessions,
+    expectDatabase: databaseName,
+  })
+  const status: UsageSourceStatus =
+    degradedReason === "root-missing" && listed === null
+      ? "unavailable"
+      : statusFor({ truncated, failed, degradedReason })
   const held = await rowsForSource(adapter.id)
   const coverage = coverageOf(held)
 
-  await updateUsageSourceState(adapter.id, {
-    status,
-    parserVersion: USAGE_SCAN_PARSER_VERSION,
-    corpusFingerprint: fingerprint,
-    coverageFromMs: coverage.from,
-    coverageToMs: coverage.to,
-    parsedCount: parsed,
-    failedCount: failed,
-    rowCount: held.length,
-    lastScanAt: now,
-    cursor,
-    ...(status === "fresh" ? { lastSuccessAt: now } : {}),
-    ...(degradedReason ? { degradedReason } : {}),
-  })
+  await updateUsageSourceState(
+    adapter.id,
+    {
+      status,
+      parserVersion: USAGE_SCAN_PARSER_VERSION,
+      corpusFingerprint: fingerprint,
+      coverageFromMs: coverage.from,
+      coverageToMs: coverage.to,
+      parsedCount: parsed,
+      failedCount: failed,
+      rowCount: held.length,
+      lastScanAt: now,
+      cursor,
+      absentSessions: stillAbsent,
+      ...(status === "fresh" ? { lastSuccessAt: now } : {}),
+      ...(degradedReason ? { degradedReason } : {}),
+    },
+    pinned
+  )
 
   return { sourceId: adapter.id, status, written, parsed, failed, complete, skipped: null }
 }
@@ -248,6 +332,7 @@ export async function refreshExternalUsageIndex(
   opts: ExternalScanOptions = {}
 ): Promise<ExternalScanResult> {
   const startedAt = opts.now ?? Date.now()
+  const databaseName = activeDatabaseName()
   const all = getSessionSources()
   const wanted = opts.sourceIds ? new Set(opts.sourceIds) : null
   const queue = all.filter((a) => !wanted || wanted.has(a.id))
@@ -265,7 +350,7 @@ export async function refreshExternalUsageIndex(
         const adapter = queue[index]
         try {
           results.push(await scanOneSource(adapter, input, { ...opts, now: startedAt }))
-        } catch {
+        } catch (error) {
           results.push({
             sourceId: adapter.id,
             status: "unavailable",
@@ -275,11 +360,14 @@ export async function refreshExternalUsageIndex(
             complete: false,
             skipped: null,
           })
-          await updateUsageSourceState(adapter.id, {
-            status: "unavailable",
-            lastScanAt: startedAt,
-            degradedReason: "read-failed",
-          }).catch(() => null)
+          // A scan the account switch refused has nothing to record, and
+          // certainly not in the account that is active now.
+          if (error instanceof UsageLedgerDatabaseChangedError) return
+          await updateUsageSourceState(
+            adapter.id,
+            { status: "unavailable", lastScanAt: startedAt, degradedReason: "read-failed" },
+            { expectDatabase: databaseName }
+          ).catch(() => null)
         }
       }
     }

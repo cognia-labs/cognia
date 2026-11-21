@@ -220,7 +220,27 @@ describe("scanSourceUsage", () => {
 
   it("returns nothing for a picker-only source rather than pretending to scan", async () => {
     const batch = await scanSourceUsage(fakeAdapter({ pickerOnly: true }), input)
-    expect(batch).toEqual({ rows: [], cursor: null, parsed: 0, failed: 0, truncated: false })
+    expect(batch).toEqual({
+      rows: [],
+      cursor: null,
+      parsed: 0,
+      failed: 0,
+      truncated: false,
+      parsedSessionIds: [],
+    })
+  })
+
+  it("names the sessions it parsed, including one that produced no rows (F05)", async () => {
+    const batch = await scanSourceUsage(fakeAdapter(), input)
+    expect(batch.parsedSessionIds.length).toBe(batch.parsed)
+  })
+
+  it("walks the listing it is given instead of listing again", async () => {
+    const listSessions = jest.fn(async () => [])
+    const listed = await fakeAdapter().listSessions(input)
+    const batch = await scanSourceUsage(fakeAdapter({ listSessions }), input, {}, null, listed)
+    expect(listSessions).not.toHaveBeenCalled()
+    expect(batch.parsed).toBe(listed.length)
   })
 
   it("delegates to an adapter that implements scanUsage", async () => {

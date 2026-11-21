@@ -63,6 +63,16 @@ describe("CRUD", () => {
     expect(committed).toMatchObject({ status: "partial", rowCount: 7, parsedCount: 3 })
   })
 
+  it("refuses a patch meant for another account database (F27)", async () => {
+    await expect(
+      updateUsageSourceState("codex", { status: "fresh" }, { expectDatabase: "another-account" })
+    ).rejects.toThrow(/another-account/)
+    expect(await getUsageSourceState("codex")).toBeNull()
+    const { getDb } = await import("./schema")
+    await updateUsageSourceState("codex", { status: "fresh" }, { expectDatabase: getDb().name })
+    expect((await getUsageSourceState("codex"))?.status).toBe("fresh")
+  })
+
   it("deletes a source's state", async () => {
     await putUsageSourceState(state())
     await deleteUsageSourceState("codex")

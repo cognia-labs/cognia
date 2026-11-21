@@ -13,9 +13,9 @@
 //     silently truncates a total either, because `failed` reaches the source
 //     state and the source is then labelled degraded rather than fresh.
 //   * RESUMABILITY. A batch stops on any bound and returns the cursor to
-//     resume from. Only a `null` cursor means "read to the end", which is the
-//     single condition under which the caller may delete rows for sessions
-//     that have vanished upstream.
+//     resume from, plus the sessions it parsed. The index replaces exactly
+//     those sessions' rows: a session this batch did not read (a bound, a
+//     failure, the `sinceMs` window) keeps what it had.
 //   * NAMESPACED IDENTITY. Two tools can and do use the same message ids.
 //     Row keys are namespaced by source, so indexing Codex cannot overwrite
 //     rows Claude Code produced.
@@ -29,6 +29,15 @@ import type {
   UsageScanQuery,
 } from "./types"
 import type { SessionUsageRow } from "@/lib/db/session-usage"
+
+/**
+ * A batch as the external usage index consumes it: the contract's batch plus
+ * the upstream sessions it parsed, whose rows it now holds in full. A session
+ * that parsed to no rows is listed too, so its old rows can be replaced.
+ */
+export interface IndexedUsageScanBatch extends UsageScanBatch {
+  parsedSessionIds: string[]
+}
 
 /** Bounds a scan falls back to when the caller names none. */
 export const DEFAULT_USAGE_SCAN_QUERY: Required<Pick<UsageScanQuery, "maxRows" | "maxSessions">> = {
@@ -119,9 +128,22 @@ export async function scanSourceUsage(
   adapter: AgentSessionSourceAdapter,
   input: SessionScanInput,
   query: UsageScanQuery = {},
-  cursor: string | null = null
-): Promise<UsageScanBatch> {
-  const empty: UsageScanBatch = { rows: [], cursor: null, parsed: 0, failed: 0, truncated: false }
+  cursor: string | null = null,
+  /**
+   * The source's session list, when the caller listed it once for a whole
+   * refresh: every batch then walks the same snapshot, so a session whose
+   * activity changed between batches is neither skipped nor read twice.
+   */
+  listing?: readonly SessionSummary[]
+): Promise<IndexedUsageScanBatch> {
+  const empty: IndexedUsageScanBatch = {
+    rows: [],
+    cursor: null,
+    parsed: 0,
+    failed: 0,
+    truncated: false,
+    parsedSessionIds: [],
+  }
 
   // A picker-only source has no machine-wide location to walk. Declaring that
   // is what stops the UI from reading "no spend" off a source it never had a
@@ -129,14 +151,22 @@ export async function scanSourceUsage(
   if (adapter.pickerOnly && !input.pickedFiles?.length) return empty
   if (aborted(query.signal)) return { ...empty, truncated: true, degradedReason: "aborted" }
 
-  if (adapter.scanUsage) return adapter.scanUsage(input, query, cursor)
+  if (adapter.scanUsage) {
+    const batch = await adapter.scanUsage(input, query, cursor)
+    // The contract's batch names no sessions; the ones its rows belong to are
+    // the ones it read.
+    const parsedSessionIds = [
+      ...new Set(batch.rows.flatMap((row) => (row.sourceSessionId ? [row.sourceSessionId] : []))),
+    ]
+    return { ...batch, parsedSessionIds }
+  }
 
   const maxRows = query.maxRows ?? DEFAULT_USAGE_SCAN_QUERY.maxRows
   const maxSessions = query.maxSessions ?? DEFAULT_USAGE_SCAN_QUERY.maxSessions
 
-  let summaries: SessionSummary[]
+  let summaries: readonly SessionSummary[]
   try {
-    summaries = await adapter.listSessions(input)
+    summaries = listing ?? (await adapter.listSessions(input))
   } catch {
     // The root is gone, unreadable, or the vendor changed its layout. Keeping
     // whatever rows we already hold and reporting the degradation is strictly
@@ -159,6 +189,7 @@ export async function scanSourceUsage(
   }
 
   const rows: SessionUsageRow[] = []
+  const parsedSessionIds: string[] = []
   let parsed = 0
   let failed = 0
   let visited = 0
@@ -174,6 +205,7 @@ export async function scanSourceUsage(
         truncated: true,
         degradedReason: "aborted",
         fingerprint,
+        parsedSessionIds,
       }
     }
     if (visited >= maxSessions || rows.length >= maxRows) {
@@ -185,6 +217,7 @@ export async function scanSourceUsage(
         truncated: true,
         degradedReason: "budget",
         fingerprint,
+        parsedSessionIds,
       }
     }
 
@@ -207,6 +240,7 @@ export async function scanSourceUsage(
       continue
     }
     parsed += 1
+    parsedSessionIds.push(summary.ref.originalSessionId)
     for (const row of derived) {
       rows.push(
         stampExternalRow(row, {
@@ -226,5 +260,6 @@ export async function scanSourceUsage(
     truncated: false,
     ...(failed > 0 ? { degradedReason: "read-failed" as const } : {}),
     fingerprint,
+    parsedSessionIds,
   }
 }

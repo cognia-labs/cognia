@@ -64,6 +64,13 @@ export interface UsageSourceStateRow {
    * "read-failed", "aborted", "budget"). Never a path or an OS message.
    */
   degradedReason?: string
+  /**
+   * Upstream session ids this index holds rows for that the last listing did
+   * not show. Their rows are retired only when the next listing misses them
+   * too: one absence can be a file that was unreadable for a moment, and
+   * retiring on it erased spend that was still on disk.
+   */
+  absentSessions?: string[]
 }
 
 /** Bumped whenever the scan/parse contract changes shape. */
@@ -105,12 +112,20 @@ export async function putUsageSourceState(row: UsageSourceStateRow): Promise<voi
  */
 export async function updateUsageSourceState(
   sourceId: string,
-  patch: Partial<Omit<UsageSourceStateRow, "sourceId">>
+  patch: Partial<Omit<UsageSourceStateRow, "sourceId">>,
+  opts: { expectDatabase?: string } = {}
 ): Promise<UsageSourceStateRow | null> {
   if (!sourceId) return null
   const db = getDb()
   let committed: UsageSourceStateRow | null = null
   await db.transaction("rw", db.usageSourceStates, async () => {
+    // A scan started for one account must not mark another account's source
+    // read (its rows were refused the same way).
+    if (opts.expectDatabase !== undefined && db.name !== opts.expectDatabase) {
+      throw new Error(
+        `usage source state for database ${opts.expectDatabase} refused: ${db.name} is active`
+      )
+    }
     const prior = (await db.usageSourceStates.get(sourceId)) ?? emptyUsageSourceState(sourceId)
     committed = { ...prior, ...patch, sourceId }
     await db.usageSourceStates.put(committed)

@@ -145,37 +145,49 @@ describe("scanDue", () => {
 })
 
 describe("persistScanRows", () => {
+  const row = (session: string, id: string, sourceId = "plug:fake") =>
+    externalRow({
+      messageId: `ext:${sourceId}:${session}:${id}`,
+      sessionId: `ext:${sourceId}:${session}`,
+      sourceId,
+      sourceSessionId: session,
+    })
+
   it("writes rows and reports the count", async () => {
-    const res = await persistScanRows("plug:fake", [externalRow({})], { complete: true })
+    const res = await persistScanRows("plug:fake", [row("s1", "m1")], { parsedSessions: ["s1"] })
     expect(res.written).toBe(1)
     expect(await getDb().sessionUsage.count()).toBe(1)
   })
 
-  it("retires vanished sessions only on a complete scan", async () => {
-    await persistScanRows("plug:fake", [externalRow({ messageId: "old" })], { complete: true })
-    const partial = await persistScanRows("plug:fake", [externalRow({ messageId: "new" })], {
-      complete: false,
+  it("replaces exactly the sessions it read, and keeps every other session's rows (F05)", async () => {
+    await persistScanRows("plug:fake", [row("s1", "old"), row("s2", "kept")], {
+      parsedSessions: ["s1", "s2"],
     })
-    expect(partial.removed).toBe(0)
-    expect(await getDb().sessionUsage.count()).toBe(2)
+    // s1 was read again and no longer has "old"; s2 was not read this time.
+    const res = await persistScanRows("plug:fake", [row("s1", "new")], { parsedSessions: ["s1"] })
+    expect(res.removed).toBe(1)
+    expect((await getDb().sessionUsage.toArray()).map((r) => r.messageId).sort()).toEqual([
+      "ext:plug:fake:s1:new",
+      "ext:plug:fake:s2:kept",
+    ])
+  })
 
-    const full = await persistScanRows("plug:fake", [externalRow({ messageId: "new" })], {
-      complete: true,
+  it("retires a session confirmed gone", async () => {
+    await persistScanRows("plug:fake", [row("s1", "m1"), row("s2", "m1")], {
+      parsedSessions: ["s1", "s2"],
     })
-    expect(full.removed).toBe(1)
-    expect(await getDb().sessionUsage.count()).toBe(1)
+    await persistScanRows("plug:fake", [], { parsedSessions: [], goneSessions: ["s2"] })
+    expect((await getDb().sessionUsage.toArray()).map((r) => r.sourceSessionId)).toEqual(["s1"])
   })
 
   it("never touches another source's rows", async () => {
-    await persistScanRows("other", [externalRow({ messageId: "o1", sourceId: "other" })], {
-      complete: true,
-    })
-    await persistScanRows("plug:fake", [], { complete: true })
+    await persistScanRows("other", [row("s1", "o1", "other")], { parsedSessions: ["s1"] })
+    await persistScanRows("plug:fake", [], { parsedSessions: ["s1"], goneSessions: ["s1"] })
     expect(await getDb().sessionUsage.count()).toBe(1)
   })
 
   it("keeps external spend out of the budget projection entirely", async () => {
-    await persistScanRows("plug:fake", [externalRow({})], { complete: true })
+    await persistScanRows("plug:fake", [row("s1", "m1")], { parsedSessions: ["s1"] })
     expect(await getDb().providerCostDaily.count()).toBe(0)
   })
 })
@@ -226,7 +238,9 @@ describe("scanOneSource", () => {
   })
 
   it("marks an unreadable source unavailable and keeps the rows it already had", async () => {
-    await persistScanRows("fake", [externalRow({ sourceId: "fake" })], { complete: true })
+    await persistScanRows("fake", [externalRow({ sourceId: "fake", sourceSessionId: "s1" })], {
+      parsedSessions: ["s1"],
+    })
     const res = await scanOneSource(
       adapter([], {
         listSessions: async () => {
@@ -268,15 +282,129 @@ describe("scanOneSource", () => {
   })
 
   it("does not prune when a bound stopped the run short", async () => {
-    await persistScanRows("fake", [externalRow({ messageId: "stale", sourceId: "fake" })], {
-      complete: true,
-    })
+    await persistScanRows(
+      "fake",
+      [externalRow({ messageId: "stale", sourceId: "fake", sourceSessionId: "old" })],
+      { parsedSessions: ["old"] }
+    )
     const res = await scanOneSource(adapter([summary("s1", NOW)]), input, {
       now: NOW,
       query: { maxSessions: 0 },
     })
     expect(res.complete).toBe(false)
     expect(await getDb().sessionUsage.get("stale")).toBeDefined()
+  })
+})
+
+describe("scanOneSource retirement (F05)", () => {
+  /** An adapter whose parse of `failing` sessions throws. */
+  const scanning = (ids: string[], failing: string[] = []) =>
+    adapter(
+      ids.map((id) => summary(id, NOW)),
+      {
+        parseSession: async (ref: SessionRef) => {
+          if (failing.includes(ref.originalSessionId)) throw new Error("locked")
+          return {
+            session: { id: "s", model: "gpt-x" },
+            messages: [
+              {
+                id: `${ref.originalSessionId}-1`,
+                role: "assistant",
+                createdAt: NOW,
+                metadata: { usage: { inputTokens: 10, outputTokens: 5, totalCostUsd: 0.5 } },
+              },
+            ],
+          } as never
+        },
+      }
+    )
+  const sessions = async () =>
+    [...new Set((await getDb().sessionUsage.toArray()).map((r) => r.sourceSessionId))].sort()
+  const forced = { now: NOW, force: true }
+
+  it("keeps a session whose transcript failed to parse this time", async () => {
+    await scanOneSource(scanning(["s1"]), input, forced)
+    const res = await scanOneSource(scanning(["s1"], ["s1"]), input, forced)
+    expect(res.status).toBe("partial")
+    expect(await sessions()).toEqual(["s1"])
+  })
+
+  it("keeps everything when the source lists nothing (root not visible)", async () => {
+    await scanOneSource(scanning(["s1", "s2"]), input, forced)
+    const res = await scanOneSource(scanning([]), input, forced)
+    expect(res.status).toBe("unavailable")
+    expect(await sessions()).toEqual(["s1", "s2"])
+    expect((await getUsageSourceState("fake"))?.degradedReason).toBe("root-missing")
+  })
+
+  it("retires a vanished session only when two listings in a row miss it", async () => {
+    await scanOneSource(scanning(["s1", "s2"]), input, forced)
+    await scanOneSource(scanning(["s1"]), input, forced)
+    // One absence can be a file that was briefly unreadable.
+    expect(await sessions()).toEqual(["s1", "s2"])
+    expect((await getUsageSourceState("fake"))?.absentSessions).toEqual(["s2"])
+    // Back again: no longer pending.
+    await scanOneSource(scanning(["s1", "s2"]), input, forced)
+    expect((await getUsageSourceState("fake"))?.absentSessions).toEqual([])
+    await scanOneSource(scanning(["s1"]), input, forced)
+    await scanOneSource(scanning(["s1"]), input, forced)
+    expect(await sessions()).toEqual(["s1"])
+  })
+
+  it("never retires history outside a narrowed query window", async () => {
+    const old = { ...summary("old", NOW - 10 * 86_400_000) }
+    const wide = adapter([summary("s1", NOW), old])
+    await scanOneSource(wide, input, forced)
+    const narrow = { ...forced, query: { sinceMs: NOW - 86_400_000 } }
+    await scanOneSource(wide, input, narrow)
+    await scanOneSource(wide, input, narrow)
+    expect(await sessions()).toEqual(["old", "s1"])
+  })
+
+  it("resumes across refreshes without dropping what an earlier refresh read", async () => {
+    const many = Array.from({ length: 5 }, (_, i) => `s${i}`)
+    // One session per batch and the batch ceiling cut each refresh short.
+    const query = { maxSessions: 1 }
+    for (let i = 0; i < 6; i++) await scanOneSource(scanning(many), input, { ...forced, query })
+    expect(await sessions()).toEqual(many)
+  })
+
+  it("writes neither rows nor source state into an account that became active mid-scan (F27)", async () => {
+    const { activateAccountDatabase } = await import("@/lib/db/schema")
+    let release!: () => void
+    const parked = new Promise<void>((resolve) => (release = resolve))
+    let reached!: () => void
+    const atParse = new Promise<void>((resolve) => (reached = resolve))
+    const slow = adapter([summary("s1", NOW)], {
+      parseSession: async () => {
+        reached()
+        await parked
+        return {
+          session: { id: "s", model: "gpt-x" },
+          messages: [
+            {
+              id: "m",
+              role: "assistant",
+              createdAt: NOW,
+              metadata: { usage: { inputTokens: 1, outputTokens: 1, totalCostUsd: 0.1 } },
+            },
+          ],
+        } as never
+      },
+    })
+    const scan = scanOneSource(slow, input, forced)
+    await atParse
+    activateAccountDatabase("acct_scan_switch_b", "local")
+    try {
+      release()
+      await expect(scan).rejects.toMatchObject({ name: "UsageLedgerDatabaseChangedError" })
+      expect(await getDb().sessionUsage.count()).toBe(0)
+      expect(await getDb().usageSourceStates.count()).toBe(0)
+    } finally {
+      await getDb().delete()
+      const { clearAccountDatabaseSelection } = await import("@/lib/db/schema")
+      clearAccountDatabaseSelection()
+    }
   })
 })
 
