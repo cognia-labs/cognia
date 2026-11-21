@@ -126,7 +126,21 @@ export interface AcpVendorProfile {
   /** Prompt-local telemetry; when supplied, cumulative usage fallback is disabled. */
   promptUsage?(result: {
     _meta?: Record<string, unknown> | null
+    usage?: {
+      inputTokens?: unknown
+      outputTokens?: unknown
+      totalTokens?: unknown
+      cachedReadTokens?: unknown
+      cachedWriteTokens?: unknown
+      thoughtTokens?: unknown
+    } | null
   }): ExternalAgentTokenUsage | undefined
+  /**
+   * Marks `usage_update` events from this vendor as session-context occupancy
+   * and cumulative session cost, so turn meters never backfill them into turn
+   * token or cost accounting.
+   */
+  usageUpdateScope?: "session_context"
   /** Vendor reverse requests projected through the host's existing elicitation lifecycle. */
   elicitationExtensions?: Readonly<
     Record<

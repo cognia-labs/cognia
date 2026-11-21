@@ -190,6 +190,20 @@ import type {
   ExternalAgentExtensionSupportStatus,
 } from "@cognia/agent-contracts/external-agent"
 
+/** Return the stricter of two canonical Cognia permission modes. */
+function moreRestrictivePermissionMode(
+  a: AcpPermissionMode,
+  b: AcpPermissionMode
+): AcpPermissionMode {
+  if (a === "plan" || b === "plan") return "plan"
+  if (a === "default" || b === "default") return "default"
+  if (a === b) return a
+  if (a === "bypassPermissions") return b
+  if (b === "bypassPermissions") return a
+  // Mixed acceptEdits vs dontAsk cannot relax either restriction.
+  return "default"
+}
+
 /**
  * Cumulative token counters as ACP reports them — `PromptResponse.usage`
  * (unstable in the spec) and Devin's `cognition.ai/*` usage meta are both
@@ -910,6 +924,10 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
   private promptDeadlines = new Map<string, JsonRpcRequestDeadline>()
   /** Host-selected authority is distinct from a vendor's temporary native bypass. */
   private hostPermissionModes = new Map<string, AcpPermissionMode>()
+  /** Conservative approval ceiling held while session admission or mode writes are in flight. */
+  private pendingModeCeilings = new Map<string, AcpPermissionMode>()
+  /** Nesting depth for mode-writing operations (`setSessionMode` -> `setConfigOption`). */
+  private modeWriteDepth = new Map<string, number>()
   /**
    * Agent→client requests in flight per session (permission, elicitation,
    * terminal wait, …). While any is open the agent is waiting on the client —
@@ -1263,6 +1281,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       for (const sessionId of this.closedTerminalSessions) this.pruneSessionTerminalState(sessionId)
       this.pendingSessionResumes.clear()
       this.hostPermissionModes.clear()
+      this.pendingModeCeilings.clear()
+      this.modeWriteDepth.clear()
       this.presentationListeners.clear()
       this.pendingForkMcpRebind.clear()
       this.toolCallStates.clear()
@@ -1658,6 +1678,63 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     return meta
   }
 
+  private pushPendingModeCeiling(sessionId: string, ceiling: AcpPermissionMode): void {
+    const depth = (this.modeWriteDepth.get(sessionId) ?? 0) + 1
+    this.modeWriteDepth.set(sessionId, depth)
+    const existing = this.pendingModeCeilings.get(sessionId)
+    this.pendingModeCeilings.set(
+      sessionId,
+      existing ? moreRestrictivePermissionMode(existing, ceiling) : ceiling
+    )
+  }
+
+  private popPendingModeCeiling(sessionId: string): void {
+    const next = (this.modeWriteDepth.get(sessionId) ?? 0) - 1
+    if (next <= 0) {
+      this.modeWriteDepth.delete(sessionId)
+      this.pendingModeCeilings.delete(sessionId)
+    } else {
+      this.modeWriteDepth.set(sessionId, next)
+    }
+  }
+
+  private effectivePermissionMode(
+    sessionId: string,
+    session: ExternalAgentSession
+  ): AcpPermissionMode {
+    let effective: AcpPermissionMode = session.permissionMode ?? "default"
+    if (this.hostPermissionModes.get(sessionId) === "plan") {
+      effective = "plan"
+    }
+    const ceiling = this.pendingModeCeilings.get(sessionId)
+    if (ceiling) {
+      effective = moreRestrictivePermissionMode(effective, ceiling)
+    }
+    return effective
+  }
+
+  private applyReportedNativeMode(
+    sessionId: string,
+    nativeMode: string,
+    configOptions?: readonly AcpConfigOption[] | null
+  ): AcpPermissionMode {
+    const canonical = this.canonicalPermissionMode(nativeMode, sessionId, configOptions)
+    const hostMode = this.hostPermissionModes.get(sessionId)
+    if (
+      (canonical === "plan" && hostMode && hostMode !== "plan" && hostMode !== "default") ||
+      (canonical === "default" &&
+        hostMode &&
+        hostMode !== "default" &&
+        hostMode !== "plan" &&
+        !this.vendor?.permissionModes?.hostApprovalOption &&
+        !this.mandatoryNativeApprovalMode())
+    ) {
+      this.hostPermissionModes.set(sessionId, "default")
+    }
+    this.updateSession(sessionId, { permissionMode: canonical })
+    return canonical
+  }
+
   private async restoreSessionPermissionMode(
     session: ExternalAgentSession,
     options?: SessionCreateOptions
@@ -1666,8 +1743,15 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     for (const option of optionsState ?? [])
       this.vendor?.validateConfigOption?.(option.id, option.currentValue)
     if (!this.vendor?.reapplySessionMode) return session
+    const preservedPlan =
+      options?.permissionMode === undefined &&
+      session.permissionMode === "plan" &&
+      this.vendor.permissionModes?.supportedCanonicalModes?.includes("plan")
+    const targetMode: AcpPermissionMode = preservedPlan
+      ? "plan"
+      : (options?.permissionMode ?? "default")
     try {
-      await this.setSessionMode(session.id, options?.permissionMode ?? "default")
+      await this.setSessionMode(session.id, targetMode)
       return this._sessions.get(session.id)!
     } catch (error) {
       try {
@@ -1675,6 +1759,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       } finally {
         this._sessions.delete(session.id)
         this.hostPermissionModes.delete(session.id)
+        this.pendingModeCeilings.delete(session.id)
+        this.modeWriteDepth.delete(session.id)
       }
       throw error
     }
@@ -2225,7 +2311,18 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     this.registerDynamicMcpServers(session.id, mcpServers)
 
     this.log.info("Created session", { sessionId: session.id })
-    return this.restoreSessionPermissionMode(session, options)
+    this.pushPendingModeCeiling(
+      session.id,
+      moreRestrictivePermissionMode(
+        session.permissionMode ?? "default",
+        options?.permissionMode === "plan" ? "plan" : "default"
+      )
+    )
+    try {
+      return await this.restoreSessionPermissionMode(session, options)
+    } finally {
+      this.popPendingModeCeiling(session.id)
+    }
   }
 
   /**
@@ -2275,6 +2372,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     this._sessions.delete(sessionId)
     this.pruneSessionTerminalState(sessionId)
     this.hostPermissionModes.delete(sessionId)
+    this.pendingModeCeilings.delete(sessionId)
+    this.modeWriteDepth.delete(sessionId)
     this.presentationListeners.delete(sessionId)
     this.pendingForkMcpRebind.delete(sessionId)
     this.clearUsageTracking(sessionId)
@@ -2314,6 +2413,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     this._sessions.delete(sessionId)
     this.pruneSessionTerminalState(sessionId)
     this.hostPermissionModes.delete(sessionId)
+    this.pendingModeCeilings.delete(sessionId)
+    this.modeWriteDepth.delete(sessionId)
     this.presentationListeners.delete(sessionId)
     this.pendingForkMcpRebind.delete(sessionId)
     this.clearUsageTracking(sessionId)
@@ -2847,10 +2948,26 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       this._config?.timeout ?? 30_000
     )
     if (result && typeof result === "object" && !Array.isArray(result)) {
-      const reply = result as { outcome?: unknown; reason?: unknown }
+      const reply = result as { outcome?: unknown; reason?: unknown; queue?: unknown }
       if (reply.outcome === "injected") return
-      if (reply.outcome === "promptRequired" && reply.reason === "noRunningTurn")
-        throw new Error("ACP steering requires an active turn: noRunningTurn")
+      if (
+        reply.outcome === "promptRequired" &&
+        (reply.reason === "noRunningTurn" ||
+          (reply.reason === undefined &&
+            (reply.queue === "steering" || reply.queue === "followUp")))
+      ) {
+        const detail =
+          typeof reply.reason === "string"
+            ? reply.reason
+            : typeof reply.queue === "string"
+              ? `queue=${reply.queue}`
+              : "noRunningTurn"
+        throw new Error(`ACP steering requires an active turn: ${detail}`)
+      }
+      if (reply.outcome === "failed") {
+        const detail = typeof reply.reason === "string" && reply.reason ? reply.reason : "unknown"
+        throw new Error(`ACP steering failed: ${detail}`)
+      }
     }
     throw new Error("ACP steering returned an invalid response")
   }
@@ -3188,6 +3305,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     this._sessions.clear()
     this.pendingSessionResumes.clear()
     this.hostPermissionModes.clear()
+    this.pendingModeCeilings.clear()
+    this.modeWriteDepth.clear()
     this.peer?.rejectAll(error.message)
     void this.teardownTransport().catch((cleanupError) => {
       this.log.error("Failed to retire unsafe ACP transport", { error: cleanupError })
@@ -3245,31 +3364,53 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       if (!offered.includes(nativeMode))
         throw new Error(`${vendor.label} does not advertise permission mode: ${modeId}`)
     }
-    if (modeOption) {
-      const approval = vendor?.permissionModes?.hostApprovalOption
-      const approvalOption =
-        approval && this.getConfigOptions(sessionId)?.find((option) => option.id === approval.id)
-      if (approval && approvalOption && approvalOption.currentValue !== approval.value) {
-        const updated = await this.setConfigOption(sessionId, approval.id, approval.value)
-        if (
-          !updated.some(
-            (option) => option.id === approval.id && option.currentValue === approval.value
-          )
-        ) {
-          throw new Error(`${vendor.label} did not restore host tool approvals`)
+    const previousMode = this._sessions.get(sessionId)?.permissionMode ?? "default"
+    this.pushPendingModeCeiling(sessionId, moreRestrictivePermissionMode(previousMode, modeId))
+    try {
+      if (modeOption) {
+        const approval = vendor?.permissionModes?.hostApprovalOption
+        const approvalOption =
+          approval && this.getConfigOptions(sessionId)?.find((option) => option.id === approval.id)
+        if (approval && approvalOption && approvalOption.currentValue !== approval.value) {
+          const updated = await this.setConfigOption(sessionId, approval.id, approval.value)
+          if (
+            !updated.some(
+              (option) => option.id === approval.id && option.currentValue === approval.value
+            )
+          ) {
+            throw new Error(`${vendor.label} did not restore host tool approvals`)
+          }
         }
+        const updatedOptions = await this.setConfigOption(sessionId, modeOption.id, nativeMode)
+        const confirmedOpt = updatedOptions.find((option) => option.category === "mode")
+        const confirmedNative =
+          typeof confirmedOpt?.currentValue === "string" ? confirmedOpt.currentValue : nativeMode
+        const confirmedCanonical = this.canonicalPermissionMode(
+          confirmedNative,
+          sessionId,
+          updatedOptions,
+          confirmedNative === nativeMode ? modeId : undefined
+        )
+        if (confirmedCanonical === "plan" && modeId !== "plan") {
+          // Upstream remained in native plan despite a looser request; keep plan.
+          this.applyReportedNativeMode(sessionId, confirmedNative, updatedOptions)
+        } else {
+          this.hostPermissionModes.set(sessionId, modeId)
+          this.updateSession(sessionId, { permissionMode: modeId })
+        }
+        return
       }
-      await this.setConfigOption(sessionId, modeOption.id, nativeMode)
+      await this.sendRequest("session/set_mode", {
+        sessionId,
+        modeId: nativeMode,
+      } as unknown as Record<string, unknown>)
       this.hostPermissionModes.set(sessionId, modeId)
-      this.updateSession(sessionId, { permissionMode: modeId })
-      return
+      this.updateSession(sessionId, {
+        permissionMode: this.canonicalPermissionMode(nativeMode, sessionId, undefined, modeId),
+      })
+    } finally {
+      this.popPendingModeCeiling(sessionId)
     }
-    await this.sendRequest("session/set_mode", {
-      sessionId,
-      modeId: nativeMode,
-    } as unknown as Record<string, unknown>)
-    this.hostPermissionModes.set(sessionId, modeId)
-    this.updateSession(sessionId, { permissionMode: modeId })
   }
 
   /**
@@ -3407,30 +3548,44 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       request = { sessionId, configId, value }
     }
 
-    const result = await this.sendRequest<{ configOptions: AcpConfigOption[] }>(
-      "session/set_config_option",
-      request
-    )
-
-    // Update session metadata with new config state
-    const updatedOptions = result.configOptions
-    for (const option of updatedOptions)
-      this.vendor?.validateConfigOption?.(option.id, option.currentValue)
-    const modeOpt = updatedOptions.find((opt) => opt.category === "mode")
-    if (mandatoryMode && modeOpt?.currentValue !== mandatoryMode) {
-      throw this.retireNativeApprovalViolation(sessionId)
+    const isModeOption = option.category === "mode"
+    if (isModeOption) {
+      const previousMode = session.permissionMode ?? "default"
+      const requestedCanonical =
+        typeof value === "string" ? this.canonicalPermissionMode(value, sessionId) : "default"
+      this.pushPendingModeCeiling(
+        sessionId,
+        moreRestrictivePermissionMode(previousMode, requestedCanonical)
+      )
     }
-    session.metadata = { ...session.metadata, configOptions: updatedOptions }
+    try {
+      const result = await this.sendRequest<{ configOptions: AcpConfigOption[] }>(
+        "session/set_config_option",
+        request
+      )
 
-    // Sync mode from config options if applicable
-    if (modeOpt && typeof modeOpt.currentValue === "string") {
-      this.updateSession(sessionId, {
-        permissionMode: this.canonicalPermissionMode(modeOpt.currentValue, sessionId),
-      })
+      // Update session metadata with new config state
+      const updatedOptions = result.configOptions
+      for (const option of updatedOptions)
+        this.vendor?.validateConfigOption?.(option.id, option.currentValue)
+      const modeOpt = updatedOptions.find((opt) => opt.category === "mode")
+      if (mandatoryMode && modeOpt?.currentValue !== mandatoryMode) {
+        throw this.retireNativeApprovalViolation(sessionId)
+      }
+      session.metadata = { ...session.metadata, configOptions: updatedOptions }
+
+      // Sync mode from config options if applicable
+      if (modeOpt && typeof modeOpt.currentValue === "string") {
+        this.applyReportedNativeMode(sessionId, modeOpt.currentValue, updatedOptions)
+      }
+
+      this.log.info("Config option changed", { sessionId, configId, value })
+      return updatedOptions
+    } finally {
+      if (isModeOption) {
+        this.popPendingModeCeiling(sessionId)
+      }
     }
-
-    this.log.info("Config option changed", { sessionId, configId, value })
-    return updatedOptions
   }
 
   /**
@@ -3468,7 +3623,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       id: sessionId,
       agentId: this._config!.id,
       status: "active",
-      permissionMode: (options?.permissionMode || "default") as AcpPermissionMode,
+      permissionMode: options?.permissionMode === "plan" ? "plan" : "default",
       allowedTools: options?.allowedTools,
       capabilities: this._capabilities,
       tools: this._tools ?? [],
@@ -3486,6 +3641,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       sessionId,
       options?.permissionMode ?? previousHostMode ?? "default"
     )
+    this.pushPendingModeCeiling(sessionId, options?.permissionMode === "plan" ? "plan" : "default")
     // A loaded session's usage counters already carry history. Mark it so the
     // first cumulative sighting becomes the baseline rather than turn spend.
     this.primedUsageSessions.add(sessionId)
@@ -3510,9 +3666,16 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
         metadata,
         ...(typeof nativeMode === "string"
           ? {
-              permissionMode: this.canonicalPermissionMode(nativeMode, sessionId, configOptions),
+              permissionMode: this.canonicalPermissionMode(
+                nativeMode,
+                sessionId,
+                configOptions,
+                options?.permissionMode
+              ),
             }
-          : {}),
+          : options?.permissionMode
+            ? { permissionMode: options.permissionMode }
+            : {}),
       })!
       return await this.restoreSessionPermissionMode(loaded, options)
     } catch (error) {
@@ -3524,6 +3687,8 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       } else this.hostPermissionModes.delete(sessionId)
       this.primedUsageSessions.delete(sessionId)
       throw error
+    } finally {
+      this.popPendingModeCeiling(sessionId)
     }
   }
 
@@ -3698,11 +3863,30 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       ) {
         throw new Error(`${vendor!.label} fork must return a distinct session ID`)
       }
+      const sourcePermissionMode = this._sessions.get(sessionId)?.permissionMode
+      const forkedModeOption = result.configOptions?.find(
+        (opt) => opt.type === "select" && opt.category === "mode"
+      )
+      const forkedNativeMode =
+        typeof forkedModeOption?.currentValue === "string"
+          ? forkedModeOption.currentValue
+          : result.modes?.currentModeId
+      const derivedForkMode = forkedNativeMode
+        ? this.canonicalPermissionMode(
+            forkedNativeMode,
+            undefined,
+            result.configOptions,
+            sessionOptions?.permissionMode
+          )
+        : undefined
+      const inheritedForkMode: AcpPermissionMode =
+        sessionOptions?.permissionMode ??
+        (derivedForkMode === "plan" || sourcePermissionMode === "plan" ? "plan" : "default")
       const forkedSession: ExternalAgentSession = {
         id: result.sessionId,
         agentId: this._config!.id,
         status: "active",
-        permissionMode: "default",
+        permissionMode: derivedForkMode ?? inheritedForkMode,
         capabilities: this._capabilities,
         tools: this._tools ?? [],
         messages: [],
@@ -3722,10 +3906,15 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
         },
       }
       this._sessions.set(forkedSession.id, forkedSession)
+      this.hostPermissionModes.set(forkedSession.id, inheritedForkMode)
       // A fork inherits the parent's history — its counters are not fresh.
       this.primedUsageSessions.add(forkedSession.id)
+      const effectiveForkOptions =
+        sessionOptions?.permissionMode === undefined && inheritedForkMode === "plan"
+          ? { ...sessionOptions, permissionMode: "plan" as const }
+          : sessionOptions
       if (rebindMcp) {
-        const restored = await this.rebindForkMcpByReload(forkedSession, sessionOptions)
+        const restored = await this.rebindForkMcpByReload(forkedSession, effectiveForkOptions)
         this.setExtensionSupport(method, "supported", "ok")
         return restored
       }
@@ -3735,7 +3924,15 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       }
       this.registerDynamicMcpServers(forkedSession.id, mcpServers)
       this.setExtensionSupport(method, "supported", "ok")
-      return await this.restoreSessionPermissionMode(forkedSession, sessionOptions)
+      this.pushPendingModeCeiling(
+        forkedSession.id,
+        moreRestrictivePermissionMode(inheritedForkMode, "default")
+      )
+      try {
+        return await this.restoreSessionPermissionMode(forkedSession, effectiveForkOptions)
+      } finally {
+        this.popPendingModeCeiling(forkedSession.id)
+      }
     } catch (error) {
       if (
         isExternalAgentMethodNotFoundError(error) ||
@@ -3913,7 +4110,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
         id: sessionId,
         agentId: this._config!.id,
         status: "active",
-        permissionMode: options?.permissionMode ?? "default",
+        permissionMode: options?.permissionMode === "plan" ? "plan" : "default",
         allowedTools: options?.allowedTools,
         capabilities: this._capabilities,
         tools: this._tools ?? [],
@@ -3930,6 +4127,10 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       this.hostPermissionModes.set(
         sessionId,
         options?.permissionMode ?? previousHostMode ?? "default"
+      )
+      this.pushPendingModeCeiling(
+        sessionId,
+        options?.permissionMode === "plan" ? "plan" : "default"
       )
       const result = await this.sendRequest<AcpNewSessionResult>(method, {
         sessionId,
@@ -3992,7 +4193,19 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       this.primedUsageSessions.add(resumedSession.id)
       this.registerDynamicMcpServers(resumedSession.id, mcpServers)
       this.setExtensionSupport(method, "supported", "ok")
-      return await this.restoreSessionPermissionMode(resumedSession, options)
+      if (resumedSession.id !== sessionId) {
+        this.pushPendingModeCeiling(
+          resumedSession.id,
+          options?.permissionMode === "plan" ? "plan" : "default"
+        )
+      }
+      try {
+        return await this.restoreSessionPermissionMode(resumedSession, options)
+      } finally {
+        if (resumedSession.id !== sessionId) {
+          this.popPendingModeCeiling(resumedSession.id)
+        }
+      }
     } catch (error) {
       if (provisional && this.pendingSessionResumes.get(sessionId) === admission) {
         if (previousSession && !this.vendor?.reapplySessionMode)
@@ -4034,6 +4247,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     } finally {
       if (this.pendingSessionResumes.get(sessionId) === admission)
         this.pendingSessionResumes.delete(sessionId)
+      if (provisional) this.popPendingModeCeiling(sessionId)
     }
   }
 
@@ -4686,10 +4900,11 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
 
     const allowOption = this.pickAllowPermissionOption(request.options)
     const kind = request.kind || "other"
+    const effectiveMode = session ? this.effectivePermissionMode(sessionId, session) : undefined
 
     // "plan" mode never executes tools — auto-reject every request (pick a
     // reject option, or cancel when the agent offered none).
-    if (session?.permissionMode === "plan") {
+    if (effectiveMode === "plan") {
       const rejectOption = this.pickRejectPermissionOption(request.options)
       if (rejectOption) {
         return { outcome: { outcome: "selected", optionId: rejectOption.optionId } }
@@ -4704,7 +4919,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     if (configured === "approve" && allowOption) {
       return { outcome: { outcome: "selected", optionId: allowOption.optionId } }
     }
-    if (configured === "ask" && session?.permissionMode === "dontAsk") {
+    if (configured === "ask" && effectiveMode === "dontAsk") {
       const rejectOption = this.pickRejectPermissionOption(request.options)
       if (rejectOption) {
         return { outcome: { outcome: "selected", optionId: rejectOption.optionId } }
@@ -4716,13 +4931,13 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     // the session's pre-approval allow-list and *denies* everything else. This
     // is the distinction from "plan" (which always denies) — a pre-approved
     // tool runs without a prompt.
-    if (configured !== "ask" && session?.permissionMode === "dontAsk") {
+    if (configured !== "ask" && effectiveMode === "dontAsk") {
       const preApproved =
         !!allowOption &&
         this.toolPreApproval(
           this.vendor?.preApprovalMatchesToolName ? request.toolInfo.name : request.title,
           request.rawInput,
-          session.allowedTools
+          session!.allowedTools
         )
       if (preApproved) {
         return { outcome: { outcome: "selected", optionId: allowOption.optionId } }
@@ -4735,7 +4950,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
     }
 
     // Check if permission mode allows auto-approval
-    if (configured !== "ask" && session?.permissionMode === "bypassPermissions") {
+    if (configured !== "ask" && effectiveMode === "bypassPermissions") {
       if (!allowOption) {
         return { outcome: { outcome: "cancelled" } }
       }
@@ -4754,7 +4969,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       kind === "read"
     if (
       configured !== "ask" &&
-      session?.permissionMode === "acceptEdits" &&
+      effectiveMode === "acceptEdits" &&
       isAutoApprovableEdit &&
       allowOption
     ) {
@@ -5442,9 +5657,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
       }
 
       case "mode_change":
-        this.updateSession(sessionId, {
-          permissionMode: this.canonicalPermissionMode(update.modeId, sessionId),
-        })
+        this.applyReportedNativeMode(sessionId, update.modeId)
         return null
 
       case "current_mode_update": {
@@ -5469,9 +5682,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
             ...(updatedOpts ? { configOptions: updatedOpts } : {}),
             currentModeId: update.currentModeId,
           }
-          this.updateSession(sessionId, {
-            permissionMode: this.canonicalPermissionMode(update.currentModeId, sessionId),
-          })
+          this.applyReportedNativeMode(sessionId, update.currentModeId, updatedOpts)
         }
         // Re-published mode at each turn boundary — only a real change is news.
         if (previousModeId === update.currentModeId) return null
@@ -5513,9 +5724,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
             (opt) => opt.type === "select" && opt.category === "mode"
           )
           if (modeOpt && typeof modeOpt.currentValue === "string") {
-            this.updateSession(sessionId, {
-              permissionMode: this.canonicalPermissionMode(modeOpt.currentValue, sessionId),
-            })
+            this.applyReportedNativeMode(sessionId, modeOpt.currentValue, update.configOptions)
           }
         }
         // The full option set rides every update; an identical republish is
@@ -5554,6 +5763,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
         }
         const cumulative = cumulativeUsageFromMeta(update._meta)
         const tokenUsage = cumulative ? this.observeUsage(sessionId, cumulative) : undefined
+        const usageScope = !tokenUsage ? this.vendor?.usageUpdateScope : undefined
         return {
           type: "usage_update",
           sessionId,
@@ -5561,6 +5771,7 @@ export class AcpClientAdapter extends BaseProtocolAdapter {
           used: update.used,
           size: update.size,
           cost: update.cost,
+          ...(usageScope ? { usageScope } : {}),
           ...(tokenUsage ? { tokenUsage } : {}),
         }
       }

@@ -3,8 +3,73 @@
  * transport owns execution; these profiles constrain vendor authority and
  * never manufacture negotiated optional capabilities (ADR-0217).
  */
-import type { AcpPermissionMode } from "@cognia/agent-contracts/external-agent"
+import type {
+  AcpPermissionMode,
+  ExternalAgentTokenUsage,
+} from "@cognia/agent-contracts/external-agent"
 import type { AcpVendorProfile } from "../vendor-profile"
+
+function safeNonNegativeInt(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0
+}
+
+/**
+ * OMP computes per-turn deltas on the server (`buildTurnUsage`) and reports them
+ * on `PromptResponse.usage`; projecting directly avoids double-diffing against
+ * session cumulative trackers while rejecting negative/malformed counters.
+ */
+function ohMyPiPromptUsage(result: {
+  usage?: {
+    inputTokens?: unknown
+    outputTokens?: unknown
+    totalTokens?: unknown
+    cachedReadTokens?: unknown
+    cachedWriteTokens?: unknown
+    thoughtTokens?: unknown
+  } | null
+}): ExternalAgentTokenUsage | undefined {
+  const usage = result.usage
+  if (
+    !usage ||
+    typeof usage !== "object" ||
+    !safeNonNegativeInt(usage.inputTokens) ||
+    !safeNonNegativeInt(usage.outputTokens) ||
+    !safeNonNegativeInt(usage.totalTokens)
+  ) {
+    return undefined
+  }
+  for (const key of ["cachedReadTokens", "cachedWriteTokens", "thoughtTokens"] as const) {
+    const value = usage[key]
+    if (value !== undefined && value !== null && !safeNonNegativeInt(value)) {
+      return undefined
+    }
+  }
+  const cacheReadTokens = safeNonNegativeInt(usage.cachedReadTokens)
+    ? usage.cachedReadTokens
+    : undefined
+  const cacheWriteTokens = safeNonNegativeInt(usage.cachedWriteTokens)
+    ? usage.cachedWriteTokens
+    : undefined
+  const reasoningTokens = safeNonNegativeInt(usage.thoughtTokens) ? usage.thoughtTokens : undefined
+  if (
+    usage.totalTokens === 0 &&
+    usage.inputTokens === 0 &&
+    usage.outputTokens === 0 &&
+    !cacheReadTokens &&
+    !cacheWriteTokens &&
+    !reasoningTokens
+  ) {
+    return undefined
+  }
+  return {
+    promptTokens: usage.inputTokens,
+    completionTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+    ...(cacheReadTokens !== undefined ? { cacheReadTokens } : {}),
+    ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+  }
+}
 
 function brokerModes(
   execute: string,
@@ -16,18 +81,19 @@ function brokerModes(
     toNative: (mode) => {
       if (!supported.includes(mode))
         throw new Error(
-          `This ACP runtime cannot enforce ${mode} against native pre-approved tools; use default or bypassPermissions`
+          `This ACP runtime cannot enforce ${mode} against native pre-approved tools; use ${supported.join(" or ")}`
         )
       return mode === "plan" ? plan : execute
     },
-    toCanonical: (native, current) =>
-      native === plan && plan !== execute && supported.includes("plan")
-        ? "plan"
-        : native === execute
-          ? current && supported.includes(current)
-            ? current
-            : "default"
-          : "bypassPermissions",
+    toCanonical: (native, current) => {
+      if (native === plan && plan !== execute && supported.includes("plan")) return "plan"
+      if (native === execute) {
+        return current && current !== "plan" && supported.includes(current) ? current : "default"
+      }
+      // Unrecognized native modes stay restricted rather than silently granting
+      // bypassPermissions auto-approval in the host permission broker.
+      return "default"
+    },
     requireAdvertised: { fallback: [execute] },
   }
 }
@@ -228,9 +294,11 @@ export const ohMyPiAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile
     stateRoots: [".omp"],
   },
   validateConfiguration: rejectUnmediatedMandatoryApprovals("oh-my-pi"),
-  permissionModes: brokerModes("default"),
+  permissionModes: brokerModes("default", "plan", ["default", "plan", "bypassPermissions"]),
   reapplySessionMode: true,
   requiresGuardedClientPorts: true,
+  promptUsage: ohMyPiPromptUsage,
+  usageUpdateScope: "session_context",
 })
 export const museAcpProfile: AcpVendorProfile = Object.freeze<AcpVendorProfile>({
   id: "muse",

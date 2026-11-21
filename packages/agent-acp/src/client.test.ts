@@ -2201,6 +2201,26 @@ describe("AcpClientAdapter — negotiated turn steering", () => {
     }
   })
 
+  it("recognizes OMP promptRequired steering replies with queue metadata and failed outcomes", async () => {
+    const { adapter, frames, setResult } = await connectedSteering()
+    try {
+      setResult({ outcome: "promptRequired", queue: "steering" })
+      await expect(adapter.steerTurn!("running", "continue")).rejects.toThrow(
+        /ACP steering requires an active turn: queue=steering/
+      )
+      expect(
+        frames.filter(({ method }) => method !== "initialize").map(({ method }) => method)
+      ).toEqual(["_session/steering"])
+
+      setResult({ outcome: "failed", reason: "queue full" })
+      await expect(adapter.steerTurn!("running", "continue")).rejects.toThrow(
+        /ACP steering failed: queue full/
+      )
+    } finally {
+      await adapter.disconnect()
+    }
+  })
+
   it("does not retry an unacknowledged steer", async () => {
     const { adapter, frames, setResult } = await connectedSteering()
     try {
@@ -7632,5 +7652,242 @@ describe("audited ACP runtime safety boundaries", () => {
       expect.any(Object),
       1024 * 1024
     )
+  })
+})
+
+describe("AcpClientAdapter — oh-my-pi plan mode, approval ceilings, and per-turn usage", () => {
+  const ompModeOptions = (currentValue: string): AcpConfigOption[] => [
+    {
+      id: "mode",
+      name: "Mode",
+      category: "mode",
+      type: "select",
+      currentValue,
+      options: [
+        { value: "default", name: "Default" },
+        { value: "plan", name: "Plan" },
+      ],
+    },
+  ]
+
+  const permissionParams = (sessionId: string) => ({
+    sessionId,
+    toolCall: { toolCallId: "tc-1", title: "Edit file", kind: "edit" },
+    options: [
+      { optionId: "allow", name: "Allow", kind: "allow_once" },
+      { optionId: "reject", name: "Reject", kind: "reject_once" },
+    ],
+  })
+
+  function ompAdapter() {
+    const adapter = new AcpClientAdapter(acpDeps())
+    ;(adapter as unknown as { _config: ExternalAgentConfig })._config = {
+      ...stdioConfig(),
+      metadata: { preset: "oh-my-pi" },
+      process: { command: "omp", args: ["acp"], cwd: "/work" },
+    }
+    ;(adapter as unknown as { _agentCapabilities: unknown })._agentCapabilities = {
+      loadSession: true,
+      sessionCapabilities: { list: {}, resume: {}, fork: {}, close: {} },
+    }
+    setStatus(adapter, "connected")
+    const internal = adapter as unknown as {
+      sendRequest: jest.Mock
+      handlePermissionRequest: (params: Record<string, unknown>) => Promise<unknown>
+    }
+    internal.sendRequest = jest.fn()
+    return { adapter, internal }
+  }
+
+  it("supports native plan on create, config switch, fork inheritance, and never auto-approves in restricted windows", async () => {
+    const { adapter, internal } = ompAdapter()
+
+    // Direct create with permissionMode: "plan"
+    internal.sendRequest
+      .mockResolvedValueOnce({ sessionId: "s-plan", configOptions: ompModeOptions("default") })
+      .mockResolvedValueOnce({ configOptions: ompModeOptions("plan") })
+    const created = await adapter.createSession({ cwd: "/work", permissionMode: "plan" })
+    expect(created.permissionMode).toBe("plan")
+    expect(await internal.handlePermissionRequest(permissionParams("s-plan"))).toEqual({
+      outcome: { outcome: "selected", optionId: "reject" },
+    })
+
+    // Fork inherits plan when options.permissionMode is omitted
+    internal.sendRequest
+      .mockResolvedValueOnce({ sessionId: "s-fork", configOptions: ompModeOptions("plan") })
+      .mockResolvedValueOnce({ configOptions: ompModeOptions("plan") })
+    const forked = await adapter.forkSession("s-plan", { cwd: "/work" })
+    expect(forked.permissionMode).toBe("plan")
+
+    // Session created with bypassPermissions switches to native plan via setConfigOption:
+    // must become plan (not bypassPermissions) and reject permission requests.
+    internal.sendRequest
+      .mockResolvedValueOnce({ sessionId: "s-bp", configOptions: ompModeOptions("default") })
+      .mockResolvedValueOnce({ configOptions: ompModeOptions("default") })
+    const bp = await adapter.createSession({ cwd: "/work", permissionMode: "bypassPermissions" })
+    expect(bp.permissionMode).toBe("bypassPermissions")
+
+    internal.sendRequest.mockResolvedValueOnce({ configOptions: ompModeOptions("plan") })
+    await adapter.setConfigOption("s-bp", "mode", "plan")
+    expect(adapter.getSession("s-bp")?.permissionMode).toBe("plan")
+    expect(await internal.handlePermissionRequest(permissionParams("s-bp"))).toEqual({
+      outcome: { outcome: "selected", optionId: "reject" },
+    })
+
+    // Leaving plan via native notification or setConfigOption("default") lands on "default"
+    // (asks user rather than silently re-granting bypassPermissions).
+    handleUpdate(adapter, "s-bp", {
+      sessionUpdate: "current_mode_update",
+      currentModeId: "default",
+    })
+    expect(adapter.getSession("s-bp")?.permissionMode).toBe("default")
+
+    // Unknown native mode stays restricted ("default"), never auto-allows.
+    handleUpdate(adapter, "s-bp", {
+      sessionUpdate: "current_mode_update",
+      currentModeId: "mystery-mode",
+    })
+    expect(adapter.getSession("s-bp")?.permissionMode).toBe("default")
+
+    // Pending switch from plan -> bypassPermissions holds plan ceiling until confirmed.
+    internal.sendRequest.mockResolvedValueOnce({ configOptions: ompModeOptions("plan") })
+    await adapter.setSessionMode("s-bp", "plan")
+    let resolveSwitch!: (value: unknown) => void
+    internal.sendRequest.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSwitch = resolve
+        })
+    )
+    const switching = adapter.setSessionMode("s-bp", "bypassPermissions")
+    // Permission request arriving before confirmation must be rejected (0 auto-allows).
+    expect(await internal.handlePermissionRequest(permissionParams("s-bp"))).toEqual({
+      outcome: { outcome: "selected", optionId: "reject" },
+    })
+    resolveSwitch({ configOptions: ompModeOptions("default") })
+    await switching
+    expect(adapter.getSession("s-bp")?.permissionMode).toBe("bypassPermissions")
+
+    // Replay permission request during session/load before response cannot auto-allow even
+    // when caller asked for bypassPermissions.
+    let releaseLoad!: (value: unknown) => void
+    internal.sendRequest.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseLoad = resolve
+        })
+    )
+    const loading = adapter.loadSession("s-replay", {
+      cwd: "/work",
+      permissionMode: "bypassPermissions",
+    })
+    const emitted: ExternalAgentEvent[] = []
+    ;(adapter as unknown as { emitEvent: (e: ExternalAgentEvent) => void }).emitEvent = (e) => {
+      emitted.push(e)
+    }
+    const replayDecision = internal.handlePermissionRequest(permissionParams("s-replay"))
+    await Promise.resolve()
+    // Should prompt (permission_request emitted) rather than auto-allow!
+    expect(emitted.some((e) => e.type === "permission_request")).toBe(true)
+    const req = emitted.find((e) => e.type === "permission_request") as Extract<
+      ExternalAgentEvent,
+      { type: "permission_request" }
+    >
+    await adapter.respondToPermission("s-replay", { requestId: req.request.id, granted: false })
+    await replayDecision
+    internal.sendRequest.mockResolvedValueOnce({ configOptions: ompModeOptions("default") })
+    releaseLoad({ configOptions: ompModeOptions("default") })
+    await loading
+  })
+
+  it("reports per-turn OMP prompt usage across equal, varying, and resumed turns without leaking session occupancy or cumulative cost", async () => {
+    const { adapter, internal } = ompAdapter()
+    internal.sendRequest
+      .mockResolvedValueOnce({ sessionId: "s-usage", configOptions: ompModeOptions("default") })
+      .mockResolvedValueOnce({ configOptions: ompModeOptions("default") })
+    await adapter.createSession({ cwd: "/work" })
+
+    const userMsg = (text: string) => ({
+      id: text,
+      role: "user" as const,
+      content: [{ type: "text" as const, text }],
+      timestamp: new Date(),
+    })
+
+    // Turn 1: 12 tokens + session_context usage_update with occupancy 5000 & cumulative $0.42
+    internal.sendRequest.mockImplementationOnce(async () => {
+      handleUpdate(adapter, "s-usage", {
+        sessionUpdate: "usage_update",
+        used: 5000,
+        size: 128000,
+        cost: { amount: 0.42, currency: "USD" },
+      })
+      return {
+        stopReason: "end_turn",
+        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+      }
+    })
+    const first = await adapter.execute("s-usage", userMsg("turn 1"))
+    expect(first.tokenUsage).toEqual({
+      promptTokens: 10,
+      completionTokens: 2,
+      totalTokens: 12,
+      contextTokens: 5000,
+      modelContextWindow: 128000,
+    })
+    expect(first.tokenUsage?.providerCost).toBeUndefined()
+
+    // Turn 2: equal 12 tokens — must NOT be diffed to 0/undefined!
+    internal.sendRequest.mockResolvedValueOnce({
+      stopReason: "end_turn",
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+    })
+    const second = await adapter.execute("s-usage", userMsg("turn 2"))
+    expect(second.tokenUsage?.totalTokens).toBe(12)
+
+    // Turn 3: smaller turn (8 tokens) — must NOT be clamped to 0!
+    internal.sendRequest.mockResolvedValueOnce({
+      stopReason: "end_turn",
+      usage: { inputTokens: 6, outputTokens: 2, totalTokens: 8, cachedReadTokens: 3 },
+    })
+    const third = await adapter.execute("s-usage", userMsg("turn 3"))
+    expect(third.tokenUsage).toMatchObject({
+      promptTokens: 6,
+      completionTokens: 2,
+      totalTokens: 8,
+      cacheReadTokens: 3,
+    })
+
+    // Close & resume: first turn after resume still reports 12 tokens!
+    internal.sendRequest.mockResolvedValueOnce({}) // session/close
+    await adapter.closeSession("s-usage")
+    internal.sendRequest
+      .mockResolvedValueOnce({ sessionId: "s-usage", configOptions: ompModeOptions("default") })
+      .mockResolvedValueOnce({ configOptions: ompModeOptions("default") })
+    await adapter.resumeSession("s-usage", { cwd: "/work" })
+    internal.sendRequest.mockResolvedValueOnce({
+      stopReason: "end_turn",
+      usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12 },
+    })
+    const afterResume = await adapter.execute("s-usage", userMsg("turn 4"))
+    expect(afterResume.tokenUsage?.totalTokens).toBe(12)
+
+    // Turn with ONLY occupancy/cumulative cost and no prompt usage: turn tokens & cost stay unknown.
+    internal.sendRequest.mockImplementationOnce(async () => {
+      handleUpdate(adapter, "s-usage", {
+        sessionUpdate: "usage_update",
+        used: 9000,
+        size: 128000,
+        cost: { amount: 0.99, currency: "USD" },
+      })
+      return { stopReason: "cancelled" }
+    })
+    const noUsage = await adapter.execute("s-usage", userMsg("cancelled"))
+    expect(noUsage.tokenUsage).toBeUndefined()
+    expect(adapter.getSession("s-usage")?.metadata?.usage).toEqual({
+      used: 9000,
+      size: 128000,
+      cost: { amount: 0.99, currency: "USD" },
+    })
   })
 })

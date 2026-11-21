@@ -79,9 +79,65 @@ describe("audited ACP integrations", () => {
         expect(() => profile.permissionModes!.toNative(mode)).toThrow("cannot enforce")
       expect(profile.permissionModes!.toCanonical(execute, "default")).toBe("default")
       expect(profile.permissionModes!.toCanonical("unrecognized-permissive-mode", "dontAsk")).toBe(
-        "bypassPermissions"
+        "default"
       )
     }
+  })
+
+  it("maps oh-my-pi native plan mode without escalating unknown modes to bypassPermissions", () => {
+    const modes = ohMyPiAcpProfile.permissionModes!
+    expect(modes.supportedCanonicalModes).toEqual(["default", "plan", "bypassPermissions"])
+    expect(modes.toNative("plan")).toBe("plan")
+    expect(modes.toNative("default")).toBe("default")
+    expect(modes.toNative("bypassPermissions")).toBe("default")
+    for (const mode of ["dontAsk", "acceptEdits"] as const)
+      expect(() => modes.toNative(mode)).toThrow("cannot enforce")
+    expect(modes.toCanonical("plan", "bypassPermissions")).toBe("plan")
+    expect(modes.toCanonical("plan", "default")).toBe("plan")
+    expect(modes.toCanonical("default", "plan")).toBe("default")
+    expect(modes.toCanonical("default", "bypassPermissions")).toBe("bypassPermissions")
+    expect(modes.toCanonical("unknown-mode", "bypassPermissions")).toBe("default")
+  })
+
+  it("projects oh-my-pi per-turn promptUsage directly and marks usage_update as session_context", () => {
+    expect(ohMyPiAcpProfile.usageUpdateScope).toBe("session_context")
+    const promptUsage = ohMyPiAcpProfile.promptUsage!
+    expect(
+      promptUsage({
+        usage: {
+          inputTokens: 10,
+          outputTokens: 2,
+          totalTokens: 12,
+          cachedReadTokens: 4,
+          cachedWriteTokens: 1,
+          thoughtTokens: 3,
+        },
+      })
+    ).toEqual({
+      promptTokens: 10,
+      completionTokens: 2,
+      totalTokens: 12,
+      cacheReadTokens: 4,
+      cacheWriteTokens: 1,
+      reasoningTokens: 3,
+    })
+    // Missing, all-zero, negative, float, and invalid shapes stay unknown.
+    expect(promptUsage({})).toBeUndefined()
+    expect(promptUsage({ usage: null })).toBeUndefined()
+    expect(
+      promptUsage({ usage: { inputTokens: 0, outputTokens: 0, totalTokens: 0 } })
+    ).toBeUndefined()
+    expect(
+      promptUsage({ usage: { inputTokens: -1, outputTokens: 2, totalTokens: 1 } })
+    ).toBeUndefined()
+    expect(
+      promptUsage({ usage: { inputTokens: 1.5, outputTokens: 2, totalTokens: 3 } })
+    ).toBeUndefined()
+    expect(
+      promptUsage({
+        usage: { inputTokens: 10, outputTokens: 2, totalTokens: 12, cachedReadTokens: -5 },
+      })
+    ).toBeUndefined()
   })
 
   it("does not expose strict policy ceilings for native pre-approved tools", () => {
@@ -94,14 +150,13 @@ describe("audited ACP integrations", () => {
       "mistral-vibe",
       "mimo-code",
       "hermes-agent",
-      "oh-my-pi",
       "muse",
     ]) {
       const modes = ACP_VENDOR_PROFILES.find((profile) => profile.id === id)!.permissionModes!
       expect(modes.supportedCanonicalModes).toEqual(["default", "bypassPermissions"])
       for (const mode of ["plan", "dontAsk", "acceptEdits"] as const)
         expect(() => modes.toNative(mode)).toThrow("cannot enforce")
-      expect(modes.toCanonical("plan", "plan")).not.toBe("plan")
+      expect(modes.toCanonical("plan", "plan")).toBe("default")
     }
   })
 
