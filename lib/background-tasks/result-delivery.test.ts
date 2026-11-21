@@ -883,4 +883,10 @@ describe("a character-team room's results (ADR-0252 §4)", () => {
     await flush()
     expect(roomSend).toHaveBeenCalledTimes(1)
   })
+
+  it("returns false when outbox persistence fails so reconciliation can retry (F05)", async () => {
+    upsertBackgroundJobSettlement.mockRejectedValueOnce(new Error("QuotaExceededError"))
+    await expect(onBackgroundJobSettled(handoffEnd())).resolves.toBe(false)
+    await expect(onBackgroundJobSettled(handoffEnd())).resolves.toBe(true)
+  })
 })

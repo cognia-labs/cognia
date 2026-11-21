@@ -2658,4 +2658,56 @@ describe("runTeamLifecycle — budget governance, extension & restart preservati
     expect(res.status).toBe("completed")
     expect(deps._taskStatuses).toMatchObject({ d1: "completed", d2: "completed" })
   })
+
+  it("preserves outputs from all executed waves in readSquadRunReport on adaptive multi-wave runs (F05)", async () => {
+    const adaptiveTeam: AgentTeam = {
+      ...baseTeam,
+      config: {
+        ...baseTeam.config,
+        progressLedger: { enabled: true },
+      },
+    }
+    const tasks = [task("w1-step"), task("w2-step", ["w1-step"])]
+    const members = [lead, worker("w1")]
+    let stepCall = 0
+    ;(executeAgent as jest.Mock).mockImplementation(async () => {
+      stepCall += 1
+      if (stepCall === 1) {
+        return {
+          channel: "text",
+          text: "wave-1 distinct artifact",
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }
+      }
+      if (stepCall === 2) {
+        return {
+          channel: "text",
+          text: '```json\n{"action":"continue","reasoning":"proceed to wave 2"}\n```',
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }
+      }
+      if (stepCall === 3) {
+        return {
+          channel: "text",
+          text: "wave-2 distinct summary",
+          usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        }
+      }
+      return {
+        channel: "text",
+        text: '```json\n{"action":"continue","reasoning":"done"}\n```',
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+      }
+    })
+    const runId = "run-multi-wave-report-f05"
+    const res = await runTeamLifecycle(adaptiveTeam.id, {
+      ...buildDeps(adaptiveTeam, tasks, members),
+      runId,
+    })
+    expect(res.status).toBe("completed")
+    const { readSquadRunReport } = await import("./squad/squad-run-report")
+    const report = await readSquadRunReport(runId)
+    expect(report.text).toContain("wave-1 distinct artifact")
+    expect(report.text).toContain("wave-2 distinct summary")
+  })
 })

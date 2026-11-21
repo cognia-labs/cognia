@@ -29,6 +29,8 @@
     "steer": "发送引导",
     "steerPlaceholder": "在下一个安全边界引导该子任务",
     "steered": "引导已记录。",
+    "steeredDelivered": "引导已实时送达当前执行轮次。",
+    "steeredQueued": "引导已排队，将在下一个安全边界生效。",
     "takeover": "开始接管",
     "takeoverCompleted": "人工接管已创建检查点。",
     "takeoverStarted": "子任务已暂停，可人工接管。",

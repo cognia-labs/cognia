@@ -244,4 +244,53 @@ describe("RoomHandoffCard", () => {
     expect(container).toBeEmptyDOMElement()
     await act(async () => undefined)
   })
+
+  it("distinguishes queued, partial, delivered, unconfirmed, and failed/retried steers (F06, T05)", async () => {
+    holdReply(started)
+    delegationRun = { latestSnapshot: { allowedActions: ["steer", "stop"] } }
+    dispatchRunControl
+      .mockResolvedValueOnce({ accepted: false, reason: "control_failed" })
+      .mockResolvedValueOnce({
+        accepted: true,
+        steerDelivery: { status: "queued", deliveredCount: 0, queuedCount: 2, totalTargets: 2 },
+      })
+      .mockResolvedValueOnce({
+        accepted: true,
+        steerDelivery: { status: "partial", deliveredCount: 1, queuedCount: 1, totalTargets: 2 },
+      })
+      .mockResolvedValueOnce({
+        accepted: true,
+        steerDelivery: { status: "delivered", deliveredCount: 1, queuedCount: 0, totalTargets: 1 },
+      })
+    render(<RoomHandoffCard part={part(proposed("sq-1"))} sessionId={ROOM} />)
+    const input = screen.getByTestId("room-handoff-steer-input")
+    const send = screen.getByTestId("room-handoff-steer")
+
+    await userEvent.type(input, "Use Rust")
+    await userEvent.click(send)
+    // Failed transport keeps text and reuses steerSequence=1 on retry!
+    expect(input).toHaveValue("Use Rust")
+    expect(screen.getByRole("alert")).toHaveTextContent(t.controlFailed.steer)
+
+    await userEvent.click(send)
+    expect(dispatchRunControl.mock.calls[0]?.[0]).toMatchObject({ steerSequence: 1 })
+    expect(dispatchRunControl.mock.calls[1]?.[0]).toMatchObject({ steerSequence: 1 })
+    expect(screen.getByTestId("room-handoff-steer-status")).toHaveTextContent(t.steerStatus.queued)
+
+    await userEvent.type(input, "Split tasks")
+    await userEvent.click(send)
+    expect(dispatchRunControl.mock.calls[2]?.[0]).toMatchObject({ steerSequence: 2 })
+    expect(screen.getByTestId("room-handoff-steer-status")).toHaveTextContent(
+      t.steerStatus.partial
+        .replace("{delivered}", "1")
+        .replace("{total}", "2")
+        .replace("{queued}", "1")
+    )
+
+    await userEvent.type(input, "Ship now")
+    await userEvent.click(send)
+    expect(screen.getByTestId("room-handoff-steer-status")).toHaveTextContent(
+      t.steerStatus.delivered
+    )
+  })
 })

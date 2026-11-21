@@ -12,7 +12,7 @@ jest.mock("../agent-team-runtime", () => ({
 }))
 const setTeamStatus = jest.fn()
 jest.mock("@/stores/squads/agent-team-store/store", () => ({
-  useAgentTeamStore: { getState: () => ({ setTeamStatus, teams: {}, teammates: {} }) },
+  useAgentTeamStore: { getState: () => ({ setTeamStatus, teams: {}, teammates: {}, tasks: {} }) },
 }))
 
 import { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } from "@/lib/db/schema"
@@ -390,5 +390,43 @@ describe("controlSquadRun", () => {
       ok: false,
       reason: "run_not_found",
     })
+  })
+
+  it("notifies onSquadRunEnded when defaultReenter settles a zero-remaining resumed run (F05)", async () => {
+    const { onSquadRunEnded } = await import("../squad/squad-lifecycle-runner")
+    await seedRun("paused")
+    await getDb().agentTeamRuns.update(RUN, {
+      executionConstraints: {
+        version: 1,
+        teamConfig: {
+          maxTeammates: 2,
+          maxConcurrentTeammates: 1,
+          executionMode: "coordinated",
+          displayMode: "expanded",
+          repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
+          environmentRef: { environmentId: "env-1", versionId: "env-1:v1" },
+        },
+        origin: "chat",
+        triggeredFrom: { source: "ui" },
+        requirePlanApprovalFloor: false,
+      },
+    })
+    const ended: string[] = []
+    const unsub = onSquadRunEnded((id) => ended.push(id))
+    try {
+      const res = await controlSquadRun({ runId: RUN }, "resume", {
+        coordinator: coordinator as unknown as DurableTeamCoordinator,
+        isLive: () => false,
+        readiness: async () => ({ ready: true, blockers: [] }),
+      })
+      expect(res).toEqual({ ok: true, status: "running" })
+      const deadline = Date.now() + 2_000
+      while (ended.length === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10))
+      }
+      expect(ended).toContain(RUN)
+    } finally {
+      unsub()
+    }
   })
 })

@@ -454,7 +454,7 @@ export function onSquadRunEnded(listener: (runId: string) => void): () => void {
   }
 }
 
-function notifySquadRunEnded(runId: string): void {
+export function notifySquadRunEnded(runId: string): void {
   for (const listener of squadRunEndListeners) {
     try {
       listener(runId)

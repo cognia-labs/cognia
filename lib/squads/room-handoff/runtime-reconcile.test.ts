@@ -1,6 +1,15 @@
 const mockReconcile = jest.fn(async () => 0)
+const mockReconcileWithStatus = jest.fn<
+  Promise<{ reported: number; pendingRetry: number }> | undefined,
+  []
+>(() => undefined)
 jest.mock("./settle", () => ({
   reconcileRoomHandoffs: () => mockReconcile(),
+  reconcileRoomHandoffsWithStatus: () => {
+    const custom = mockReconcileWithStatus()
+    if (custom) return custom
+    return mockReconcile().then((reported) => ({ reported, pendingRetry: 0 }))
+  },
 }))
 const endListeners = new Set<(runId: string) => void>()
 jest.mock("../squad/squad-lifecycle-runner", () => ({
@@ -17,6 +26,8 @@ const flush = () => new Promise((resolve) => setTimeout(resolve, 0))
 beforeEach(() => {
   mockReconcile.mockReset()
   mockReconcile.mockResolvedValue(0)
+  mockReconcileWithStatus.mockReset()
+  mockReconcileWithStatus.mockReturnValue(undefined)
   endListeners.clear()
 })
 
@@ -62,5 +73,18 @@ describe("room hand-off reconcile runtime", () => {
     expect(warn).toHaveBeenCalledWith("room hand-off reconciliation failed", expect.any(Error))
     stop()
     warn.mockRestore()
+  })
+
+  it("schedules a bounded retry when outbox writes remain pending and clears timer on stop (F05)", async () => {
+    let calls = 0
+    mockReconcileWithStatus.mockImplementation(async () => {
+      calls += 1
+      return calls === 1 ? { reported: 0, pendingRetry: 1 } : { reported: 1, pendingRetry: 0 }
+    })
+    const stop = await start({ retryDelayMs: 10, maxRetries: 2 })
+    expect(calls).toBe(1)
+    await new Promise((resolve) => setTimeout(resolve, 25))
+    expect(calls).toBe(2)
+    stop()
   })
 })

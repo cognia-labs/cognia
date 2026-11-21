@@ -28,8 +28,12 @@ import type { SquadRunReport } from "../squad/squad-run-report"
 const DELEGATION_PREFIX = "room-handoff:"
 
 export interface RoomHandoffSettleDeps {
-  /** Record the end and let the delivery path take it (`onBackgroundJobSettled`). */
-  report: (record: BackgroundTaskJournalRecord) => Promise<void>
+  /**
+   * Record the end and let the delivery path take it (`onBackgroundJobSettled`).
+   * Returning `false` signals storage refused so reconciliation retries later;
+   * `void` is treated as persisted for custom test doubles.
+   */
+  report: (record: BackgroundTaskJournalRecord) => Promise<boolean | void>
   /** Whether the outbox already holds an attempt's end. */
   hasEntry: (entryId: string) => Promise<boolean>
   /** Every room hand-off delegation, newest first. */
@@ -79,15 +83,15 @@ async function resolveDeps(): Promise<RoomHandoffSettleDeps> {
   return depsOverride ?? (await defaultDeps())
 }
 
-/** Report one attempt's end. */
+/** Report one attempt's end. Returns whether the outbox persisted it. */
 export async function settleRoomHandoffAttempt(
   attempt: RoomHandoffAttempt,
   outcome: ChildRunOutcome,
   settledAt?: number
-): Promise<void> {
+): Promise<boolean> {
   const deps = await resolveDeps()
   const { squadHandoffOutboxRecord } = await import("@/lib/background-tasks/squad-handoff-outbox")
-  await deps.report(
+  const persisted = await deps.report(
     squadHandoffOutboxRecord({
       roomId: attempt.roomId,
       brief: attempt.brief,
@@ -106,6 +110,7 @@ export async function settleRoomHandoffAttempt(
       },
     })
   )
+  return persisted !== false
 }
 
 /** Report the attempt this host launched when its outcome settles. */
@@ -149,19 +154,23 @@ async function listHandoffAttempts(
   return attempts
 }
 
+export interface ReconcileRoomHandoffsStatus {
+  reported: number
+  pendingRetry: number
+}
+
 /**
- * Report every ended attempt of a recent hand-off that has no entry yet.
- * Reads the proposal back from the room for whose it was, and each attempt's
- * text and error from that attempt's own run, so a retry never carries the
- * report of the run it replaced, nor of the Squad's next run.
+ * Report every ended attempt of a recent hand-off that has no entry yet,
+ * returning both persisted count and how many ended attempts still need retry.
  */
-export async function reconcileRoomHandoffs(): Promise<number> {
+export async function reconcileRoomHandoffsWithStatus(): Promise<ReconcileRoomHandoffsStatus> {
   const deps = await resolveDeps()
   const [{ squadHandoffOutboxId, SQUAD_HANDOFF_RECONCILE_WINDOW_MS }] = await Promise.all([
     import("@/lib/background-tasks/squad-handoff-outbox"),
   ])
   const since = deps.now() - SQUAD_HANDOFF_RECONCILE_WINDOW_MS
   let reported = 0
+  let pendingRetry = 0
   for (const delegation of await deps.listHandoffDelegations()) {
     if (delegation.updatedAt < since || !delegation.sessionId) continue
     const roomId = delegation.sessionId
@@ -181,7 +190,7 @@ export async function reconcileRoomHandoffs(): Promise<number> {
     for (const attempt of unreported) {
       const report = await deps.runReport(attempt.sourceId).catch(() => ({}) as SquadRunReport)
       const status = outcomeOf(attempt.status)
-      await settleRoomHandoffAttempt(
+      const ok = await settleRoomHandoffAttempt(
         {
           roomId,
           toolUseId,
@@ -200,8 +209,19 @@ export async function reconcileRoomHandoffs(): Promise<number> {
         },
         attempt.endedAt ?? attempt.updatedAt
       )
-      reported += 1
+      if (ok) reported += 1
+      else pendingRetry += 1
     }
   }
-  return reported
+  return { reported, pendingRetry }
+}
+
+/**
+ * Report every ended attempt of a recent hand-off that has no entry yet.
+ * Reads the proposal back from the room for whose it was, and each attempt's
+ * text and error from that attempt's own run, so a retry never carries the
+ * report of the run it replaced, nor of the Squad's next run.
+ */
+export async function reconcileRoomHandoffs(): Promise<number> {
+  return (await reconcileRoomHandoffsWithStatus()).reported
 }

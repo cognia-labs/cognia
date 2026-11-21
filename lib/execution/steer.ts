@@ -33,7 +33,7 @@ import { getExecutionRun, listChildExecutionRuns, listExecutionRuns } from "@/li
 import { steerTextOf } from "@/lib/chat/steer"
 import { isLiveRunStatus } from "./run-status"
 import { steerDisposition, type DerivedSteerSource, type SteerOrigin } from "./steer-queue"
-import type { SteerDegradedReason } from "./run-control"
+import type { SteerDegradedReason, SteerDeliverySummary } from "./run-control"
 import type { ExecutionRun, ExecutionRunKind } from "@/types/execution/run"
 
 /** What to steer: a run row, or the live turn of a conversation. */
@@ -61,14 +61,23 @@ export interface SteerRequest {
 
 export type SteerOutcome =
   /** The engine took it. `receiptIds` are durable receipts, where the engine writes them. */
-  | { status: "delivered"; receiptIds: readonly string[] }
+  | {
+      status: "delivered"
+      receiptIds: readonly string[]
+      steerDelivery?: SteerDeliverySummary
+    }
   /**
    * The input is held for the target's next boundary; no model has seen it.
    * A derived input waiting behind a running turn carries its session queue
    * `entryId`; a Squad steer no teammate could take live carries the durable
    * `receiptIds` that teammate's next dispatch consumes.
    */
-  | { status: "queued"; receiptIds: readonly string[]; entryId?: string }
+  | {
+      status: "queued"
+      receiptIds: readonly string[]
+      entryId?: string
+      steerDelivery?: SteerDeliverySummary
+    }
   /** The kind can steer, this one could not right now; the caller still owns the input. */
   | { status: "degraded"; reason: SteerDegradedReason }
   /** This kind has no steer at all (a `job`, a workflow). */
@@ -239,6 +248,10 @@ const steerDelegation: RunSteerEngine = async (run, request) => {
   const receiptIds: string[] = []
   let delivered = false
   let held = false
+  let sawSummary = false
+  let deliveredCount = 0
+  let queuedCount = 0
+  let totalTargets = 0
   let lastReason: SteerDegradedReason = "no_active_run"
   for (const child of children) {
     const outcome = await steerExecutionRun(child, {
@@ -248,15 +261,57 @@ const steerDelegation: RunSteerEngine = async (run, request) => {
     if (outcome.status === "delivered") {
       delivered = true
       receiptIds.push(...outcome.receiptIds)
+      if (outcome.steerDelivery) {
+        sawSummary = true
+        deliveredCount += outcome.steerDelivery.deliveredCount
+        queuedCount += outcome.steerDelivery.queuedCount
+        totalTargets += outcome.steerDelivery.totalTargets
+      } else {
+        deliveredCount += 1
+        totalTargets += 1
+      }
     } else if (outcome.status === "queued") {
       held = true
       receiptIds.push(...outcome.receiptIds)
-    } else if (outcome.status === "degraded") {
-      lastReason = outcome.reason
+      if (outcome.steerDelivery) {
+        sawSummary = true
+        deliveredCount += outcome.steerDelivery.deliveredCount
+        queuedCount += outcome.steerDelivery.queuedCount
+        totalTargets += outcome.steerDelivery.totalTargets
+      } else {
+        queuedCount += 1
+        totalTargets += 1
+      }
+    } else {
+      totalTargets += 1
+      if (outcome.status === "degraded") {
+        lastReason = outcome.reason
+      }
     }
   }
-  if (delivered) return { status: "delivered", receiptIds }
-  if (held) return { status: "queued", receiptIds }
+  const summary: SteerDeliverySummary | undefined = sawSummary
+    ? {
+        status:
+          deliveredCount > 0 && deliveredCount === totalTargets && queuedCount === 0
+            ? "delivered"
+            : deliveredCount === 0 && queuedCount === totalTargets
+              ? "queued"
+              : "partial",
+        deliveredCount,
+        queuedCount,
+        totalTargets,
+      }
+    : undefined
+  if (delivered) {
+    return summary
+      ? { status: "delivered", receiptIds, steerDelivery: summary }
+      : { status: "delivered", receiptIds }
+  }
+  if (held) {
+    return summary
+      ? { status: "queued", receiptIds, steerDelivery: summary }
+      : { status: "queued", receiptIds }
+  }
   return { status: "degraded", reason: lastReason }
 }
 

@@ -253,20 +253,23 @@ export function onBackgroundRunSettled(
  * id, so a repeat changes nothing) and, when the conversation is owed it,
  * opens the session's coalescing window.
  */
-export async function onBackgroundJobSettled(record: BackgroundTaskJournalRecord): Promise<void> {
-  if (!isSettledOutboxKind(record.kind) || !record.sessionId) return
+export async function onBackgroundJobSettled(
+  record: BackgroundTaskJournalRecord
+): Promise<boolean> {
+  if (!isSettledOutboxKind(record.kind) || !record.sessionId) return false
   let stored = record
   try {
     const { upsertBackgroundJobSettlement } = await import("@/lib/db/background-tasks")
     stored = (await upsertBackgroundJobSettlement(record)).record
   } catch {
-    // Storage refused: the supervisor still has the end, and the next
-    // reconciliation writes it.
-    return
+    // Storage refused: return false so reconciliation does not count the
+    // attempt as persisted and retries on the next pass.
+    return false
   }
-  if (stored.deliveryState !== "pending" || stored.deliveredAt !== undefined) return
+  if (stored.deliveryState !== "pending" || stored.deliveredAt !== undefined) return true
   wakeLimiter.noteSettlement(stored.sessionId, jobDeps.now())
   void attemptBackgroundResultDelivery(stored.sessionId)
+  return true
 }
 
 /**

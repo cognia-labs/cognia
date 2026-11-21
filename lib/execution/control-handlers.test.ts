@@ -1117,7 +1117,16 @@ describe("steering", () => {
         origin: "person",
         content: "redirect",
       })
-    ).resolves.toEqual({ status: "queued", receiptIds: ["held-a", "held-b"] })
+    ).resolves.toEqual({
+      status: "queued",
+      receiptIds: ["held-a", "held-b"],
+      steerDelivery: {
+        status: "queued",
+        deliveredCount: 0,
+        queuedCount: 2,
+        totalTargets: 2,
+      },
+    })
 
     // The control gate still accepts it and hands back the durable receipts.
     const result = await executeRunControlCommand({
@@ -1872,5 +1881,152 @@ describe("parked agent tool approval (ADR-0224 A7, ADR-0239)", () => {
     expect((await answer("send-2", "deny", first.currentRevision ?? 0)).accepted).toBe(true)
     await expect(denied).resolves.toEqual({ decision: "deny" })
     installed.dispose()
+  })
+})
+
+describe("Squad steering delivery taxonomy (F06, T05)", () => {
+  beforeEach(async () => {
+    await getDb().delete()
+    __resetDbForTesting()
+    jest.clearAllMocks()
+  })
+
+  it("distinguishes delivered, queued, partial, and all-rejected Squad steers and preserves summary on duplicate replay", async () => {
+    const installed = installExecutionRunControlHandlers()
+    try {
+      await createExecutionRun({
+        id: "execution:team:run-steer-t05",
+        kind: "team",
+        sourceId: "run-steer-t05",
+        title: "Squad steer test",
+        status: "running",
+        initiator: { remoteUserId: "op" },
+        currentRevision: 0,
+        startedAt: 1,
+        updatedAt: 1,
+      })
+      mockGetAgentTeamRun.mockResolvedValue({ id: "run-steer-t05", status: "running" })
+
+      // 1. All candidates rejected (0 receipts) -> steer_degraded, NEVER accepted!
+      mockSteerDurableRun.mockResolvedValueOnce({
+        receipts: [],
+        childCount: 2,
+        refused: "store_failed",
+      })
+      const allRejected = await executeRunControlCommand({
+        runId: "execution:team:run-steer-t05",
+        action: "steer",
+        steerMessage: "switch to rust",
+        idempotencyKey: "steer-0",
+        expectedRevision: 0,
+        actor: { remoteUserId: "op" },
+      })
+      expect(allRejected).toMatchObject({
+        accepted: false,
+        reason: "steer_degraded",
+        degradedReason: "store_failed",
+      })
+
+      // 2. All receipts queued -> accepted with status: "queued"
+      mockSteerDurableRun.mockResolvedValueOnce({
+        receipts: [
+          { id: "r-q1", status: "queued" },
+          { id: "r-q2", status: "queued" },
+        ],
+        childCount: 2,
+      })
+      const rev1 = (await getExecutionRun("execution:team:run-steer-t05"))!.currentRevision
+      const queued = await executeRunControlCommand({
+        runId: "execution:team:run-steer-t05",
+        action: "steer",
+        steerMessage: "hold for next turn",
+        idempotencyKey: "steer-queued",
+        expectedRevision: rev1,
+        actor: { remoteUserId: "op" },
+      })
+      expect(queued).toMatchObject({
+        accepted: true,
+        steerReceiptIds: ["r-q1", "r-q2"],
+        steerDelivery: {
+          status: "queued",
+          deliveredCount: 0,
+          queuedCount: 2,
+          totalTargets: 2,
+        },
+      })
+      // Duplicate replay with same idempotencyKey restores steerReceiptIds + steerDelivery!
+      const dupQueued = await executeRunControlCommand({
+        runId: "execution:team:run-steer-t05",
+        action: "steer",
+        steerMessage: "hold for next turn",
+        idempotencyKey: "steer-queued",
+        expectedRevision: rev1,
+        actor: { remoteUserId: "op" },
+      })
+      expect(dupQueued).toMatchObject({
+        accepted: true,
+        duplicate: true,
+        steerReceiptIds: ["r-q1", "r-q2"],
+        steerDelivery: {
+          status: "queued",
+          deliveredCount: 0,
+          queuedCount: 2,
+          totalTargets: 2,
+        },
+      })
+
+      // 3. Partial (1 delivered + 1 queued) -> accepted with status: "partial"
+      mockSteerDurableRun.mockResolvedValueOnce({
+        receipts: [
+          { id: "r-d1", status: "delivered" },
+          { id: "r-q3", status: "queued" },
+        ],
+        childCount: 2,
+      })
+      const rev2 = (await getExecutionRun("execution:team:run-steer-t05"))!.currentRevision
+      const partial = await executeRunControlCommand({
+        runId: "execution:team:run-steer-t05",
+        action: "steer",
+        steerMessage: "partial correction",
+        idempotencyKey: "steer-partial",
+        expectedRevision: rev2,
+        actor: { remoteUserId: "op" },
+      })
+      expect(partial).toMatchObject({
+        accepted: true,
+        steerDelivery: {
+          status: "partial",
+          deliveredCount: 1,
+          queuedCount: 1,
+          totalTargets: 2,
+        },
+      })
+
+      // 4. All delivered -> status: "delivered"
+      mockSteerDurableRun.mockResolvedValueOnce({
+        receipts: [{ id: "r-d2", status: "delivered" }],
+        childCount: 1,
+      })
+      const rev3 = (await getExecutionRun("execution:team:run-steer-t05"))!.currentRevision
+      const delivered = await executeRunControlCommand({
+        runId: "execution:team:run-steer-t05",
+        action: "steer",
+        steerMessage: "live correction",
+        idempotencyKey: "steer-delivered",
+        expectedRevision: rev3,
+        actor: { remoteUserId: "op" },
+      })
+      expect(delivered).toMatchObject({
+        accepted: true,
+        steerDelivery: {
+          status: "delivered",
+          deliveredCount: 1,
+          queuedCount: 0,
+          totalTargets: 1,
+        },
+      })
+    } finally {
+      installed.dispose()
+    }
   })
 })

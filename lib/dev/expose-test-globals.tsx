@@ -100,6 +100,7 @@ declare global {
       objective: string
       status?: "running" | "paused" | "needs_input"
       review?: "budget_extension" | "team_recovery"
+      seedActiveChild?: boolean
     }) => Promise<{ runId: string; executionRunId: string }>
     /**
      * Seed a conversation of `turns` user/assistant pairs and return its id.
@@ -958,6 +959,30 @@ export function ExposeTestGlobals(): null {
                       uncertainChildIds: [],
                     }
                   : { crossing: 1 },
+            })
+          }
+          if (draft.seedActiveChild) {
+            await getDb().agentTeamChildRuns.put({
+              id: `child_e2e_${runId}`,
+              runId,
+              teamId: draft.teamId,
+              teammateId: team.leadId,
+              taskId: `task_e2e_${runId}`,
+              repositoryId: "primary",
+              status: "running",
+              attempt: 1,
+              startedAt,
+              resourceUsage: {
+                promptTokens: 0,
+                completionTokens: 0,
+                totalTokens: 0,
+                wallTimeMs: 0,
+                toolTimeMs: 0,
+                attempts: 1,
+                failures: 0,
+              },
+              createdAt: startedAt,
+              updatedAt: startedAt,
             })
           }
           return { runId, executionRunId }

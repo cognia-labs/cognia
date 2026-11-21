@@ -30,7 +30,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { SquadRunPart } from "@/components/chat/message-parts/squad-run-part"
 import { useHostProfile } from "@/hooks/use-host-profile"
 import { getExecutionRun } from "@/lib/db/execution-runs"
-import { dispatchRunControl } from "@/lib/execution/run-control-dispatch"
+import { dispatchRunControl, type RunControlOutcome } from "@/lib/execution/run-control-dispatch"
 import type { ToolResultRendererProps } from "@/lib/plugin/api/tool-result-renderers"
 import { requestRoomSquadHandoffDecision } from "@/lib/squads/room-handoff/decide-client"
 import {
@@ -247,7 +247,12 @@ function HandoffControls({ delegationRunId }: { delegationRunId: string }) {
   const [busy, setBusy] = useState(false)
   const busyRef = useRef(false)
   const steerSequence = useRef(0)
+  const pendingSteerRetry = useRef<{ message: string; seq: number } | null>(null)
   const [failed, setFailed] = useState<"steer" | "stop" | null>(null)
+  const [failedDegraded, setFailedDegraded] = useState<string | null>(null)
+  const [steerFeedback, setSteerFeedback] = useState<
+    RunControlOutcome["steerDelivery"] | "unconfirmed" | null
+  >(null)
   const canSteer = allowed.includes("steer")
   const canStop = allowed.includes("stop")
   if (!canSteer && !canStop) return null
@@ -257,19 +262,45 @@ function HandoffControls({ delegationRunId }: { delegationRunId: string }) {
     busyRef.current = true
     setBusy(true)
     setFailed(null)
+    setFailedDegraded(null)
+    if (action === "steer") setSteerFeedback(null)
     try {
-      if (action === "steer") steerSequence.current += 1
+      const trimmed = steer.trim()
+      let seq: number | undefined
+      if (action === "steer") {
+        seq =
+          pendingSteerRetry.current?.message === trimmed
+            ? pendingSteerRetry.current.seq
+            : (steerSequence.current += 1)
+      }
       const outcome = await dispatchRunControl({
         runId: delegationRunId,
         action,
         surface: "room-handoff",
         hostProfile,
-        ...(action === "steer"
-          ? { steerMessage: steer.trim(), steerSequence: steerSequence.current }
+        ...(action === "steer" && seq !== undefined
+          ? { steerMessage: trimmed, steerSequence: seq }
           : {}),
       })
-      if (!outcome.accepted) setFailed(action)
-      else if (action === "steer") setSteer("")
+      if (!outcome.accepted) {
+        if (
+          action === "steer" &&
+          seq !== undefined &&
+          (outcome.reason === "control_failed" || outcome.reason === "host_consent_required")
+        ) {
+          pendingSteerRetry.current = { message: trimmed, seq }
+        } else if (action === "steer") {
+          pendingSteerRetry.current = null
+        }
+        setFailed(action)
+        if (action === "steer" && outcome.reason === "steer_degraded" && outcome.degradedReason) {
+          setFailedDegraded(outcome.degradedReason)
+        }
+      } else if (action === "steer") {
+        pendingSteerRetry.current = null
+        setSteer("")
+        setSteerFeedback(outcome.steerDelivery ?? "unconfirmed")
+      }
     } finally {
       busyRef.current = false
       setBusy(false)
@@ -312,9 +343,29 @@ function HandoffControls({ delegationRunId }: { delegationRunId: string }) {
           {t("stop")}
         </Button>
       ) : null}
+      {steerFeedback ? (
+        <p
+          role="status"
+          data-testid="room-handoff-steer-status"
+          className="text-xs text-muted-foreground"
+        >
+          {steerFeedback === "unconfirmed"
+            ? t("steerStatus.unconfirmed")
+            : steerFeedback.status === "delivered"
+              ? t("steerStatus.delivered")
+              : steerFeedback.status === "queued"
+                ? t("steerStatus.queued")
+                : t("steerStatus.partial", {
+                    delivered: steerFeedback.deliveredCount,
+                    queued: steerFeedback.queuedCount,
+                    total: steerFeedback.totalTargets,
+                  })}
+        </p>
+      ) : null}
       {failed ? (
         <p role="alert" className="text-xs text-destructive">
           {t(`controlFailed.${failed}`)}
+          {failed === "steer" && failedDegraded ? ` (${failedDegraded})` : ""}
         </p>
       ) : null}
     </div>

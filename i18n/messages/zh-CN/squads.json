@@ -243,6 +243,12 @@
     "steerLabel": "给小队的消息",
     "steerPlaceholder": "给小队补充一句…",
     "steer": "发送",
+    "steerStatus": {
+      "delivered": "已实时送达小队当前执行轮次。",
+      "queued": "已加入队列，将在小队下一个安全边界生效。",
+      "partial": "已实时送达 {total} 名活跃成员中的 {delivered} 名（另有 {queued} 名排队中）。",
+      "unconfirmed": "Host 已接收消息（未报告具体回执状态）。"
+    },
     "stop": "停止小队",
     "controlFailed": {
       "steer": "消息没有送到小队。",

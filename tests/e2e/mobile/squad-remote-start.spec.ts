@@ -193,7 +193,7 @@ async function installHost(page: Page, initial: Scenario) {
           expiresAt: Date.now() + 600_000,
         }
         project("waiting", ["approve", "deny", "stop"])
-      } else project("running", ["pause", "stop"])
+      } else project("running", ["pause", "stop", "steer"])
       return reply({
         started: true,
         runId: "host-canonical-run",
@@ -211,9 +211,23 @@ async function installHost(page: Page, initial: Scenario) {
       expect(body).not.toHaveProperty("actor")
       const action = body.action
       if (action === "pause") project("paused", ["resume", "stop"])
-      else if (action === "resume") project("running", ["pause", "stop"])
+      else if (action === "resume") project("running", ["pause", "stop", "steer"])
       else if (action === "stop") project("cancelled", [])
-      else if ((action === "approve" || action === "deny") && interrupt) {
+      else if (action === "steer") {
+        if (scenario === "lost") return route.abort("connectionreset")
+        project("running", ["pause", "stop", "steer"])
+        return reply({
+          accepted: true,
+          currentRevision: revision,
+          steerReceiptIds: ["r-host-queued-1"],
+          steerDelivery: {
+            status: "queued",
+            deliveredCount: 0,
+            queuedCount: 1,
+            totalTargets: 1,
+          },
+        })
+      } else if ((action === "approve" || action === "deny") && interrupt) {
         expect(body.interruptId).toBe(interrupt.id)
         expect(body.reviewDecision).toMatchObject({ kind: "plan" })
         interrupt = {
@@ -276,7 +290,7 @@ async function boot(page: Page, scenario: Scenario = "success") {
 }
 
 test.describe("mobile — remote Squad start", () => {
-  test("starts once, controls the canonical run, and opens Runs", async ({ page }) => {
+  test("@critical starts once, controls the canonical run, and opens Runs", async ({ page }) => {
     const host = await boot(page)
     await page.getByTestId("start-team").dblclick()
     await expect(page.getByTestId("pause-team")).toBeVisible()
@@ -382,5 +396,39 @@ test.describe("mobile — remote Squad start", () => {
     await page.getByTestId("start-team").click()
     await expect(page.getByTestId("pause-team")).toBeVisible()
     expect(host.calls.filter((c) => c.command === "team_run_start")).toHaveLength(before + 1)
+  })
+
+  test("@critical retries a dropped remote steer with the same idempotency key and renders queued status", async ({
+    page,
+  }) => {
+    const host = await boot(page)
+    await page.getByTestId("start-team").click()
+    await expect(page.getByTestId("pause-team")).toBeVisible()
+    await page.getByRole("link", { name: "Open run" }).click()
+    const dialog = page.getByRole("dialog")
+    await expect(dialog).toContainText(TITLE)
+
+    const steerInput = dialog.getByLabel("Redirect this run without stopping it…")
+    await steerInput.fill("Focus on regression coverage")
+
+    // First attempt drops connection: input text stays intact!
+    host.setScenario("lost")
+    await dialog.getByRole("button", { name: "Steer", exact: true }).click()
+    await expect(steerInput).toHaveValue("Focus on regression coverage")
+    await expect(dialog.getByRole("status").first()).toContainText("could not apply this action")
+
+    // Retry reuses the exact same steerSequence/idempotencyKey and renders queued status!
+    host.setScenario("success")
+    await dialog.getByRole("button", { name: "Steer", exact: true }).click()
+    await expect(steerInput).toHaveValue("")
+    await expect(dialog.getByTestId("run-steer-status")).toContainText(
+      "Instruction queued for the next safe boundary."
+    )
+
+    const steerCalls = host.calls.filter(
+      (c) => c.command === "execution_run_control" && c.body.action === "steer"
+    )
+    expect(steerCalls).toHaveLength(2)
+    expect(steerCalls[0]?.body.idempotencyKey).toBe(steerCalls[1]?.body.idempotencyKey)
   })
 })

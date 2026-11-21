@@ -29,6 +29,8 @@
     "steer": "Send steering",
     "steerPlaceholder": "Steer this child at the next safe boundary",
     "steered": "Steering recorded.",
+    "steeredDelivered": "Steering delivered to live execution.",
+    "steeredQueued": "Steering queued for the next safe boundary.",
     "takeover": "Begin takeover",
     "takeoverCompleted": "Manual takeover checkpointed.",
     "takeoverStarted": "Child paused for takeover.",

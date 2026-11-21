@@ -26,8 +26,11 @@ jest.mock("@/hooks/use-host-profile", () => ({
   useHostProfile: () => hostProfile,
 }))
 let remoteHostActive = false
+const remoteTransportStub = { call: (...args: unknown[]) => transportCall(...args) }
 jest.mock("@/lib/tauri/transport-routing", () => ({
+  ...jest.requireActual("@/lib/tauri/transport-routing"),
   isRemoteHostActive: () => remoteHostActive,
+  getActiveRemoteTransport: () => (remoteHostActive ? remoteTransportStub : null),
 }))
 const transportCall = jest.fn()
 jest.mock("@/lib/tauri/transport-instance", () => ({
@@ -196,7 +199,11 @@ describe("useRunControlActions on a companion", () => {
     const payload = transportCall.mock.calls[0]?.[1] as Record<string, unknown>
     expect(payload.actor).toBeUndefined()
     expect(payload.adminLease).toBe("one-operation-lease")
-    expect(issueHostAdminLease).toHaveBeenCalledWith(["execution_run_control"], 120)
+    expect(issueHostAdminLease).toHaveBeenCalledWith(
+      ["execution_run_control"],
+      120,
+      expect.objectContaining({ call: expect.any(Function) })
+    )
   })
 
   it.each(["ABC123", null])(
@@ -471,5 +478,50 @@ describe("useRunControlActions", () => {
     expect(result.current.pendingRowId).toBeNull()
     await act(() => result.current.dispatch(row(), "stop"))
     expect(result.current.pendingRowId).toBeNull()
+  })
+
+  it("reuses steerSequence when retrying the same steer after control_failed and increments for new steers (F06, T05)", async () => {
+    hostProfile = "mobile-companion"
+    getExecutionRun.mockResolvedValue(storedRun())
+    transportCall
+      .mockRejectedValueOnce(new Error("socket dropped"))
+      .mockResolvedValueOnce({
+        accepted: true,
+        duplicate: true,
+        steerReceiptIds: ["r-1"],
+        steerDelivery: { status: "queued", deliveredCount: 0, queuedCount: 1, totalTargets: 1 },
+      })
+      .mockResolvedValueOnce({
+        accepted: true,
+        steerReceiptIds: ["r-2"],
+        steerDelivery: { status: "delivered", deliveredCount: 1, queuedCount: 0, totalTargets: 1 },
+      })
+    const { result } = renderHook(() => useRunControlActions())
+
+    const first = await act(() =>
+      result.current.dispatch(row(), "steer", { steerMessage: "focus on tests" })
+    )
+    expect(first).toEqual({ accepted: false, reason: "control_failed" })
+
+    const retry = await act(() =>
+      result.current.dispatch(row(), "steer", { steerMessage: "focus on tests" })
+    )
+    expect(retry).toMatchObject({
+      accepted: true,
+      steerDelivery: { status: "queued", deliveredCount: 0, queuedCount: 1, totalTargets: 1 },
+    })
+
+    await act(() => result.current.dispatch(row(), "steer", { steerMessage: "focus on tests" }))
+
+    const keys = transportCall.mock.calls.map(
+      ([, payload]) => (payload as { idempotencyKey?: string }).idempotencyKey
+    )
+    // Retry after transport failure reused sequence 1; deliberate follow-up got sequence 2!
+    expect(keys).toEqual([
+      "cockpit:run-1:steer:1",
+      "cockpit:run-1:steer:1",
+      "cockpit:run-1:steer:2",
+    ])
+    hostProfile = "desktop"
   })
 })

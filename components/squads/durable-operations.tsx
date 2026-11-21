@@ -21,6 +21,7 @@ import { deriveSquadChildStop, summarizeSquadStop } from "@/lib/squads/squad/squ
 import { retrySquadChild } from "@/lib/squads/durable/retry-squad-child"
 import { getDb } from "@/lib/db/schema"
 import { createDecisionLedger } from "@cognia/agent-orchestration/decision-ledger"
+import { isTerminalTeamStatus } from "@cognia/agent-orchestration/rules"
 import { getDurableTeamCoordinator } from "@/lib/squads/durable/durable-runtime"
 import {
   approveAndMergeGithubStack,
@@ -395,28 +396,42 @@ export function DurableOperations({
                   </div>
                 </div>
               ) : null}
-              <div className="flex gap-2">
-                <Input
-                  value={steering[child.id] ?? ""}
-                  onChange={(event) =>
-                    setSteering((value) => ({ ...value, [child.id]: event.target.value }))
-                  }
-                  placeholder={t("children.steerPlaceholder")}
-                />
-                <Button
-                  size="icon"
-                  aria-label={t("children.steer")}
-                  disabled={!steering[child.id]?.trim()}
-                  onClick={() =>
-                    void invoke(async () => {
-                      await getDurableTeamCoordinator().steer(child.id, steering[child.id]!)
-                      setSteering((value) => ({ ...value, [child.id]: "" }))
-                    }, t("children.steered"))
-                  }
-                >
-                  <SendIcon className="size-4" />
-                </Button>
-              </div>
+              {!isTerminalTeamStatus(child.status) ? (
+                <div className="flex gap-2">
+                  <Input
+                    value={steering[child.id] ?? ""}
+                    onChange={(event) =>
+                      setSteering((value) => ({ ...value, [child.id]: event.target.value }))
+                    }
+                    placeholder={t("children.steerPlaceholder")}
+                  />
+                  <Button
+                    size="icon"
+                    aria-label={t("children.steer")}
+                    disabled={!steering[child.id]?.trim()}
+                    onClick={() =>
+                      void (async () => {
+                        try {
+                          const receipt = await getDurableTeamCoordinator().steer(
+                            child.id,
+                            steering[child.id]!
+                          )
+                          setSteering((value) => ({ ...value, [child.id]: "" }))
+                          toast.success(
+                            receipt.status === "delivered"
+                              ? t("children.steeredDelivered")
+                              : t("children.steeredQueued")
+                          )
+                        } catch (error) {
+                          toast.error(error instanceof Error ? error.message : String(error))
+                        }
+                      })()
+                    }
+                  >
+                    <SendIcon className="size-4" />
+                  </Button>
+                </div>
+              ) : null}
               <div className="grid gap-2 sm:grid-cols-2">
                 <Textarea
                   value={manualCommands[child.id] ?? ""}

@@ -93,11 +93,32 @@ async function steerFromGate(
 
 function outcomeOrThrow(outcome: SteerOutcome, action: string): RunControlHandlerOutcome {
   switch (outcome.status) {
-    case "delivered":
-      return outcome.receiptIds.length > 0 ? { steerReceiptIds: outcome.receiptIds } : {}
-    case "queued":
+    case "delivered": {
+      const steerDelivery = outcome.steerDelivery ?? {
+        status: "delivered" as const,
+        deliveredCount: Math.max(1, outcome.receiptIds.length),
+        queuedCount: 0,
+        totalTargets: Math.max(1, outcome.receiptIds.length),
+      }
+      return {
+        ...(outcome.receiptIds.length > 0 ? { steerReceiptIds: outcome.receiptIds } : {}),
+        steerDelivery,
+      }
+    }
+    case "queued": {
       // Held for the target's next boundary; a Squad's are durable receipts.
-      return outcome.receiptIds.length > 0 ? { steerReceiptIds: outcome.receiptIds } : {}
+      const count = Math.max(1, outcome.receiptIds.length)
+      const steerDelivery = outcome.steerDelivery ?? {
+        status: "queued" as const,
+        deliveredCount: 0,
+        queuedCount: count,
+        totalTargets: count,
+      }
+      return {
+        ...(outcome.receiptIds.length > 0 ? { steerReceiptIds: outcome.receiptIds } : {}),
+        steerDelivery,
+      }
+    }
     case "degraded":
       throw new SteerDegradedError(outcome.reason)
     case "unsupported_for_kind":
@@ -129,9 +150,23 @@ const steerSquadRun: RunSteerEngine = async (run, request) => {
   if (childCount === 0) return { status: "degraded", reason: "no_active_run" }
   if (receipts.length === 0) return { status: "degraded", reason: refused ?? "store_failed" }
   const receiptIds = receipts.map((receipt) => receipt.id)
-  return receipts.some((receipt) => receipt.status === "delivered")
-    ? { status: "delivered", receiptIds }
-    : { status: "queued", receiptIds }
+  const deliveredCount = receipts.filter((receipt) => receipt.status === "delivered").length
+  const queuedCount = receipts.length - deliveredCount
+  const summaryStatus =
+    deliveredCount > 0 && deliveredCount === childCount && queuedCount === 0
+      ? ("delivered" as const)
+      : deliveredCount === 0 && queuedCount === childCount
+        ? ("queued" as const)
+        : ("partial" as const)
+  const steerDelivery = {
+    status: summaryStatus,
+    deliveredCount,
+    queuedCount,
+    totalTargets: childCount,
+  }
+  return deliveredCount > 0
+    ? { status: "delivered", receiptIds, steerDelivery }
+    : { status: "queued", receiptIds, steerDelivery }
 }
 
 /**
@@ -323,8 +358,11 @@ export function installExecutionRunControlHandlers(deps: ExecutionRunControlHand
     if (!durable) throw new Error("No durable record behind this Squad run")
 
     if (command.action === "steer") {
-      const { steerReceiptIds } = await steerFromGate(run, command)
-      return { steerReceiptIds: steerReceiptIds ?? [] }
+      const { steerReceiptIds, steerDelivery } = await steerFromGate(run, command)
+      return {
+        steerReceiptIds: steerReceiptIds ?? [],
+        ...(steerDelivery ? { steerDelivery } : {}),
+      }
     }
 
     if (command.action === "approve" || command.action === "deny") {

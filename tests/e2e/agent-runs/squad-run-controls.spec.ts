@@ -30,6 +30,7 @@ declare global {
       objective: string
       status?: "running" | "paused" | "needs_input"
       review?: "budget_extension" | "team_recovery"
+      seedActiveChild?: boolean
     }) => Promise<{ runId: string; executionRunId: string }>
   }
 }
@@ -57,7 +58,11 @@ async function seedSquad(page: Page): Promise<string> {
 async function seedRun(
   page: Page,
   teamId: string,
-  extra: { status?: "running" | "paused" | "needs_input"; review?: "budget_extension" } = {}
+  extra: {
+    status?: "running" | "paused" | "needs_input"
+    review?: "budget_extension"
+    seedActiveChild?: boolean
+  } = {}
 ) {
   return page.evaluate(
     ({ teamId, objective, extra }) => window.__cogniaSeedSquadRun!({ teamId, objective, ...extra }),
@@ -66,7 +71,7 @@ async function seedRun(
 }
 
 test.describe("squads — one runtime, one cockpit, one review contract", () => {
-  test("a blocked Squad is visible and editable but cannot start", async ({ page }) => {
+  test("@critical a blocked Squad is visible and editable but cannot start", async ({ page }) => {
     await bootInto(page, "/squads")
     const teamId = await seedSquad(page)
     await page.goto(`/squads?id=${teamId}`, { waitUntil: "domcontentloaded" })
@@ -90,7 +95,7 @@ test.describe("squads — one runtime, one cockpit, one review contract", () => 
     await expect(page.getByRole("button", { name: /abort/i })).toHaveCount(0)
   })
 
-  test("the Runs tab is the cockpit, and a resume on a blocked Squad parks the run", async ({
+  test("@critical the Runs tab is the cockpit, and a resume on a blocked Squad parks the run", async ({
     page,
   }) => {
     await bootInto(page, "/squads")
@@ -191,5 +196,40 @@ test.describe("squads — one runtime, one cockpit, one review contract", () => 
     await expect(recovery).toContainText(/missing a binding/i)
     await page.getByRole("tab", { name: /Approvals/ }).click()
     await expect(page.getByText("Approved", { exact: true }).first()).toBeVisible()
+  })
+
+  test("@critical steers a live Squad run honestly: degraded with zero active children, queued when durable receipt holds it", async ({
+    page,
+  }) => {
+    await bootInto(page, "/squads")
+    const teamId = await seedSquad(page)
+
+    // 1. No active child -> degraded refusal preserves typed steer text!
+    const empty = await seedRun(page, teamId, { status: "running", seedActiveChild: false })
+    await page.goto(`/agent-runs?kind=team&run=${encodeURIComponent(empty.executionRunId)}`, {
+      waitUntil: "domcontentloaded",
+    })
+    const emptyInput = page.getByLabel("Redirect this run without stopping it…")
+    await emptyInput.fill("Keep my instruction on refusal")
+    await page.getByRole("button", { name: "Steer", exact: true }).click()
+    await expect(emptyInput).toHaveValue("Keep my instruction on refusal")
+    await expect(page.getByRole("status").first()).toContainText(
+      "The message was not delivered and is still yours to send."
+    )
+    await page.getByRole("button", { name: "Stop", exact: true }).click()
+    await expect(page.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0)
+
+    // 2. Active durable child with no live stream -> durable queued receipt (NOT delivered!)
+    const active = await seedRun(page, teamId, { status: "running", seedActiveChild: true })
+    await page.goto(`/agent-runs?kind=team&run=${encodeURIComponent(active.executionRunId)}`, {
+      waitUntil: "domcontentloaded",
+    })
+    const activeInput = page.getByLabel("Redirect this run without stopping it…")
+    await activeInput.fill("Apply at next safe boundary")
+    await page.getByRole("button", { name: "Steer", exact: true }).click()
+    await expect(activeInput).toHaveValue("")
+    await expect(page.getByTestId("run-steer-status")).toContainText(
+      "Instruction queued for the next safe boundary."
+    )
   })
 })

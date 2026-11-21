@@ -123,6 +123,7 @@ export function RunDetailPane({ row, actions }: RunDetailPaneProps) {
   const { run, detail, interrupts, journalAvailable, isLoading, botResult, botCost } =
     useExecutionRunDetail(row.runId)
   const [outcome, setOutcome] = useState<RunControlOutcome | null>(null)
+  const [lastAction, setLastAction] = useState<RunControlAction | null>(null)
   const [steerText, setSteerText] = useState("")
   const controlRow = run?.latestSnapshot
     ? { ...row, allowedActions: run.latestSnapshot.allowedActions }
@@ -145,6 +146,7 @@ export function RunDetailPane({ row, actions }: RunDetailPaneProps) {
       ...(reviewDecision ? { reviewDecision } : {}),
       ...((action === "approve" || action === "deny") && run ? { reviewedRun: run } : {}),
     })
+    setLastAction(action)
     setOutcome(result)
     // A steer that was not accepted leaves the text in the box: the message is
     // still the user's and clearing it would drop what they typed.
@@ -344,6 +346,21 @@ export function RunDetailPane({ row, actions }: RunDetailPaneProps) {
       {outcome?.accepted && outcome.retryRunId && (
         <p role="status" className="text-xs text-muted-foreground">
           {t("outcome.retried")}
+        </p>
+      )}
+      {outcome?.accepted && lastAction === "steer" && (
+        <p role="status" data-testid="run-steer-status" className="text-xs text-muted-foreground">
+          {outcome.steerDelivery?.status === "delivered"
+            ? t("outcome.steer_delivered")
+            : outcome.steerDelivery?.status === "queued"
+              ? t("outcome.steer_queued")
+              : outcome.steerDelivery?.status === "partial"
+                ? t("outcome.steer_partial", {
+                    delivered: outcome.steerDelivery.deliveredCount,
+                    queued: outcome.steerDelivery.queuedCount,
+                    total: outcome.steerDelivery.totalTargets,
+                  })
+                : t("outcome.steer_unconfirmed")}
         </p>
       )}
 

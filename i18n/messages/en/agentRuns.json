@@ -148,6 +148,10 @@
     "run_not_found": "That run no longer exists.",
     "source_rejected": "The engine refused the command.",
     "steer_degraded": "The message was not delivered and is still yours to send.",
+    "steer_delivered": "Instruction delivered to live execution.",
+    "steer_partial": "Instruction reached {delivered} of {total} active members ({queued} queued for the next boundary).",
+    "steer_queued": "Instruction queued for the next safe boundary.",
+    "steer_unconfirmed": "The Host accepted the instruction (delivery receipt status is not reported by this Host).",
     "unsupported": "Nothing is registered to control this kind of run.",
     "unsupported_for_kind": "This kind of run cannot take that action."
   },

@@ -324,8 +324,10 @@ async function defaultReenter(input: { teamId: string; runId: string }): Promise
     const run = await getAgentTeamRun(input.runId)
     if (run) await settleAgentTeamExecutionRun(run, "completed", now).catch(() => undefined)
     await setMirroredTeamStatus(input.teamId, "completed")
-    const { emitTeamCompletedSchedulerEvent } = await import("../squad/squad-lifecycle-runner")
+    const { emitTeamCompletedSchedulerEvent, notifySquadRunEnded } =
+      await import("../squad/squad-lifecycle-runner")
     void emitTeamCompletedSchedulerEvent(input.teamId, "completed")
+    notifySquadRunEnded(input.runId)
     return undefined
   }
   return runSquadLifecycle({

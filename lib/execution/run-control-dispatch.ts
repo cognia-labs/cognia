@@ -67,6 +67,10 @@ export interface RunControlOutcome {
   reason?: RunControlOutcomeReason
   /** Set with `steer_degraded`: the message is intact and still the caller's. */
   degradedReason?: RunControlResult["degradedReason"]
+  /** Durable receipt ids minted for an accepted steer, when applicable. */
+  steerReceiptIds?: RunControlResult["steerReceiptIds"]
+  /** Structured steer delivery breakdown (`delivered` | `queued` | `partial`). */
+  steerDelivery?: RunControlResult["steerDelivery"]
   /** Set on an accepted `retry` (and on its duplicate) — the replacement run. */
   retryRunId?: string
   /** True when the gate recognised this as a redelivery of a press it already took. */
@@ -110,6 +114,10 @@ function outcomeFrom(result: RunControlResult): RunControlOutcome {
     accepted: result.accepted,
     ...(result.reason ? { reason: result.reason } : {}),
     ...(result.degradedReason ? { degradedReason: result.degradedReason } : {}),
+    ...(result.steerReceiptIds && result.steerReceiptIds.length > 0
+      ? { steerReceiptIds: result.steerReceiptIds }
+      : {}),
+    ...(result.steerDelivery ? { steerDelivery: result.steerDelivery } : {}),
     ...(result.retryRunId ? { retryRunId: result.retryRunId } : {}),
     ...(result.duplicate ? { duplicate: true } : {}),
   }

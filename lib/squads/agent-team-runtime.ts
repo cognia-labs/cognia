@@ -1413,6 +1413,18 @@ export async function runTeamLifecycle(
         // between waves; a "cancelled" row is a companion soft-cancel and
         // must still kill the run, so it is honored, never resurrected.
         let executedWaves = 0
+        const accumulatedWaveOutputs: Record<string, unknown> = {}
+        const mergeWaveOutput = (waveIndex: number, waveOutput: unknown): void => {
+          if (!waveOutput || typeof waveOutput !== "object" || Array.isArray(waveOutput)) return
+          const rec = waveOutput as Record<string, unknown>
+          if (typeof rec.text === "string" || typeof rec.report === "string") {
+            accumulatedWaveOutputs[`__wave_${waveIndex}`] = rec
+            return
+          }
+          for (const [stepId, stepValue] of Object.entries(rec)) {
+            accumulatedWaveOutputs[stepId] = stepValue
+          }
+        }
         const runWaveReentrant = async (
           wf: VisualWorkflow,
           signal: AbortSignal
@@ -1428,7 +1440,9 @@ export async function runTeamLifecycle(
             }
           }
           executedWaves += 1
-          return runOneWorkflow(wf, signal)
+          const waveResult = await runOneWorkflow(wf, signal)
+          mergeWaveOutput(executedWaves, waveResult.output)
+          return waveResult
         }
         const waveRes = await runTeamWaves({
           teamCtx: waveCtx,
@@ -1441,8 +1455,24 @@ export async function runTeamLifecycle(
           ...(ledgerCheckpoint ? { checkpoint: ledgerCheckpoint } : {}),
         })
         // A no-task run (or one with no executed wave) has no lastResult; the
-        // wave status is authoritative.
-        result = waveRes.lastResult ?? { runId, status: "succeeded" }
+        // wave status is authoritative. Preserve outputs across all executed waves
+        // so `readSquadRunReport` retains earlier waves' answers (F05).
+        const mergedOutput =
+          executedWaves > 1 && Object.keys(accumulatedWaveOutputs).length > 0
+            ? accumulatedWaveOutputs
+            : waveRes.lastResult?.output
+        if (executedWaves > 1 && mergedOutput !== undefined) {
+          const { getDb } = await import("@/lib/db/schema")
+          await getDb()
+            .workflowRuns.update(runId, { output: mergedOutput })
+            .catch(() => undefined)
+        }
+        result = waveRes.lastResult
+          ? {
+              ...waveRes.lastResult,
+              ...(mergedOutput !== undefined ? { output: mergedOutput } : {}),
+            }
+          : { runId, status: "succeeded" }
         finalStatus =
           waveRes.status === "succeeded"
             ? "completed"

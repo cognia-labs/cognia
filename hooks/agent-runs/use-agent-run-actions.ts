@@ -75,6 +75,7 @@ export function useRunControlActions(): RunControlActions {
    * them would silently drop the second.
    */
   const steerSequence = useRef(0)
+  const pendingSteerRetry = useRef<{ key: string; seq: number } | null>(null)
 
   const can = useCallback((row: UnifiedExecutionRow, action: RunControlAction): boolean => {
     if (!row.runId || row.source !== "journal") return false
@@ -92,14 +93,35 @@ export function useRunControlActions(): RunControlActions {
       }
       setPendingRowId(row.rowId)
       try {
-        return await dispatchRunControl({
+        let seq: number | undefined
+        const retryKey =
+          action === "steer" ? `${row.runId}:${options.steerMessage ?? ""}` : undefined
+        if (action === "steer" && retryKey) {
+          if (pendingSteerRetry.current?.key === retryKey) {
+            seq = pendingSteerRetry.current.seq
+          } else {
+            seq = steerSequence.current += 1
+          }
+        }
+        const outcome = await dispatchRunControl({
           runId: row.runId,
           action,
           surface: "cockpit",
           hostProfile,
           ...options,
-          ...(action === "steer" ? { steerSequence: (steerSequence.current += 1) } : {}),
+          ...(seq !== undefined ? { steerSequence: seq } : {}),
         })
+        if (action === "steer" && retryKey && seq !== undefined) {
+          if (
+            !outcome.accepted &&
+            (outcome.reason === "control_failed" || outcome.reason === "host_consent_required")
+          ) {
+            pendingSteerRetry.current = { key: retryKey, seq }
+          } else {
+            pendingSteerRetry.current = null
+          }
+        }
+        return outcome
       } finally {
         setPendingRowId((current) => (current === row.rowId ? null : current))
       }

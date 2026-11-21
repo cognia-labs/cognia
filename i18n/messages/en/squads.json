@@ -243,6 +243,12 @@
     "steerLabel": "Message to the Squad",
     "steerPlaceholder": "Tell the Squad something…",
     "steer": "Send",
+    "steerStatus": {
+      "delivered": "Delivered to the Squad's live turn.",
+      "queued": "Queued for the Squad's next safe boundary.",
+      "partial": "Delivered to {delivered} of {total} active members ({queued} queued).",
+      "unconfirmed": "Accepted by the Host (delivery receipt status not reported)."
+    },
     "stop": "Stop the Squad",
     "controlFailed": {
       "steer": "The message did not reach the Squad.",

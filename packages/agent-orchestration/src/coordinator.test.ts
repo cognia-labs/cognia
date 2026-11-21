@@ -1630,4 +1630,26 @@ describe("durable AgentTeam coordinator", () => {
     expect(resume).toHaveBeenCalledTimes(1)
     expect((await store.getChild("child-takeover"))?.status).toBe("running")
   })
+
+  it.each(["completed", "failed", "cancelled", "terminated"] as const)(
+    "refuses steering onto a %s child without writing orphan receipts (F06)",
+    async (terminalStatus) => {
+      const coordinator = make({ now: () => 1_500 })
+      await coordinator.prepareRun(spec(), `run-steer-${terminalStatus}`)
+      await coordinator.registerChild({
+        runId: `run-steer-${terminalStatus}`,
+        childRunId: `child-${terminalStatus}`,
+        teammateId: "mate-1",
+        taskId: "task-1",
+        repositoryId: "primary",
+        access: "read",
+      })
+      await store.updateChild(`child-${terminalStatus}`, { status: terminalStatus })
+
+      await expect(
+        coordinator.steer(`child-${terminalStatus}`, "do not write orphan receipt")
+      ).rejects.toThrow(/already settled/)
+      expect(await store.listSteeringReceipts(`run-steer-${terminalStatus}`)).toEqual([])
+    }
+  )
 })

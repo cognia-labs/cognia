@@ -35,8 +35,16 @@ import type {
  * text. Squad reviews return a redacted typed decision for the resolution CAS
  * so no provisional approval can survive a concurrent expiry.
  */
+export interface SteerDeliverySummary {
+  status: "delivered" | "queued" | "partial"
+  deliveredCount: number
+  queuedCount: number
+  totalTargets: number
+}
+
 export interface RunControlHandlerOutcome {
   steerReceiptIds?: readonly string[]
+  steerDelivery?: SteerDeliverySummary
   interruptDecision?: ExecutionRunInterrupt["decision"]
   interruptReceipt?: ActionReviewReceipt
   /** Decision observations only; invoked after the resolution CAS commits. */
@@ -108,6 +116,8 @@ export interface RunControlResult {
   degradedReason?: SteerDegradedReason
   /** Durable receipts a successful steer produced, for correlation. */
   steerReceiptIds?: readonly string[]
+  /** Structured delivery breakdown (`delivered` / `queued` / `partial`) without free text. */
+  steerDelivery?: SteerDeliverySummary
   interruptDecision?: ExecutionRunInterrupt["decision"]
   interruptReceipt?: ActionReviewReceipt
   /** Decision observations only; invoked after the resolution CAS commits. */
@@ -562,6 +572,13 @@ export async function executeRunControlCommandUnlocked(
       const { recordSquadDuplicateControl } = await import("@/lib/squads/squad/squad-telemetry")
       recordSquadDuplicateControl({ runId: run.sourceId, action: command.action })
     }
+    const existingReceiptIds = Array.isArray(existing.payload.steerReceiptIds)
+      ? (existing.payload.steerReceiptIds as string[])
+      : undefined
+    const existingSteerDelivery =
+      existing.payload.steerDelivery && typeof existing.payload.steerDelivery === "object"
+        ? (existing.payload.steerDelivery as SteerDeliverySummary)
+        : undefined
     return {
       accepted: existing.type === "control.accepted",
       reason:
@@ -570,6 +587,10 @@ export async function executeRunControlCommandUnlocked(
           : undefined,
       duplicate: true,
       currentRevision: run.currentRevision,
+      ...(existingReceiptIds && existingReceiptIds.length > 0
+        ? { steerReceiptIds: existingReceiptIds }
+        : {}),
+      ...(existingSteerDelivery ? { steerDelivery: existingSteerDelivery } : {}),
     }
   }
 
@@ -736,6 +757,7 @@ export async function executeRunControlCommandUnlocked(
     if (outcome?.onInterruptResolved) await outcome.onInterruptResolved().catch(() => undefined)
   }
   const steerReceiptIds = outcome?.steerReceiptIds ?? []
+  const steerDelivery = outcome?.steerDelivery
   let accepted: Awaited<ReturnType<typeof runEventJournal.append>>
   try {
     accepted = await runEventJournal.append(
@@ -745,10 +767,11 @@ export async function executeRunControlCommandUnlocked(
         {
           action: command.action,
           actorId: actorId(command.actor),
-          // Receipt ids only. `command.steerMessage` is free user text and the
+          // Receipt ids and structured counts only. `command.steerMessage` is free user text and the
           // journal is projected onto twelve platforms' cards — putting it here
           // would be one redaction hole in all of them at once.
           ...(steerReceiptIds.length > 0 ? { steerReceiptIds: [...steerReceiptIds] } : {}),
+          ...(steerDelivery ? { steerDelivery } : {}),
         },
         { ts: now, sourceEventId }
       )
@@ -766,12 +789,14 @@ export async function executeRunControlCommandUnlocked(
       accepted: true,
       currentRevision: latest.currentRevision,
       ...(steerReceiptIds.length > 0 ? { steerReceiptIds: [...steerReceiptIds] } : {}),
+      ...(steerDelivery ? { steerDelivery } : {}),
     }
   }
   return {
     accepted: true,
     currentRevision: accepted.seq,
     ...(steerReceiptIds.length > 0 ? { steerReceiptIds } : {}),
+    ...(steerDelivery ? { steerDelivery } : {}),
   }
 }
 

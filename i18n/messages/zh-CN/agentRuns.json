@@ -148,6 +148,10 @@
     "run_not_found": "该运行已不存在。",
     "source_rejected": "执行引擎拒绝了这个命令。",
     "steer_degraded": "消息没有送达，内容仍然保留在你这里。",
+    "steer_delivered": "新指示已实时送达正在执行的轮次。",
+    "steer_partial": "新指示已实时送达 {total} 名活跃成员中的 {delivered} 名（另有 {queued} 名已排队等待下一个安全边界）。",
+    "steer_queued": "新指示已排队，将在下一个安全边界生效。",
+    "steer_unconfirmed": "宿主已接收该指示（当前宿主未报告具体投递回执状态）。",
     "unsupported": "没有任何处理器可以控制这种运行。",
     "unsupported_for_kind": "这种运行不支持该操作。"
   },

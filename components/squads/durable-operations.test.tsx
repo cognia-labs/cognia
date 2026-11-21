@@ -351,4 +351,13 @@ describe("DurableOperations", () => {
       within(screen.getByRole("status", { name: "Run stop summary" })).getByText("Stop unconfirmed")
     ).toBeInTheDocument()
   })
+
+  it.each(["completed", "failed", "cancelled", "terminated"] as const)(
+    "hides child steering controls when the child is already %s (F06)",
+    (terminalStatus) => {
+      liveValue = operationsData({ status: terminalStatus })
+      renderOperations()
+      expect(screen.queryByRole("button", { name: "Send steering" })).not.toBeInTheDocument()
+    }
+  )
 })

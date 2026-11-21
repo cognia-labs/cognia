@@ -983,3 +983,66 @@ test("mounts private acceptance history for the selected source run", () => {
   )
   expect(screen.getByTestId("managed-desktop-results")).toHaveTextContent("origin-run:source-task")
 })
+
+describe("RunDetailPane steer outcome presentation (F06, T05)", () => {
+  it("renders distinct queued, partial, delivered, unconfirmed, and degraded steer states", async () => {
+    const dispatch = jest
+      .fn()
+      .mockResolvedValueOnce({
+        accepted: false,
+        reason: "steer_degraded",
+        degradedReason: "store_failed",
+      })
+      .mockResolvedValueOnce({
+        accepted: true,
+        steerDelivery: { status: "queued", deliveredCount: 0, queuedCount: 2, totalTargets: 2 },
+      })
+      .mockResolvedValueOnce({
+        accepted: true,
+        steerDelivery: { status: "partial", deliveredCount: 1, queuedCount: 1, totalTargets: 2 },
+      })
+      .mockResolvedValueOnce({
+        accepted: true,
+        steerDelivery: { status: "delivered", deliveredCount: 2, queuedCount: 0, totalTargets: 2 },
+      })
+      .mockResolvedValueOnce({
+        accepted: true,
+      })
+
+    render(
+      <RunDetailPane
+        row={row({ kind: "team", allowedActions: ["steer", "stop"] })}
+        actions={makeActions({ dispatch })}
+      />
+    )
+    const user = userEvent.setup()
+    const input = screen.getByLabelText("actions.steerPlaceholder")
+
+    // 1. Degraded: preserves typed input and shows reason
+    await user.type(input, "keep me")
+    await user.click(screen.getByRole("button", { name: "actions.steer" }))
+    expect(input).toHaveValue("keep me")
+    expect(screen.getByRole("status")).toHaveTextContent("outcome.steer_degraded")
+    expect(screen.getByRole("status")).toHaveTextContent("degraded.store_failed")
+
+    // 2. Queued: clears input and shows queued message (NOT delivered!)
+    await user.click(screen.getByRole("button", { name: "actions.steer" }))
+    expect(input).toHaveValue("")
+    expect(screen.getByTestId("run-steer-status")).toHaveTextContent("outcome.steer_queued")
+
+    // 3. Partial: shows partial count
+    await user.type(input, "partial")
+    await user.click(screen.getByRole("button", { name: "actions.steer" }))
+    expect(screen.getByTestId("run-steer-status")).toHaveTextContent("outcome.steer_partial")
+
+    // 4. Delivered: shows delivered
+    await user.type(input, "live")
+    await user.click(screen.getByRole("button", { name: "actions.steer" }))
+    expect(screen.getByTestId("run-steer-status")).toHaveTextContent("outcome.steer_delivered")
+
+    // 5. Remote host without steerDelivery: shows unconfirmed (Q2)
+    await user.type(input, "older host")
+    await user.click(screen.getByRole("button", { name: "actions.steer" }))
+    expect(screen.getByTestId("run-steer-status")).toHaveTextContent("outcome.steer_unconfirmed")
+  })
+})

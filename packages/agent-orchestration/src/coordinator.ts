@@ -840,6 +840,9 @@ export function createDurableTeamCoordinator<TConstraints = unknown>(
   const steer = async (childRunId: string, message: string): Promise<AgentTeamSteeringReceipt> => {
     const child = await store.getChild(childRunId)
     if (!child) throw new Error(`Unknown durable child: ${childRunId}`)
+    if (isTerminalTeamStatus(child.status) || isChildSettled(child)) {
+      throw new Error(`Durable child is already settled: ${childRunId}`)
+    }
     const at = now()
     const persistedMessage = persistable(
       message,
