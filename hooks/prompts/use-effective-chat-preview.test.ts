@@ -167,3 +167,82 @@ it("names why instruction files are absent", async () => {
     expect(omitted()).toContainEqual({ kind: "instructions", reason: "load-failed" })
   )
 })
+
+// F04: the preview used the workspace's first root and left mode
+// placeholders raw, while the send path resolves both.
+it("discovers instructions where a turn would run and fills the mode's placeholders", async () => {
+  const agent = await createCharacter({
+    name: "Ada",
+    systemPrompt: "x",
+    workingDir: "/agent/project",
+  })
+  const mode = useCustomModeStore.getState().createMode({
+    name: "Research",
+    description: "Digs in.",
+    systemPrompt: "Mode={{mode_name}}; tools={{tools_list}}",
+    tools: ["web_search"],
+  })
+  const { result } = renderHook(() =>
+    useEffectiveChatPreview({ agentId: agent.id, modeId: mode.id, workspaceId: null })
+  )
+  await waitFor(() => expect(result.current.state.status).toBe("ready"))
+  const preview = result.current.state.status === "ready" ? result.current.state.preview : null
+  expect(preview?.segments.find((segment) => segment.kind === "mode")?.text).toBe(
+    "Mode=Research; tools=web_search"
+  )
+  expect(mockLoadInstructions).toHaveBeenCalledWith(
+    expect.objectContaining({ cwd: "/agent/project", roots: [] })
+  )
+})
+
+it("prefers the workspace root over the agent's directory, as a send does", async () => {
+  const agent = await createCharacter({
+    name: "Ada",
+    systemPrompt: "x",
+    workingDir: "/agent/project",
+  })
+  const { result } = renderHook(() =>
+    useEffectiveChatPreview({ agentId: agent.id, modeId: null, workspaceId: "ws-1" })
+  )
+  await waitFor(() => expect(result.current.state.status).toBe("ready"))
+  expect(mockLoadInstructions).toHaveBeenCalledWith(expect.objectContaining({ cwd: "/repo" }))
+})
+
+it("never reports the previous selection's preview as ready for a new one", async () => {
+  const first = await createCharacter({ name: "First", systemPrompt: "First prompt." })
+  const second = await createCharacter({ name: "Second", systemPrompt: "Second prompt." })
+  const { result, rerender } = renderHook(
+    ({ agentId }: { agentId: string }) =>
+      useEffectiveChatPreview({ agentId, modeId: null, workspaceId: "ws-1" }),
+    { initialProps: { agentId: first.id } }
+  )
+  await waitFor(() => expect(result.current.state.status).toBe("ready"))
+  const calls = mockLoadInstructions.mock.calls.length
+  let release: (() => void) | undefined
+  mockLoadInstructions.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = () => resolve({ section: "## Project instructions\n\nUse pnpm." })
+      })
+  )
+  rerender({ agentId: second.id })
+  expect(result.current.state.status).toBe("loading")
+  await waitFor(() => expect(mockLoadInstructions.mock.calls.length).toBe(calls + 1))
+  // Still loading the new agent's instructions: the old preview is not shown as its.
+  expect(result.current.state.status).toBe("loading")
+  await act(async () => release?.())
+  await waitFor(() => expect(result.current.state.status).toBe("ready"))
+  const preview = result.current.state.status === "ready" ? result.current.state.preview : null
+  expect(preview?.segments[0].text).toBe("Second prompt.")
+})
+
+it("does not record a preview as the slot's last use", async () => {
+  const { lastPromptResolution, __resetPromptResolutionsForTests } =
+    await import("@/lib/prompts/resolution-log")
+  __resetPromptResolutionsForTests()
+  const { result } = renderHook(() =>
+    useEffectiveChatPreview({ agentId: null, modeId, workspaceId: "ws-1" })
+  )
+  await waitFor(() => expect(result.current.state.status).toBe("ready"))
+  expect(lastPromptResolution(modeDef.id)).toBeUndefined()
+})
