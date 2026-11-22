@@ -128,6 +128,8 @@ export interface RunEpisodicDistillInput {
 }
 
 export interface RunEpisodicDistillDeps {
+  /** Durable job workers must propagate write/cancellation fences instead of swallowing them. */
+  propagateErrors?: boolean
   distill: (transcript: { role: string; text: string }[]) => Promise<MemoryCandidate[]>
   consolidate: (input: ConsolidateInput) => Promise<{ applied: ConsolidationOp[] }>
   redact?: (text: string) => string
@@ -170,7 +172,10 @@ export async function runEpisodicDistill(
       provenance: input.provenance,
       source: input.source,
     })
-  } catch {
+  } catch (error) {
+    if (deps.propagateErrors || (error instanceof Error && error.name === "MemoryJobWriteError")) {
+      throw error
+    }
     return empty
   }
 }

@@ -127,6 +127,17 @@ describe("runMemoryLifecycleSweep", () => {
       expect(report.compacted).toEqual(["cold"])
     })
 
+    it("skips compaction and audit when reviseText reports a concurrent user edit or pin (N11)", async () => {
+      const { deps } = makeDeps([mem("edited", 200, { text: LONG_TEXT })])
+      deps.reviseText.mockResolvedValueOnce(false)
+      const report = await runMemoryLifecycleSweep(
+        { config: config({ compactColdEpisodic: true }), now: NOW },
+        deps
+      )
+      expect(report.compacted).toEqual([])
+      expect(deps.audit).not.toHaveBeenCalled()
+    })
+
     it("honours a custom threshold", async () => {
       // 50 days ⇒ retention ≈ 0.37: warm at 0.2, cold at 0.5.
       const rows = [mem("mid", 50, { text: LONG_TEXT })]

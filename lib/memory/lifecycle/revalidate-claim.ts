@@ -155,6 +155,10 @@ export async function revalidateClaim(
 
   const verdict = assessClaimSupport(checked)
   if (verdict.counted === 0 && checked.length === 0) {
+    await deps.patchMemory(memoryId, {
+      staleness: memory.staleness ?? "unknown",
+      validatedAt: now,
+    })
     return { status: "skipped", reason: "no_evidence", verdict }
   }
   if (verdict.invalidate) {

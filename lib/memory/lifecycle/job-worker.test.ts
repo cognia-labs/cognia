@@ -59,6 +59,7 @@ jest.mock("@/lib/db/characters", () => ({
 jest.mock("@/lib/db/messages", () => ({ listMessages: () => mockListMessages() }))
 jest.mock("@/lib/db/memory-governance", () => ({
   MemoryJobWriteError: jest.requireActual("@/lib/db/memory-governance").MemoryJobWriteError,
+  isMemoryJobClaimActive: jest.fn(async () => true),
   withMemoryJobWrite: (_job: unknown, _ids: unknown, write: () => Promise<unknown>) => write(),
   appendMemoryAuditEvent: (...args: unknown[]) => mockAppendAudit(...args),
   claimNextMemoryJob: jest.fn(),
@@ -69,6 +70,7 @@ jest.mock("@/lib/db/memory-governance", () => ({
   listMemoryEvidence: (...args: unknown[]) => mockListEvidence(...args),
 }))
 jest.mock("@/lib/db/memories", () => ({
+  getMemory: jest.fn(async () => undefined),
   invalidateMemory: (...args: unknown[]) => mockInvalidateMemory(...args),
   listMemories: (...args: unknown[]) => mockListMemories(...args),
   listProjectClaimsNeedingRecheck: (...args: unknown[]) => mockListClaimsNeedingRecheck(...args),
@@ -101,6 +103,7 @@ jest.mock("@/lib/memory/runtime/build-deps", () => ({
   },
 }))
 jest.mock("@/lib/memory/lifecycle/lifecycle-sweep", () => ({
+  ...jest.requireActual("@/lib/memory/lifecycle/lifecycle-sweep"),
   runMemoryLifecycleSweep: (...args: unknown[]) => mockRunLifecycleSweep(...args),
 }))
 jest.mock("./enqueue-reconcile", () => ({
@@ -1612,9 +1615,59 @@ describe("memory-lifecycle-sweep job", () => {
     expect(mockListEvidence).toHaveBeenCalledWith("loser")
     expect(mockCreateEvidence).toHaveBeenCalledWith({
       memoryId: "survivor",
+      createdAt: 5,
       sourceKind: "message",
       sourceId: "msg-1",
     })
+  })
+
+  it("runs session-distill and project-mining when session.memoryLearn=true despite global learnFromChats=false (N17)", async () => {
+    mockGetSettings.mockResolvedValue({
+      memory: { enabled: true, learnFromChats: false, mineProjectContext: true },
+    })
+    mockGetSession.mockResolvedValue({
+      id: "s-optin",
+      projectId: "p1",
+      memoryLearn: true,
+      transcriptRevision: 1,
+    })
+    mockListMessages.mockResolvedValue([
+      {
+        id: "m1",
+        role: "user",
+        parts: [{ type: "text", text: "we use pnpm" }],
+        metadata: { createdAt: 10 },
+      },
+      {
+        id: "m2",
+        role: "assistant",
+        parts: [{ type: "text", text: "noted" }],
+        metadata: { createdAt: 11 },
+      },
+    ])
+    mockBuildMaintenanceDeps.mockResolvedValue({ distillDeps: {}, decayDeps: {} })
+    mockRunMaintenance.mockResolvedValue(undefined)
+
+    const distillOutcome = await processMemoryJob({
+      ...job("distill-optin"),
+      kind: "session-distill",
+      sessionId: "s-optin",
+      projectId: "p1",
+      scope: "workspace",
+      checkpoint: {
+        transcriptRevision: 1,
+        firstMessageId: "m1",
+        lastMessageId: "m2",
+        messageCount: 2,
+      },
+    })
+    expect(distillOutcome.status).toBe("succeeded")
+    expect(mockRunMaintenance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({ learnFromChats: true }),
+      }),
+      expect.anything()
+    )
   })
 
   it("audit forwards the event and resolves to undefined", async () => {

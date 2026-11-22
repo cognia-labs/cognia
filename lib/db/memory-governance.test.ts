@@ -5,7 +5,13 @@ jest.mock("@cognia/memory/lifecycle/belief", () => {
 
 jest.mock("./schema", () => {
   const actual = jest.requireActual("./schema")
-  return { ...actual, getDb: jest.fn(actual.getDb) }
+  return Object.defineProperties(
+    {},
+    {
+      ...Object.getOwnPropertyDescriptors(actual),
+      getDb: { value: jest.fn((...args: unknown[]) => actual.getDb(...args)), configurable: true },
+    }
+  )
 })
 
 import { computeBeliefInputs } from "@cognia/memory/lifecycle/belief"
@@ -16,12 +22,12 @@ import {
   claimMemoryJob,
   claimNextMemoryJob,
   cancelMemoryJob,
-  completeMemoryJob,
   createMemoryEvidence,
   enqueueMemoryJob,
   failMemoryJob,
   finishMemoryJob,
   heartbeatMemoryJob,
+  isMemoryJobClaimActive,
   retryMemoryJob,
   findEarliestInstrumentedAuditAt,
   getMemoryJob,
@@ -35,6 +41,7 @@ import {
   refreshMemoryBeliefInputs,
   revokeMemoryEvidenceForMessages,
   revokeMemoryEvidenceForSession,
+  withMemoryJobWrite,
 } from "./memory-governance"
 import { createMemory, getMemory } from "./memories"
 import { getDb } from "./schema"
@@ -532,7 +539,7 @@ describe("durable memory jobs", () => {
   it("completes a claimed job and permits a later job with the same dedupe key", async () => {
     await enqueueMemoryJob(draft)
     await claimNextMemoryJob("worker", 1_000)
-    await completeMemoryJob("j1", 1_100)
+    await finishMemoryJob("j1", "succeeded", "done", 1_100, { workerId: "worker" })
     expect(await getMemoryJob("j1")).toMatchObject({ status: "succeeded", completedAt: 1_100 })
     expect((await enqueueMemoryJob({ ...draft, id: "j2" })).id).toBe("j2")
   })
@@ -617,12 +624,90 @@ describe("insight readers", () => {
     }
     await enqueueMemoryJob({ ...base, id: "j-old", dedupeKey: "k1", queuedAt: 100 })
     await enqueueMemoryJob({ ...base, id: "j-new", dedupeKey: "k2", queuedAt: 900 })
-    await completeMemoryJob("j-old", 150)
+    await finishMemoryJob("j-old", "succeeded", "completed", 150)
 
     const jobs = await listMemoryJobs()
     expect(jobs.map((j) => j.id)).toEqual(["j-new", "j-old"])
     // Completed jobs are retained, which is what makes "last run" reportable.
     expect(jobs[1]).toMatchObject({ status: "succeeded", completedAt: 150 })
+  })
+
+  it("synchronously invalidates unsupported project claims on evidence revocation (N12) and fences source edits in withMemoryJobWrite (N10)", async () => {
+    const db = getDb()
+    await db.sessions.put({
+      id: "sess-fence",
+      title: "Fence",
+      projectId: "p1",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    await db.messages.put({
+      id: "msg-1",
+      sessionId: "sess-fence",
+      role: "user",
+      parts: [{ type: "text", text: "use pnpm" }],
+      createdAt: 2,
+    })
+    await createMemory({
+      id: "claim-sole",
+      scope: "workspace",
+      projectId: "p1",
+      type: "semantic",
+      projectMemoryKind: "convention",
+      text: "Repo uses pnpm",
+      importance: 7,
+      provenance: "user",
+      staleness: "fresh",
+    })
+    await createMemoryEvidence({
+      id: "ev-sole",
+      memoryId: "claim-sole",
+      kind: "message",
+      sourceId: "msg-1",
+      sessionId: "sess-fence",
+      messageId: "msg-1",
+      validationStrategy: "message-presence",
+      excerptHash: "h1",
+      contaminationState: "clean",
+      reviewed: false,
+    })
+
+    await revokeMemoryEvidenceForMessages(["msg-1"], 500)
+    expect(await getMemory("claim-sole")).toMatchObject({
+      status: "invalidated",
+      staleness: "expired",
+      invalidatedAt: 500,
+      validatedAt: 500,
+    })
+
+    const queued = await enqueueMemoryJob({
+      id: "job-edit-fence",
+      dedupeKey: "turn-extraction:sess-fence:msg-1:1",
+      kind: "turn-extraction",
+      sessionId: "sess-fence",
+      projectId: "p1",
+      scope: "workspace",
+      provenance: "user",
+      evidenceIds: [],
+    })
+    const claimed = (await claimMemoryJob(queued.id, "w1", 1_000))!
+    expect(await isMemoryJobClaimActive(claimed)).toBe(true)
+
+    const projectMessage = (row: { parts?: unknown[] }) => JSON.stringify(row.parts ?? [])
+    const expectedSourceHashes = new Map([
+      ["msg-1", projectMessage({ parts: [{ type: "text", text: "use pnpm" }] })],
+    ])
+
+    // Edit message in place while model extraction was in flight ("use pnpm" -> "use yarn").
+    await db.messages.update("msg-1", { parts: [{ type: "text", text: "use yarn" }] })
+
+    await expect(
+      withMemoryJobWrite(claimed, ["msg-1"], async () => "should-not-run", {
+        expectedSourceHashes,
+        projectMessage,
+        projectId: "p1",
+      })
+    ).rejects.toMatchObject({ code: "source_changed" })
   })
 
   it("enforces job and content-free audit retention", async () => {

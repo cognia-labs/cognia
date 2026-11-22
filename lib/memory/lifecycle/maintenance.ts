@@ -135,10 +135,6 @@ export async function runMemoryMaintenance(
   }
 }
 
-// Scheduling is deduped durably by `(session, last message id, count)` in memoryJobs.
-// Retained as a compatibility test hook; no process-local correctness state remains.
-export const __resetMaintenanceGuard = () => undefined
-
 function onIdle(fn: () => void): void {
   const g = globalThis as { requestIdleCallback?: (cb: () => void) => void }
   if (typeof g.requestIdleCallback === "function") g.requestIdleCallback(fn)
@@ -188,7 +184,9 @@ export function scheduleMemoryMaintenance(params: ScheduleMemoryMaintenanceParam
       .then(({ enqueueDailyLifecycleSweep }) => enqueueDailyLifecycleSweep())
       .catch(() => undefined)
   }
-  if (!config.enabled || !config.learnFromChats || config.temporary) return
+  const canLearnFromSession =
+    params.session?.memoryLearn !== undefined ? params.session.memoryLearn : config.learnFromChats
+  if (!config.enabled || !canLearnFromSession || config.temporary) return
   if (params.provenance === "inbound") return
 
   const minTurns = params.minAssistantTurns ?? 2

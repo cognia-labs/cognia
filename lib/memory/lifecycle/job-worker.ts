@@ -10,11 +10,21 @@ import {
   finishMemoryJob,
   createMemoryEvidence,
   failMemoryJob,
+  isMemoryJobClaimActive,
   withMemoryJobWrite,
   MemoryJobWriteError,
+  type MemoryJobWriteGuardOptions,
 } from "@/lib/db/memory-governance"
-import { listMemories, listProjectClaimsNeedingRecheck, updateMemory } from "@/lib/db/memories"
-import { memoryTranscriptProse } from "@/lib/memory/write/project-transcript-text"
+import {
+  getMemory,
+  listMemories,
+  listProjectClaimsNeedingRecheck,
+  updateMemory,
+} from "@/lib/db/memories"
+import {
+  memoryTranscriptProse,
+  projectMiningMessageText,
+} from "@/lib/memory/write/project-transcript-text"
 import { withConsolidationTarget } from "@/lib/memory/write/guarded-consolidation-write"
 import { resolveMemoryConfig, type MemoryConfig } from "@/types/memory/memory"
 import type { MemoryEvidence, MemoryJob } from "@/types/memory/governance"
@@ -225,6 +235,17 @@ function messageCreatedAt(message: { metadata?: unknown }): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined
 }
 
+function hashMessageSourceForJob(message: {
+  role: string
+  parts?: readonly unknown[]
+  metadata?: unknown
+}): string {
+  const marks = (message.metadata as { personalMarks?: unknown } | undefined)?.personalMarks ?? null
+  return hashContent(
+    JSON.stringify([message.role, projectMiningMessageText(message.parts ?? []), marks])
+  )
+}
+
 async function loadJobContext(job: MemoryJob): Promise<{
   settings: AppSettings
   session: ChatSession
@@ -237,6 +258,7 @@ async function loadJobContext(job: MemoryJob): Promise<{
     createdAt?: number
     parts?: readonly unknown[]
   }>
+  sourceHashes: ReadonlyMap<string, string>
   contaminationState: "clean" | "external-context"
   /** Set when the session advanced past the checkpoint but the window verified intact. */
   windowResultCode?: "revision_advanced_window_intact"
@@ -280,11 +302,11 @@ async function loadJobContext(job: MemoryJob): Promise<{
   // The job has no personal reader. Check its durable checkpoint against the
   // canonical text first, then withhold before extraction or vector indexing.
   const windowIds = new Set(window.transcript.map((message) => message.id))
-  const personalHistory = await preparePersonalHistory(
-    undefined,
-    messages.filter((message) => windowIds.has(message.id)),
-    { session }
+  const windowMessages = messages.filter((message) => windowIds.has(message.id))
+  const sourceHashes = new Map(
+    windowMessages.map((message) => [message.id, hashMessageSourceForJob(message)])
   )
+  const personalHistory = await preparePersonalHistory(undefined, windowMessages, { session })
   const withheld = new Set(personalHistory.withheldMessageIds)
   const transcript = window.transcript.filter((message) => !withheld.has(message.id ?? ""))
   const externalContext = detectMemoryExternalContext(transcript)
@@ -294,7 +316,9 @@ async function loadJobContext(job: MemoryJob): Promise<{
     agentPolicy: character?.memoryPolicy,
     externalContext,
   })
-  if (!policy.canAutoLearn || !policy.writableScopes.includes(job.scope)) {
+  const allowedToLearn =
+    job.kind === "turn-extraction" ? policy.canAutoLearn : policy.canLearnSession
+  if (!allowedToLearn || !policy.writableScopes.includes(job.scope)) {
     await appendMemoryAuditEvent({
       action: "learn-denied",
       sessionId: job.sessionId,
@@ -306,8 +330,9 @@ async function loadJobContext(job: MemoryJob): Promise<{
   return {
     settings,
     session,
-    config,
+    config: { ...config, learnFromChats: policy.canLearnSession },
     transcript,
+    sourceHashes,
     contaminationState: hasUntrustedMemoryContext(externalContext) ? "external-context" : "clean",
     windowResultCode: window.resultCode,
   }
@@ -382,6 +407,12 @@ async function processTurnExtraction(job: MemoryJob): Promise<MemoryJobProcessOu
       ...recentMessages.map((message) => message.id!),
     ]),
   ]
+  const writeGuard: MemoryJobWriteGuardOptions = {
+    expectedSourceHashes: context.sourceHashes,
+    projectMessage: hashMessageSourceForJob,
+    projectId: job.projectId ?? context.session.projectId,
+    characterId: job.characterId ?? context.session.characterId,
+  }
   const recordedMemoryIds = new Set<string>()
   const recordOperations = (operations: readonly ConsolidationOp[]) =>
     recordMemoryJobOutcome({
@@ -396,7 +427,7 @@ async function processTurnExtraction(job: MemoryJob): Promise<MemoryJobProcessOu
     {
       session: context.session,
       appSettings: context.settings,
-      withCanonicalWrite: (write) => withMemoryJobWrite(job, sourceIds, write),
+      withCanonicalWrite: (write) => withMemoryJobWrite(job, sourceIds, write, writeGuard),
       recordCanonicalOperation: async (operation) => {
         await recordOperations([operation])
         const id = consolidationOpMemoryId(operation)
@@ -426,12 +457,16 @@ async function processTurnExtraction(job: MemoryJob): Promise<MemoryJobProcessOu
   // Mutations already bound their evidence inside the canonical transaction.
   // NOOP corroboration (and compatibility deps without the callback) is fenced
   // here too, so cancellation cannot append a witness after source deletion.
-  await withMemoryJobWrite(job, sourceIds, () =>
-    recordOperations(
-      result.applied.filter(
-        (operation) => !recordedMemoryIds.has(consolidationOpMemoryId(operation) ?? "")
-      )
-    )
+  await withMemoryJobWrite(
+    job,
+    sourceIds,
+    () =>
+      recordOperations(
+        result.applied.filter(
+          (operation) => !recordedMemoryIds.has(consolidationOpMemoryId(operation) ?? "")
+        )
+      ),
+    writeGuard
   )
   return result.applied.some((operation) => operation.op !== "NOOP")
     ? {
@@ -446,11 +481,25 @@ async function processTurnExtraction(job: MemoryJob): Promise<MemoryJobProcessOu
 
 async function processSessionDistill(job: MemoryJob): Promise<MemoryJobProcessOutcome> {
   const context = await loadJobContext(job)
+  const sourceIds = context.transcript
+    .map((message) => message.id)
+    .filter((id): id is string => Boolean(id))
+  const writeGuard: MemoryJobWriteGuardOptions = {
+    expectedSourceHashes: context.sourceHashes,
+    projectMessage: hashMessageSourceForJob,
+    projectId: job.projectId ?? context.session.projectId,
+    characterId: job.characterId ?? context.session.characterId,
+  }
   const { buildEpisodicMaintenanceDeps } =
     await import("@/lib/memory/lifecycle/build-maintenance-deps")
   const { runMemoryMaintenance } = await import("@/lib/memory/lifecycle/maintenance")
   const deps = await buildEpisodicMaintenanceDeps(
-    { session: context.session, appSettings: context.settings },
+    {
+      session: context.session,
+      appSettings: context.settings,
+      withCanonicalWrite: (write) => withMemoryJobWrite(job, sourceIds, write, writeGuard),
+      contaminationState: context.contaminationState,
+    },
     context.config
   )
   if (!deps) throw new MemoryJobProcessingError("dependencies_unavailable")
@@ -586,11 +635,14 @@ function normalizeSourceRole(role: string | undefined): MemoryEvidence["sourceRo
  * told apart by field count, not by pattern-matching the id, so a session id
  * that happens to look like a run id cannot be misread.
  */
-export function projectMiningRunIdOf(dedupeKey: string | undefined): string | null {
+export function projectMiningRunIdOf(dedupeKey: string | undefined, runId?: string): string | null {
+  if (runId) return runId
   if (!dedupeKey) return null
+  const tagged = /^project-mining:(pmr_[^:]+):/.exec(dedupeKey)
+  if (tagged) return tagged[1]!
   const parts = dedupeKey.split(":")
   if (parts[0] !== "project-mining") return null
-  return parts.length === 6 ? parts[1] : null
+  return parts.length === 6 ? parts[1]! : null
 }
 
 async function processProjectMining(job: MemoryJob): Promise<MemoryJobProcessOutcome> {
@@ -599,31 +651,28 @@ async function processProjectMining(job: MemoryJob): Promise<MemoryJobProcessOut
   // A claim with no workspace has nowhere to be recalled from; retrying cannot
   // produce one, so this is terminal rather than a burned retry budget.
   if (!projectId) throw new MemoryJobTerminalError("project_missing")
+  const runId = projectMiningRunIdOf(job.dedupeKey, job.runId)
 
   const [{ getDb }, { allRootPaths }] = await Promise.all([
     import("@/lib/db/schema"),
     import("@/lib/workspace/roots"),
   ])
+  const db = getDb()
+  if (runId && db.projectMiningRuns) {
+    const run = await db.projectMiningRuns.get(runId).catch(() => undefined)
+    if (run && run.status !== "running" && run.status !== "queued") {
+      throw new MemoryJobTerminalError("job_claim_lost")
+    }
+  }
   // Roots feed path normalization. A workspace row that has gone missing is not
   // fatal — mining proceeds with no roots, which only means in-root absolute
   // paths are not rewritten and the identifying-path gate refuses the window.
-  const project = await getDb()
-    .projects.get(projectId)
-    .catch(() => undefined)
-
-  const { buildProjectMiningDeps, runProjectMining } =
-    await import("@/lib/memory/write/run-project-mining")
-  const deps = await buildProjectMiningDeps(
-    { session: context.session, appSettings: context.settings },
-    context.config
-  )
-  if (!deps) throw new MemoryJobProcessingError("dependencies_unavailable")
+  const project = await db.projects.get(projectId).catch(() => undefined)
 
   // Re-project the window with TOOL OUTPUT included. `loadJobContext` uses the
   // shared search projection, which drops tool parts — correct for personal
   // extraction, fatal here: a project's verified outcomes and gotchas live in
   // what Read/Bash/Grep actually returned, not in the assistant's summary of it.
-  const { projectMiningMessageText } = await import("@/lib/memory/write/project-transcript-text")
   const messages = context.transcript
     .filter((entry): entry is typeof entry & { id: string } => Boolean(entry.id))
     .map((entry) => ({
@@ -633,6 +682,42 @@ async function processProjectMining(job: MemoryJob): Promise<MemoryJobProcessOut
       createdAt: entry.createdAt,
       parts: entry.parts,
     }))
+  const roleByMessageId = new Map(messages.map((message) => [message.id, message.role]))
+  const sourceIds = messages.map((message) => message.id)
+  const writeGuard: MemoryJobWriteGuardOptions = {
+    expectedSourceHashes: context.sourceHashes,
+    projectMessage: hashMessageSourceForJob,
+    projectId,
+    characterId: job.characterId ?? context.session.characterId,
+    runId,
+  }
+  const recordedMemoryIds = new Set<string>()
+
+  const { buildProjectMiningDeps, runProjectMining } =
+    await import("@/lib/memory/write/run-project-mining")
+  const deps = await buildProjectMiningDeps(
+    {
+      session: context.session,
+      appSettings: context.settings,
+      withCanonicalWrite: (write) => withMemoryJobWrite(job, sourceIds, write, writeGuard),
+      recordCanonicalOperation: async (operation, excerptCtx) => {
+        const id = consolidationOpMemoryId(operation)
+        if (!id || !consolidationAuditAction(operation)) return
+        await recordProjectClaimOutcome({
+          job,
+          operation,
+          contaminationState: context.contaminationState,
+          transcriptRevision: context.session.transcriptRevision,
+          roleByMessageId,
+          excerpts: excerptCtx.excerpts,
+          toolExcerpts: excerptCtx.toolExcerpts,
+        })
+        recordedMemoryIds.add(id)
+      },
+    },
+    context.config
+  )
+  if (!deps) throw new MemoryJobProcessingError("dependencies_unavailable")
 
   const updateNamespaces = new Map<ConsolidationOp, MemoryConsolidationNamespace>()
   const result = await runProjectMining(
@@ -673,54 +758,61 @@ async function processProjectMining(job: MemoryJob): Promise<MemoryJobProcessOut
     }
   )
 
-  const roleByMessageId = new Map(messages.map((message) => [message.id, message.role]))
-  const sourceIds = messages.map((message) => message.id)
   for (const operation of result.applied) {
     const memoryId = consolidationOpMemoryId(operation)
-    if (!memoryId || !consolidationAuditAction(operation)) continue
-    await withMemoryJobWrite(job, sourceIds, async () => {
-      // Creation ops carry the row as written; UPDATE carries its group's
-      // captured namespace. Never infer the expected namespace from a fresh
-      // read, which would authorize a row that moved after consolidation.
-      const expected =
-        operation.op === "UPDATE"
-          ? updateNamespaces.get(operation)
-          : "memory" in operation
-            ? operation.memory
-            : undefined
-      if (!expected) throw new MemoryJobProcessingError("project_mining_namespace_unavailable")
-      const target = await withConsolidationTarget(memoryId, { expected }, "update", () =>
-        recordProjectClaimOutcome({
-          job,
-          operation,
-          contaminationState: context.contaminationState,
-          transcriptRevision: context.session.transcriptRevision,
-          roleByMessageId,
-          excerpts: result.redactedExcerpts,
-          toolExcerpts: result.redactedToolExcerpts,
-        })
-      )
-      if (!target.ok) {
-        await appendMemoryAuditEvent({
-          action: "conflict",
-          memoryId,
-          sessionId: job.sessionId,
-          reason: target.reason,
-        })
-      }
-    })
+    if (!memoryId || !consolidationAuditAction(operation) || recordedMemoryIds.has(memoryId)) {
+      continue
+    }
+    await withMemoryJobWrite(
+      job,
+      sourceIds,
+      async () => {
+        // Creation ops carry the row as written; UPDATE carries its group's
+        // captured namespace. Never infer the expected namespace from a fresh
+        // read, which would authorize a row that moved after consolidation.
+        const expected =
+          operation.op === "UPDATE"
+            ? updateNamespaces.get(operation)
+            : "memory" in operation
+              ? operation.memory
+              : undefined
+        if (!expected) throw new MemoryJobProcessingError("project_mining_namespace_unavailable")
+        const target = await withConsolidationTarget(memoryId, { expected }, "update", () =>
+          recordProjectClaimOutcome({
+            job,
+            operation,
+            contaminationState: context.contaminationState,
+            transcriptRevision: context.session.transcriptRevision,
+            roleByMessageId,
+            excerpts: result.redactedExcerpts,
+            toolExcerpts: result.redactedToolExcerpts,
+          })
+        )
+        if (!target.ok) {
+          await appendMemoryAuditEvent({
+            action: "conflict",
+            memoryId,
+            sessionId: job.sessionId,
+            reason: target.reason,
+          })
+        }
+      },
+      writeGuard
+    )
   }
 
-  // Attribute the claims to the backfill run that queued this window, if any.
-  // The run id is recovered from the dedupe key rather than carried as a column:
-  // the key already has to hold it so a cancel can withdraw the run's queue with
-  // one prefix scan, and a second copy would be a second thing to keep in step.
-  const runId = projectMiningRunIdOf(job.dedupeKey)
+  if (!(await isMemoryJobClaimActive(job))) {
+    throw new MemoryJobWriteError("job_claim_lost")
+  }
+
   if (runId) {
-    const applied = result.applied.filter((operation) => operation.op !== "NOOP").length
-    if (applied > 0) {
+    const netCreated = result.applied.filter(
+      (operation) =>
+        operation.op === "ADD" || operation.op === "CONFLICT" || operation.op === "QUARANTINE"
+    ).length
+    if (netCreated > 0) {
       const { recordProjectMiningRunClaims } = await import("@/lib/db/project-mining-runs")
-      await recordProjectMiningRunClaims(runId, applied).catch(() => undefined)
+      await recordProjectMiningRunClaims(runId, netCreated).catch(() => undefined)
     }
   }
 
@@ -806,7 +898,10 @@ async function processClaimRevalidation(job: MemoryJob): Promise<MemoryJobProces
 /** A lazy legacy-hash backfill must not send the entire corpus in one job. */
 export const MAX_VECTOR_RECONCILE_UPSERTS = 500
 
-async function processVectorReconcile(config: MemoryConfig): Promise<MemoryJobProcessOutcome> {
+async function processVectorReconcile(
+  job: MemoryJob,
+  config: MemoryConfig
+): Promise<MemoryJobProcessOutcome> {
   const cleanupOnly = !config.enabled || config.temporary
   const { tryBuildMemoryVectorSink, filterPersonalMemories } =
     await import("@/lib/memory/runtime/build-deps")
@@ -825,6 +920,9 @@ async function processVectorReconcile(config: MemoryConfig): Promise<MemoryJobPr
   let changes = 0
   let upserts = 0
   for (const row of rows) {
+    if (!(await isMemoryJobClaimActive(job))) {
+      throw new MemoryJobWriteError("job_claim_lost")
+    }
     if (!readableIds.has(row.id)) {
       // Keep existing owner-scoped derived vectors; the recall boundary checks
       // their canonical provenance. This background job must not re-embed them.
@@ -843,6 +941,18 @@ async function processVectorReconcile(config: MemoryConfig): Promise<MemoryJobPr
       !row.vectorDocId || row.vectorTextHash !== textHash || (backendIds && !backendIds.has(docId))
     if (drift && !cleanupOnly && upserts < MAX_VECTOR_RECONCILE_UPSERTS) {
       await sink.upsert(docId, row.text)
+      if (!(await isMemoryJobClaimActive(job))) {
+        throw new MemoryJobWriteError("job_claim_lost")
+      }
+      const live = await getMemory(row.id)
+      if (live && live.status !== "active") {
+        activeDocIds.delete(docId)
+        await sink.delete([docId]).catch(() => undefined)
+        continue
+      }
+      if (live && hashContent(live.text) !== textHash) {
+        continue
+      }
       await updateMemory(row.id, { vectorDocId: docId, vectorTextHash: textHash })
       upserts += 1
       changes += 1
@@ -852,6 +962,9 @@ async function processVectorReconcile(config: MemoryConfig): Promise<MemoryJobPr
   // Orphans: backend docs no active memory points at (invalidated/hard-deleted
   // rows whose vector cleanup failed). Only possible with a listing API.
   if (backendIds) {
+    if (!(await isMemoryJobClaimActive(job))) {
+      throw new MemoryJobWriteError("job_claim_lost")
+    }
     const orphans = [...backendIds].filter((id) => !activeDocIds.has(id))
     if (orphans.length > 0) {
       await sink.delete(orphans)
@@ -863,50 +976,110 @@ async function processVectorReconcile(config: MemoryConfig): Promise<MemoryJobPr
     : { status: "no_output", resultCode: "already_consistent" }
 }
 
-async function processLifecycleSweep(config: MemoryConfig): Promise<MemoryJobProcessOutcome> {
+async function processLifecycleSweep(
+  job: MemoryJob,
+  config: MemoryConfig
+): Promise<MemoryJobProcessOutcome> {
   if (!config.compactColdEpisodic && !config.dedupColdClusters) {
     return { status: "no_output", resultCode: "lifecycle_sweep_disabled" }
   }
-  const [{ runMemoryLifecycleSweep }, buildDeps, memDb, governance] = await Promise.all([
+  const [
+    { runMemoryLifecycleSweep, retentionParamsFor },
+    { isDecayable, retentionScore },
+    { mergeClusterIntoSurvivor },
+    { sameMemoryNamespace },
+    buildDeps,
+    memDb,
+    governance,
+    { getDb },
+  ] = await Promise.all([
     import("@/lib/memory/lifecycle/lifecycle-sweep"),
+    import("@cognia/memory/forget/retention"),
+    import("@cognia/memory/forget/cold-cluster"),
+    import("@/lib/memory/consolidate/consolidator"),
     import("@/lib/memory/runtime/build-deps"),
     import("@/lib/db/memories"),
     import("@/lib/db/memory-governance"),
+    import("@/lib/db/schema"),
   ])
   const [reader, sink] = await Promise.all([
     config.dedupColdClusters ? buildDeps.tryBuildMemoryVectorReader(config) : undefined,
     buildDeps.tryBuildMemoryVectorSink(config),
   ])
+  const retentionParams = retentionParamsFor(config)
+  const threshold = config.coldRetentionThreshold ?? 0.2
+  const isStillColdSnapshot = (
+    live: import("@/types/memory/memory").Memory | undefined,
+    snapshot: import("@/types/memory/memory").Memory,
+    now: number
+  ): live is import("@/types/memory/memory").Memory =>
+    Boolean(
+      live &&
+      live.status === "active" &&
+      live.revisionOf === undefined &&
+      live.version === snapshot.version &&
+      live.text === snapshot.text &&
+      !live.pinned &&
+      isDecayable(live) &&
+      live.compactedAt === undefined &&
+      sameMemoryNamespace(live, snapshot) &&
+      retentionScore(live, { now, params: retentionParams }) < threshold
+    )
+
+  const syncRevisedVector = async (
+    memory: import("@/types/memory/memory").Memory,
+    text: string
+  ) => {
+    if (!sink) return
+    if (!(await buildDeps.filterPersonalMemories([memory])).length) return
+    try {
+      if (hasNoLeakingPii(text)) {
+        await sink.upsert(memory.vectorDocId ?? memory.id, text)
+        await memDb.updateMemory(memory.id, {
+          vectorDocId: memory.vectorDocId ?? memory.id,
+          vectorTextHash: hashContent(text),
+        })
+      } else if (memory.vectorDocId) {
+        await sink.delete([memory.vectorDocId])
+      }
+    } catch {
+      const { noteMemoryVectorFailure } = await import("./enqueue-reconcile")
+      noteMemoryVectorFailure()
+    }
+  }
+
   const report = await runMemoryLifecycleSweep(
     { config },
     {
       listActive: () => listMemories({ status: "active" }),
       ...(reader ? { loadEmbeddings: (rows) => reader.getEmbeddings(rows) } : {}),
       reviseText: async (memory, text, reason, now) => {
-        await memDb.updateMemory(memory.id, {
-          text,
-          bumpVersion: true,
-          revisionReason: reason,
-          compactedAt: now,
-        })
-        if (!sink) return
-        if (!(await buildDeps.filterPersonalMemories([memory])).length) return
-        try {
-          if (hasNoLeakingPii(text)) {
-            await sink.upsert(memory.vectorDocId ?? memory.id, text)
-            await memDb.updateMemory(memory.id, {
-              vectorDocId: memory.vectorDocId ?? memory.id,
-              vectorTextHash: hashContent(text),
-            })
-          } else if (memory.vectorDocId) {
-            // The new text may not be embedded, and the old vector would keep
-            // matching the text that was just replaced.
-            await sink.delete([memory.vectorDocId])
-          }
-        } catch {
-          const { noteMemoryVectorFailure } = await import("./enqueue-reconcile")
-          noteMemoryVectorFailure()
+        if (!(await isMemoryJobClaimActive(job))) {
+          throw new MemoryJobWriteError("job_claim_lost")
         }
+        const db = getDb()
+        if (db.memories && typeof db.transaction === "function") {
+          const applied = await db.transaction("rw", [db.memories], async () => {
+            const live = await db.memories.get(memory.id)
+            if (!isStillColdSnapshot(live, memory, now)) return false
+            await memDb.updateMemory(memory.id, {
+              text,
+              bumpVersion: true,
+              revisionReason: reason,
+              compactedAt: now,
+            })
+            return true
+          })
+          if (!applied) return false
+        } else {
+          await memDb.updateMemory(memory.id, {
+            text,
+            bumpVersion: true,
+            revisionReason: reason,
+            compactedAt: now,
+          })
+        }
+        await syncRevisedVector(memory, text)
       },
       supersede: async (loser, survivor) => {
         await memDb.invalidateMemory(loser.id, survivor.id)
@@ -920,9 +1093,122 @@ async function processLifecycleSweep(config: MemoryConfig): Promise<MemoryJobPro
       },
       moveEvidence: async (loser, survivor) => {
         for (const row of await governance.listMemoryEvidence(loser.id)) {
-          const { id: _id, createdAt: _createdAt, memoryId: _memoryId, ...rest } = row
+          const { id: _id, memoryId: _memoryId, ...rest } = row
           await governance.createMemoryEvidence({ ...rest, memoryId: survivor.id })
         }
+      },
+      applyDedupMerge: async ({ survivor, survivorText, merged, now }) => {
+        if (!(await isMemoryJobClaimActive(job))) {
+          throw new MemoryJobWriteError("job_claim_lost")
+        }
+        const db = getDb()
+        if (!db.memories || typeof db.transaction !== "function") {
+          await memDb.updateMemory(survivor.id, {
+            text: survivorText,
+            bumpVersion: true,
+            revisionReason: "dedup-merge",
+            compactedAt: now,
+          })
+          for (const loser of merged) {
+            for (const row of await governance.listMemoryEvidence(loser.id)) {
+              const { id: _id, memoryId: _memoryId, ...rest } = row
+              await governance.createMemoryEvidence({ ...rest, memoryId: survivor.id })
+            }
+            await memDb.invalidateMemory(loser.id, survivor.id)
+            await appendMemoryAuditEvent({
+              action: "invalidated",
+              memoryId: loser.id,
+              reason: "dedup_merged",
+              metadata: { survivorId: survivor.id },
+            })
+          }
+          await appendMemoryAuditEvent({
+            action: "revised",
+            memoryId: survivor.id,
+            reason: "dedup_merge",
+            metadata: { merged: merged.length },
+          })
+          await syncRevisedVector(survivor, survivorText)
+          if (sink) {
+            const loserDocs = merged
+              .map((loser) => loser.vectorDocId)
+              .filter((id): id is string => Boolean(id))
+            if (loserDocs.length > 0) {
+              await sink.delete(loserDocs).catch(async () => {
+                const { noteMemoryVectorFailure } = await import("./enqueue-reconcile")
+                noteMemoryVectorFailure()
+              })
+            }
+          }
+          return { applied: true, mergedIds: merged.map((loser) => loser.id) }
+        }
+
+        const outcome = await db.transaction(
+          "rw",
+          [db.memories, db.memoryEvidence, db.memoryAuditEvents],
+          async () => {
+            const liveSurvivor = await db.memories.get(survivor.id)
+            if (!isStillColdSnapshot(liveSurvivor, survivor, now)) {
+              return { applied: false, mergedLosers: [] as typeof merged }
+            }
+            const mergedLosers: Array<(typeof merged)[number]> = []
+            for (const loser of merged) {
+              const liveLoser = await db.memories.get(loser.id)
+              if (isStillColdSnapshot(liveLoser, loser, now)) {
+                mergedLosers.push(loser)
+              }
+            }
+            if (mergedLosers.length === 0) {
+              return { applied: false, mergedLosers: [] as typeof merged }
+            }
+            const effectiveText =
+              mergedLosers.length === merged.length
+                ? survivorText
+                : mergeClusterIntoSurvivor(survivor, mergedLosers)
+            await memDb.updateMemory(survivor.id, {
+              text: effectiveText,
+              bumpVersion: true,
+              revisionReason: "dedup-merge",
+              compactedAt: now,
+            })
+            for (const loser of mergedLosers) {
+              for (const row of await governance.listMemoryEvidence(loser.id)) {
+                const { id: _id, memoryId: _memoryId, ...rest } = row
+                await governance.createMemoryEvidence({ ...rest, memoryId: survivor.id })
+              }
+              await memDb.invalidateMemory(loser.id, survivor.id)
+              await appendMemoryAuditEvent({
+                action: "invalidated",
+                memoryId: loser.id,
+                reason: "dedup_merged",
+                metadata: { survivorId: survivor.id },
+              })
+            }
+            await appendMemoryAuditEvent({
+              action: "revised",
+              memoryId: survivor.id,
+              reason: "dedup_merge",
+              metadata: { merged: mergedLosers.length },
+            })
+            return { applied: true, mergedLosers, effectiveText }
+          }
+        )
+        if (!outcome.applied || outcome.mergedLosers.length === 0) {
+          return { applied: false, mergedIds: [] }
+        }
+        await syncRevisedVector(survivor, outcome.effectiveText ?? survivorText)
+        if (sink) {
+          const loserDocs = outcome.mergedLosers
+            .map((loser) => loser.vectorDocId)
+            .filter((id): id is string => Boolean(id))
+          if (loserDocs.length > 0) {
+            await sink.delete(loserDocs).catch(async () => {
+              const { noteMemoryVectorFailure } = await import("./enqueue-reconcile")
+              noteMemoryVectorFailure()
+            })
+          }
+        }
+        return { applied: true, mergedIds: outcome.mergedLosers.map((loser) => loser.id) }
       },
       audit: (event) => appendMemoryAuditEvent(event).then(() => undefined),
     }
@@ -966,9 +1252,9 @@ export async function processMemoryJob(job: MemoryJob): Promise<MemoryJobProcess
     case "project-claim-revalidate":
       return processClaimRevalidation(job)
     case "vector-reconcile":
-      return processVectorReconcile(config)
+      return processVectorReconcile(job, config)
     case "memory-lifecycle-sweep":
-      return processLifecycleSweep(config)
+      return processLifecycleSweep(job, config)
     default: {
       const exhaustive: never = job.kind
       throw new MemoryJobTerminalError(`unknown_job_kind:${String(exhaustive)}`)

@@ -72,6 +72,7 @@ describe("resolveAgentMemoryPolicy", () => {
     })
     expect(resolved.canRecall).toBe(true)
     expect(resolved.canAutoLearn).toBe(true)
+    expect(resolved.canLearnSession).toBe(true)
   })
 
   it("lets a session opt-out deny what every higher layer allowed", () => {

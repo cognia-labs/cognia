@@ -14,6 +14,8 @@ export interface ResolvedAgentMemoryPolicy {
   canUpdate: boolean
   canForget: boolean
   canAutoLearn: boolean
+  /** Session-resolved chat learning gate (independent of per-turn `autoExtract`). */
+  canLearnSession: boolean
   readableScopes: MemoryScope[]
   writableScopes: MemoryScope[]
   recallReason: string
@@ -48,12 +50,12 @@ export function resolveAgentMemoryPolicy(input: {
   // contract — a hard `recall: false` / `autoLearn: false` must survive a
   // chat that has memory switched on.
   const canRecall = turn.canRecall && operations.recall
-  const canAutoLearn =
+  const canLearnSession =
     turn.canLearn &&
-    config.autoExtract &&
     (input.agentPolicy?.autoLearn ?? true) &&
     operations.create &&
     writableScopes.length > 0
+  const canAutoLearn = canLearnSession && config.autoExtract
 
   return {
     canRecall,
@@ -61,6 +63,7 @@ export function resolveAgentMemoryPolicy(input: {
     canUpdate: globallyWritable && operations.update && writableScopes.length > 0,
     canForget: operations.forget && writableScopes.length > 0,
     canAutoLearn,
+    canLearnSession,
     readableScopes,
     writableScopes,
     recallReason: canRecall

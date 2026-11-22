@@ -209,7 +209,7 @@ export async function enqueueTurnMemory(
     transcript: input.transcript,
     provenance,
     contaminationState,
-    config: { ...config, scopeDefault: target.scope },
+    config: { ...config, learnFromChats: policy.canLearnSession, scopeDefault: target.scope },
     agentId: memoryAgentId,
   })
 

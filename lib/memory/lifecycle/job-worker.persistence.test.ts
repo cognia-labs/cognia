@@ -24,11 +24,15 @@ import { DEFAULT_MEMORY_CONFIG, type Memory } from "@/types/memory/memory"
 import { drainMemoryJobs, processMemoryJob } from "./job-worker"
 import { revokeClaimsForDeletedSession } from "./claim-deletion-closure"
 
+const mockGetSettings = jest.fn()
+const mockBuildVectorReader = jest.fn()
+const mockBuildProjectMiningDeps = jest.fn()
+
 // Keep the real extractor, consolidator, worker, and Dexie writes. Only the
 // provider/vector transport and unrelated history projections are substituted.
 jest.mock("@/lib/db/settings", () => ({
   ...jest.requireActual("@/lib/db/settings"),
-  getSettings: async () => ({ memory: { enabled: true, learnFromChats: true } }),
+  getSettings: () => mockGetSettings(),
 }))
 jest.mock("@/lib/db/sessions", () => ({
   getSession: (id: string) => getDb().sessions.get(id),
@@ -51,6 +55,7 @@ jest.mock("@/lib/ai/generation/utility-client", () => ({
 }))
 jest.mock("@/lib/memory/runtime/build-deps", () => ({
   tryBuildMemoryDeps: () => mockBuildMemoryDeps(),
+  tryBuildMemoryVectorReader: (...args: unknown[]) => mockBuildVectorReader(...args),
   tryBuildMemoryVectorSink: async () => ({
     upsert: mockUpsert,
     listIds: mockListVectorIds,
@@ -63,9 +68,7 @@ jest.mock("@/lib/memory/retrieve/retriever", () => ({
   retrieveMemories: () => mockRetrieveMemories(),
 }))
 jest.mock("@/lib/memory/write/run-project-mining", () => ({
-  buildProjectMiningDeps: async () => ({
-    consolidate: (input: ConsolidateInput) => mockConsolidateProjectClaims(input),
-  }),
+  buildProjectMiningDeps: (...args: unknown[]) => mockBuildProjectMiningDeps(...args),
   runProjectMining: (...args: unknown[]) => mockRunProjectMining(...args),
 }))
 
@@ -82,7 +85,12 @@ beforeAll(fixture.initialize)
 beforeEach(async () => {
   await fixture.restore()
   jest.clearAllMocks()
+  mockGetSettings.mockResolvedValue({ memory: { enabled: true, learnFromChats: true } })
   mockBuildMemoryDeps.mockResolvedValue(undefined)
+  mockBuildVectorReader.mockResolvedValue(undefined)
+  mockBuildProjectMiningDeps.mockImplementation(async () => ({
+    consolidate: (input: ConsolidateInput) => mockConsolidateProjectClaims(input),
+  }))
   mockListVectorIds.mockResolvedValue([])
   mockUpsert.mockImplementation(async (id: string, text: string) => {
     expect(Dexie.currentTransaction).toBeNull()
@@ -219,6 +227,36 @@ describe("durable turn-extraction persistence", () => {
       if (change === "reclaimed") expect(state?.fencingEpoch).toBe(2)
     }
   )
+
+  it("skips stale model output when a source message is edited in-place during extraction (N10)", async () => {
+    let release!: (value: string) => void
+    let started!: () => void
+    const providerStarted = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    mockComplete.mockImplementationOnce(() => {
+      started()
+      return new Promise<string>((resolve) => {
+        release = resolve
+      })
+    })
+    const job = await enqueue()
+    const running = drainMemoryJobs({ workerId: "worker", maxJobs: 1 })
+    await providerStarted
+    await getDb().messages.update("user", {
+      parts: [{ type: "text", text: "I always use yarn" }],
+    } as never)
+    release(reply)
+    await expect(running).resolves.toBe(1)
+    expect(await getDb().memories.count()).toBe(0)
+    expect(await getDb().memoryEvidence.count()).toBe(0)
+    expect(await getDb().memoryAuditEvents.count()).toBe(0)
+    expect(mockUpsert).not.toHaveBeenCalled()
+    expect(await getMemoryJob(job.id)).toMatchObject({
+      status: "skipped",
+      resultCode: "source_changed",
+    })
+  })
 
   it("upserts only committed canonical rows and records their embedded text hash", async () => {
     mockComplete.mockResolvedValue(reply)
@@ -658,5 +696,222 @@ describe("project-mining governance fence", () => {
         })
       }
     )
+  })
+
+  it("writes zero episodic memories or evidence when session-distill is cancelled mid-call (N9)", async () => {
+    await getDb().messages.bulkPut([
+      {
+        id: "user-2",
+        sessionId: "source",
+        role: "user",
+        createdAt: 3,
+        parts: [{ type: "text", text: "Let us standardize on pnpm across workspaces" }],
+      },
+      {
+        id: "assistant-2",
+        sessionId: "source",
+        role: "assistant",
+        createdAt: 4,
+        parts: [{ type: "text", text: "Done, workspaces use pnpm." }],
+      },
+    ] as never)
+    let release!: (value: string) => void
+    let started!: () => void
+    const distillStarted = new Promise<void>((resolve) => {
+      started = resolve
+    })
+    mockComplete.mockImplementationOnce(() => {
+      started()
+      return new Promise<string>((resolve) => {
+        release = resolve
+      })
+    })
+    const job = await enqueueMemoryJob({
+      dedupeKey: "session-distill:source:assistant-2:4",
+      kind: "session-distill",
+      sessionId: "source",
+      scope: "global",
+      provenance: "user",
+      evidenceIds: [],
+    })
+    const running = drainMemoryJobs({ workerId: "worker", maxJobs: 1 })
+    await distillStarted
+    await cancelMemoryJob(job.id)
+    release(JSON.stringify({ episodes: [{ text: "Standardized on pnpm", importance: 7 }] }))
+    await expect(running).resolves.toBe(1)
+    expect(await getDb().memories.count()).toBe(0)
+    expect(await getDb().memoryEvidence.count()).toBe(0)
+    expect(await getDb().memoryAuditEvents.count()).toBe(0)
+    expect(mockUpsert).not.toHaveBeenCalled()
+    expect(await getMemoryJob(job.id)).toMatchObject({ status: "cancelled" })
+  })
+
+  it.each(["job-cancelled", "run-cancelled"] as const)(
+    "writes zero project claims or evidence when real project-mining hits %s mid-call (N9)",
+    async (mode) => {
+      const actualMining = jest.requireActual(
+        "@/lib/memory/write/run-project-mining"
+      ) as typeof import("@/lib/memory/write/run-project-mining")
+      mockBuildProjectMiningDeps.mockImplementation((...args: unknown[]) =>
+        (actualMining.buildProjectMiningDeps as (...a: unknown[]) => unknown)(...args)
+      )
+      mockRunProjectMining.mockImplementation((...args: unknown[]) =>
+        (actualMining.runProjectMining as (...a: unknown[]) => unknown)(...args)
+      )
+      await getDb().sessions.update("source", { projectId: "p1" })
+      await getDb().messages.bulkPut([
+        {
+          id: "user",
+          sessionId: "source",
+          role: "user",
+          createdAt: 1,
+          parts: [
+            {
+              type: "text",
+              text: "why does pnpm build fail in packages/memory/src/index.ts",
+            },
+          ],
+        },
+        {
+          id: "assistant",
+          sessionId: "source",
+          role: "assistant",
+          createdAt: 2,
+          parts: [
+            {
+              type: "text",
+              text: "it must be in SERVER_ONLY_PACKAGES, because the static export breaks otherwise",
+            },
+          ],
+        },
+      ] as never)
+      await getDb().projectMiningRuns.put({
+        id: "pmr_n9",
+        projectId: "p1",
+        status: "running",
+        createdAt: 1,
+        updatedAt: 1,
+        sessionsTotal: 1,
+        sessionsScanned: 0,
+        windowsQueued: 1,
+        claimsCreated: 0,
+      } as never)
+      let release!: (value: string) => void
+      let started!: () => void
+      const extractStarted = new Promise<void>((resolve) => {
+        started = resolve
+      })
+      mockComplete.mockImplementationOnce(() => {
+        started()
+        return new Promise<string>((resolve) => {
+          release = resolve
+        })
+      })
+      const job = await enqueueMemoryJob({
+        dedupeKey: "project-mining:pmr_n9:source:user:assistant:2",
+        kind: "project-mining",
+        runId: "pmr_n9",
+        sessionId: "source",
+        projectId: "p1",
+        scope: "workspace",
+        provenance: "user",
+        evidenceIds: [],
+      })
+      const running = drainMemoryJobs({ workerId: "worker", maxJobs: 1 })
+      await extractStarted
+      if (mode === "job-cancelled") {
+        await cancelMemoryJob(job.id)
+      } else {
+        await getDb().projectMiningRuns.update("pmr_n9", { status: "cancelled" })
+      }
+      release(
+        JSON.stringify({
+          claims: [
+            {
+              text: "Keep packages/memory in SERVER_ONLY_PACKAGES so static export succeeds",
+              kind: "constraint",
+              importance: 7,
+              confidence: 0.9,
+              observedAtMessageId: "user",
+              supportRole: "user",
+              evidence: [
+                { kind: "message", sourceId: "user" },
+                { kind: "message", sourceId: "assistant" },
+              ],
+            },
+          ],
+        })
+      )
+      await expect(running).resolves.toBe(1)
+      expect(await getDb().memories.count()).toBe(0)
+      expect(await getDb().memoryEvidence.count()).toBe(0)
+      expect(await getDb().memoryAuditEvents.count()).toBe(0)
+      expect(mockUpsert).not.toHaveBeenCalled()
+      expect(await getMemoryJob(job.id)).toMatchObject(
+        mode === "job-cancelled"
+          ? { status: "cancelled" }
+          : { status: "skipped", resultCode: "job_claim_lost" }
+      )
+    }
+  )
+
+  it("preserves concurrent user edit and pin during memory-lifecycle-sweep (N11)", async () => {
+    const DAY = 24 * 60 * 60 * 1000
+    const oldTime = Date.now() - 365 * DAY
+    const longColdText = "We debugged a subtle migration edge case across multiple workspaces. "
+      .repeat(6)
+      .trim()
+    const m1 = await createMemory({
+      id: "cold-1",
+      text: longColdText,
+      scope: "global",
+      type: "episodic",
+      provenance: "user",
+      importance: 1,
+    })
+    const m2 = await createMemory({
+      id: "cold-2",
+      text: `${longColdText} Second occurrence.`,
+      scope: "global",
+      type: "episodic",
+      provenance: "user",
+      importance: 1,
+    })
+    await getDb().memories.update(m1.id, { createdAt: oldTime, lastAccessedAt: oldTime })
+    await getDb().memories.update(m2.id, { createdAt: oldTime, lastAccessedAt: oldTime })
+    mockGetSettings.mockResolvedValue({
+      memory: {
+        enabled: true,
+        compactColdEpisodic: true,
+        dedupColdClusters: true,
+        coldRetentionThreshold: 0.99,
+      },
+    })
+    mockBuildVectorReader.mockResolvedValue({
+      getEmbeddings: async (rows: Memory[]) => {
+        // User edits & pins m1 AFTER listActive captured the cold snapshot!
+        await updateMemory(m1.id, {
+          text: "User corrected and pinned fact",
+          pinned: true,
+          bumpVersion: true,
+        })
+        return new Map(rows.map((row) => [row.id, [1, 0, 0]]))
+      },
+    })
+    const sweepJob = await enqueueMemoryJob({
+      dedupeKey: "memory-lifecycle-sweep:2026-11-22",
+      kind: "memory-lifecycle-sweep",
+      scope: "global",
+      provenance: "user",
+      evidenceIds: [],
+    })
+    await processMemoryJob(sweepJob)
+    const afterM1 = await getMemory(m1.id)
+    expect(afterM1).toMatchObject({
+      text: "User corrected and pinned fact",
+      pinned: true,
+      status: "active",
+    })
+    expect(afterM1?.compactedAt).toBeUndefined()
   })
 })

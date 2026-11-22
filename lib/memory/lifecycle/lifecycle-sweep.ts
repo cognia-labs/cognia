@@ -41,17 +41,28 @@ export interface LifecycleSweepDeps {
   listActive: () => Promise<Memory[]>
   /** Vectors by memory id for the given rows; absent ⇒ dedup is skipped. */
   loadEmbeddings?: (memories: readonly Memory[]) => Promise<Map<string, number[]>>
-  /** Replace a row's text through the revision path. */
+  /** Replace a row's text through the revision path; returning `false` skips a concurrently edited/pinned row. */
   reviseText: (
     memory: Memory,
     text: string,
     reason: "compaction" | "dedup-merge",
     now: number
-  ) => Promise<void>
+  ) => Promise<boolean | void>
   /** Supersede a folded duplicate by its survivor. */
   supersede: (loser: Memory, survivor: Memory) => Promise<void>
   /** Re-attach a folded duplicate's evidence to its survivor. */
   moveEvidence: (loser: Memory, survivor: Memory) => Promise<void>
+  /**
+   * Optional transactional CAS merge for production stores: atomically verifies
+   * survivor + losers are still cold/unpinned/unrevised, moves evidence with
+   * preserved timestamps, supersedes losers, and writes audit rows.
+   */
+  applyDedupMerge?: (input: {
+    survivor: Memory
+    survivorText: string
+    merged: readonly Memory[]
+    now: number
+  }) => Promise<{ applied: boolean; mergedIds: string[] }>
   audit: (event: {
     action: "revised" | "invalidated"
     memoryId: string
@@ -154,7 +165,29 @@ export async function runMemoryLifecycleSweep(
             sameMemoryNamespace(memory, survivorNamespace)
           )
           if (merged.length === 0) continue
-          await deps.reviseText(merge.survivor, merge.survivorText, "dedup-merge", now)
+          if (deps.applyDedupMerge) {
+            const outcome = await deps.applyDedupMerge({
+              survivor: merge.survivor,
+              survivorText: merge.survivorText,
+              merged,
+              now,
+            })
+            if (!outcome.applied || outcome.mergedIds.length === 0) continue
+            for (const loserId of outcome.mergedIds) claimed.add(loserId)
+            claimed.add(merge.survivor.id)
+            report.merges.push({
+              survivorId: merge.survivor.id,
+              mergedIds: outcome.mergedIds,
+            })
+            continue
+          }
+          const revised = await deps.reviseText(
+            merge.survivor,
+            merge.survivorText,
+            "dedup-merge",
+            now
+          )
+          if (revised === false) continue
           for (const loser of merged) {
             await deps.moveEvidence(loser, merge.survivor)
             await deps.supersede(loser, merge.survivor)
@@ -187,7 +220,8 @@ export async function runMemoryLifecycleSweep(
       if (claimed.has(memory.id)) continue
       const compacted = compactMemoryText(memory.text)
       if (!compacted) continue
-      await deps.reviseText(memory, compacted.text, "compaction", now)
+      const revised = await deps.reviseText(memory, compacted.text, "compaction", now)
+      if (revised === false) continue
       await deps.audit({
         action: "revised",
         memoryId: memory.id,

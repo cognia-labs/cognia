@@ -34,18 +34,30 @@ import { computeBeliefInputs } from "@cognia/memory/lifecycle/belief"
  * queuing one job per affected personal row would fill the queue with work whose
  * only outcome is `not_a_project_claim`. One bulk read is cheaper than that.
  */
-async function projectClaimIdsAmong(
+async function projectClaimsAmong(
   memoryIds: readonly string[],
   scope?: MemoryPersistenceScope
-): Promise<string[]> {
-  if (memoryIds.length === 0) return []
+): Promise<{ activeIds: string[]; invalidatedVectorIds: string[]; totalClaims: number }> {
+  if (memoryIds.length === 0) {
+    return { activeIds: [], invalidatedVectorIds: [], totalClaims: 0 }
+  }
   const { getDb } = await import("@/lib/db/schema")
   scope?.assertActive()
   const rows = await (scope?.db ?? getDb()).memories.bulkGet([...memoryIds])
   scope?.assertActive()
-  return rows
-    .filter((row) => row?.projectMemoryKind !== undefined && row.status === "active")
-    .map((row) => row!.id)
+  const activeIds: string[] = []
+  const invalidatedVectorIds: string[] = []
+  let totalClaims = 0
+  for (const row of rows) {
+    if (!row || row.projectMemoryKind === undefined) continue
+    totalClaims += 1
+    if (row.status === "active") {
+      activeIds.push(row.id)
+    } else if (row.status === "invalidated" && row.vectorDocId) {
+      invalidatedVectorIds.push(row.vectorDocId)
+    }
+  }
+  return { activeIds, invalidatedVectorIds, totalClaims }
 }
 
 async function queueRechecks(
@@ -53,16 +65,32 @@ async function queueRechecks(
   scope?: MemoryPersistenceScope
 ): Promise<number> {
   scope?.assertActive()
-  const targets = await projectClaimIdsAmong(memoryIds, scope)
-  if (targets.length === 0) return 0
+  const { activeIds, invalidatedVectorIds, totalClaims } = await projectClaimsAmong(
+    memoryIds,
+    scope
+  )
+  if (invalidatedVectorIds.length > 0 && !scope) {
+    void (async () => {
+      const [{ getSettings }, { resolveMemoryConfig }, { tryBuildMemoryVectorSink }] =
+        await Promise.all([
+          import("@/lib/db/settings"),
+          import("@/types/memory/memory"),
+          import("@/lib/memory/runtime/build-deps"),
+        ])
+      const config = resolveMemoryConfig((await getSettings().catch(() => undefined))?.memory)
+      const sink = await tryBuildMemoryVectorSink(config, { cleanupOnly: true })
+      await sink?.delete(invalidatedVectorIds)
+    })().catch(() => undefined)
+  }
+  if (activeIds.length === 0) return totalClaims
   const { enqueueClaimRevalidation } = await import("./enqueue-reconcile")
   scope?.assertActive()
-  for (const memoryId of targets) {
+  for (const memoryId of activeIds) {
     if (scope) await enqueueClaimRevalidation(memoryId, scope)
     else await enqueueClaimRevalidation(memoryId)
     scope?.assertActive()
   }
-  return targets.length
+  return totalClaims
 }
 
 /**

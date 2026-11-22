@@ -172,6 +172,11 @@ export interface RunProjectMiningDeps {
   redact?: (text: string) => string
   /** Stamped onto `Memory.extractor` so a bad prompt's output can be found in bulk. */
   extractorIdentity?: { provider: string; model: string }
+  /** Internal hook so canonical evidence recorded inside `consolidate` sees this window's excerpts. */
+  setWindowExcerpts?: (
+    excerpts: ReadonlyMap<string, string> | undefined,
+    toolExcerpts: ReadonlyMap<string, string> | undefined
+  ) => void
 }
 
 export interface RunProjectMiningResult {
@@ -481,22 +486,27 @@ export async function runProjectMining(
     }
 
     const applied: ConsolidationOp[] = []
-    for (const group of groups.values()) {
-      const result = await deps.consolidate({
-        candidates: group.candidates,
-        scope: input.scope,
-        characterId: input.characterId,
-        projectId: input.projectId,
-        agentId: input.agentId,
-        branch: group.branch,
-        pathPattern: group.pathPattern,
-        provenance: input.provenance,
-        source: input.source,
-        // A claim the judge could not place is persisted but quarantined, never
-        // silently ADDed — see the module header.
-        failureMode: "quarantine",
-      })
-      applied.push(...result.applied)
+    deps.setWindowExcerpts?.(redactedExcerpts, redactedToolExcerpts)
+    try {
+      for (const group of groups.values()) {
+        const result = await deps.consolidate({
+          candidates: group.candidates,
+          scope: input.scope,
+          characterId: input.characterId,
+          projectId: input.projectId,
+          agentId: input.agentId,
+          branch: group.branch,
+          pathPattern: group.pathPattern,
+          provenance: input.provenance,
+          source: input.source,
+          // A claim the judge could not place is persisted but quarantined, never
+          // silently ADDed — see the module header.
+          failureMode: "quarantine",
+        })
+        applied.push(...result.applied)
+      }
+    } finally {
+      deps.setWindowExcerpts?.(undefined, undefined)
     }
     return {
       applied,
@@ -520,6 +530,13 @@ export async function runProjectMining(
 export interface BuildProjectMiningDepsParams {
   session: ChatSession | null | undefined
   appSettings: AppSettings | null | undefined
+  /** Durable workers fence each canonical mutation in a source/claim transaction. */
+  withCanonicalWrite?: <T>(write: () => Promise<T>) => Promise<T>
+  /** Runs inside that same transaction, before any vector I/O or next candidate. */
+  recordCanonicalOperation?: (
+    operation: ConsolidationOp,
+    context: { excerpts?: ReadonlyMap<string, string>; toolExcerpts?: ReadonlyMap<string, string> }
+  ) => Promise<void>
 }
 
 /**
@@ -575,11 +592,17 @@ export async function buildProjectMiningDeps(
     })
   )
 
+  const write = params.withCanonicalWrite ?? (<T>(operation: () => Promise<T>) => operation())
+  let activeExcerpts: ReadonlyMap<string, string> | undefined
+  let activeToolExcerpts: ReadonlyMap<string, string> | undefined
+
   const consolidateDeps: ConsolidateDeps = {
     client,
     auditDowngrade: async (memoryId, targetId, reason) => {
       const { appendMemoryAuditEvent } = await import("@/lib/db/memory-governance")
-      await appendMemoryAuditEvent({ action: "conflict", memoryId, reason, metadata: { targetId } })
+      await write(() =>
+        appendMemoryAuditEvent({ action: "conflict", memoryId, reason, metadata: { targetId } })
+      )
     },
     findSimilar: async (candidate, namespace) => {
       if (!memDeps) return []
@@ -609,16 +632,34 @@ export async function buildProjectMiningDeps(
         .map((hit) => hit.memory)
         .filter((memory) => sameMemoryNamespace(memory, namespace))
     },
-    persist: async (pInput) => {
-      const row = await memDb.createMemory(pInput)
+    persist: async (pInput, candidate) => {
+      const row = await write(async () => {
+        const created = await memDb.createMemory(pInput)
+        if (params.recordCanonicalOperation) {
+          const targetId = pInput.conflictWithIds?.[0]
+          const op: ConsolidationOp =
+            pInput.reviewStatus === "conflict" && targetId
+              ? { op: "CONFLICT", memory: created, targetId, candidate }
+              : pInput.trustState === "quarantined" && candidate
+                ? { op: "QUARANTINE", memory: created, candidate }
+                : { op: "ADD", memory: created, candidate }
+          await params.recordCanonicalOperation(op, {
+            excerpts: activeExcerpts,
+            toolExcerpts: activeToolExcerpts,
+          })
+        }
+        return created
+      })
       if (vectorSink && hasNoLeakingPii(row.text)) {
         try {
           await vectorSink.upsert(row.id, row.text)
-          await withConsolidationTarget(row.id, { expected: row }, "update", () =>
-            memDb.updateMemory(row.id, {
-              vectorDocId: row.id,
-              vectorTextHash: hashContent(row.text),
-            })
+          await write(() =>
+            withConsolidationTarget(row.id, { expected: row }, "update", () =>
+              memDb.updateMemory(row.id, {
+                vectorDocId: row.id,
+                vectorTextHash: hashContent(row.text),
+              })
+            )
           )
         } catch {
           // BM25 recall still works without the vector.
@@ -629,26 +670,41 @@ export async function buildProjectMiningDeps(
     update: async (id, text, guard, candidate) => {
       if (!hasNoLeakingPii(text)) return { ok: false, reason: "update_denied" }
       const claim = candidate?.projectClaim
-      const result = await withConsolidationTarget(id, guard, "update", async () => {
-        await memDb.updateMemory(id, {
-          text,
-          bumpVersion: true,
-          revisionReason: "consolidation",
-          ...(claim ? { projectMemoryKind: claim.projectMemoryKind } : {}),
-          ...(claim?.observedAt !== undefined ? { observedAt: claim.observedAt } : {}),
-          ...(claim?.confidence !== undefined ? { confidence: claim.confidence } : {}),
-          ...(claim?.scopeRationale !== undefined ? { scopeRationale: claim.scopeRationale } : {}),
-          ...(claim?.extractor !== undefined ? { extractor: claim.extractor } : {}),
-          ...(claim?.evidenceHash !== undefined ? { evidenceHash: claim.evidenceHash } : {}),
-          ...(claim?.sourceRevision !== undefined ? { sourceRevision: claim.sourceRevision } : {}),
+      const result = await write(async () => {
+        const updated = await withConsolidationTarget(id, guard, "update", async () => {
+          await memDb.updateMemory(id, {
+            text,
+            bumpVersion: true,
+            revisionReason: "consolidation",
+            ...(claim ? { projectMemoryKind: claim.projectMemoryKind } : {}),
+            ...(claim?.observedAt !== undefined ? { observedAt: claim.observedAt } : {}),
+            ...(claim?.confidence !== undefined ? { confidence: claim.confidence } : {}),
+            ...(claim?.scopeRationale !== undefined
+              ? { scopeRationale: claim.scopeRationale }
+              : {}),
+            ...(claim?.extractor !== undefined ? { extractor: claim.extractor } : {}),
+            ...(claim?.evidenceHash !== undefined ? { evidenceHash: claim.evidenceHash } : {}),
+            ...(claim?.sourceRevision !== undefined
+              ? { sourceRevision: claim.sourceRevision }
+              : {}),
+          })
         })
+        if (updated.ok && params.recordCanonicalOperation && candidate) {
+          await params.recordCanonicalOperation(
+            { op: "UPDATE", targetId: id, candidate },
+            { excerpts: activeExcerpts, toolExcerpts: activeToolExcerpts }
+          )
+        }
+        return updated
       })
       if (!result.ok) return result
       if (vectorSink) {
         try {
           await vectorSink.upsert(id, text)
-          await withConsolidationTarget(id, guard, "update", () =>
-            memDb.updateMemory(id, { vectorDocId: id, vectorTextHash: hashContent(text) })
+          await write(() =>
+            withConsolidationTarget(id, guard, "update", () =>
+              memDb.updateMemory(id, { vectorDocId: id, vectorTextHash: hashContent(text) })
+            )
           )
         } catch {
           // ignore — keep the Dexie update
@@ -657,22 +713,32 @@ export async function buildProjectMiningDeps(
       return result
     },
     invalidate: (id, replacement, guard) =>
-      withConsolidationTarget(id, guard, "forget", () =>
-        withConsolidationTarget(replacement.id, { expected: replacement }, "update", async () => {
-          await memDb.invalidateMemory(id, replacement.id)
-          await memDb.updateMemory(replacement.id, {
-            reviewStatus: "unreviewed",
-            conflictWithIds: [],
+      write(() =>
+        withConsolidationTarget(id, guard, "forget", () =>
+          withConsolidationTarget(replacement.id, { expected: replacement }, "update", async () => {
+            await memDb.invalidateMemory(id, replacement.id)
+            await memDb.updateMemory(replacement.id, {
+              reviewStatus: "unreviewed",
+              conflictWithIds: [],
+            })
+            if (params.recordCanonicalOperation) {
+              await params.recordCanonicalOperation(
+                { op: "INVALIDATE", targetId: id, supersededById: replacement.id },
+                { excerpts: activeExcerpts, toolExcerpts: activeToolExcerpts }
+              )
+            }
+          })
+        )
+      ),
+    markConflict: (targetId, conflictId, guard) =>
+      write(() =>
+        withConsolidationTarget(targetId, guard, "update", async (target) => {
+          await memDb.updateMemory(targetId, {
+            reviewStatus: "conflict",
+            conflictWithIds: [...new Set([...(target.conflictWithIds ?? []), conflictId])],
           })
         })
       ),
-    markConflict: (targetId, conflictId, guard) =>
-      withConsolidationTarget(targetId, guard, "update", async (target) => {
-        await memDb.updateMemory(targetId, {
-          reviewStatus: "conflict",
-          conflictWithIds: [...new Set([...(target.conflictWithIds ?? []), conflictId])],
-        })
-      }),
   }
 
   return {
@@ -741,8 +807,11 @@ export async function buildProjectMiningDeps(
                     cInput,
                     {
                       ...judgedDeps,
-                      persist: (pInput) =>
-                        consolidateDeps.persist({ ...pInput, trustState: "quarantined" }),
+                      persist: (pInput, candidateArg) =>
+                        consolidateDeps.persist(
+                          { ...pInput, trustState: "quarantined" },
+                          candidateArg
+                        ),
                     },
                     previous.id,
                     result.reason
@@ -755,8 +824,8 @@ export async function buildProjectMiningDeps(
                 cInput,
                 {
                   ...judgedDeps,
-                  persist: (pInput) =>
-                    consolidateDeps.persist({ ...pInput, trustState: "quarantined" }),
+                  persist: (pInput, candidateArg) =>
+                    consolidateDeps.persist({ ...pInput, trustState: "quarantined" }, candidateArg),
                 },
                 previous.id,
                 "update_denied"
@@ -774,12 +843,15 @@ export async function buildProjectMiningDeps(
               // External source instructions must never overwrite trusted workspace
               // facts. Keep new attachment findings as explicit review drafts.
               findSimilar: async () => [],
-              persist: (pInput) =>
-                consolidateDeps.persist({
-                  ...pInput,
-                  trustState: "quarantined",
-                  reviewStatus: "unreviewed",
-                }),
+              persist: (pInput, candidateArg) =>
+                consolidateDeps.persist(
+                  {
+                    ...pInput,
+                    trustState: "quarantined",
+                    reviewStatus: "unreviewed",
+                  },
+                  candidateArg
+                ),
             }
           : judgedDeps
       )
@@ -791,5 +863,12 @@ export async function buildProjectMiningDeps(
     ...(client.provider && client.model
       ? { extractorIdentity: { provider: client.provider, model: client.model } }
       : {}),
+    setWindowExcerpts: (
+      excerpts: ReadonlyMap<string, string> | undefined,
+      toolExcerpts: ReadonlyMap<string, string> | undefined
+    ) => {
+      activeExcerpts = excerpts
+      activeToolExcerpts = toolExcerpts
+    },
   }
 }

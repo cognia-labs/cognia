@@ -372,10 +372,11 @@ describe("revalidateClaim", () => {
     expect((await revalidateClaim("mem1", d)).reason).toBe("already_invalidated")
   })
 
-  it("skips a claim with no citations rather than deleting it", async () => {
+  it("skips a claim with no citations rather than deleting it, while stamping validatedAt so daily sweeps advance past it (N13)", async () => {
     const d = deps({ listEvidence: async () => [] })
     expect((await revalidateClaim("mem1", d)).reason).toBe("no_evidence")
     expect(d.invalidated).toEqual([])
+    expect(d.patches).toEqual([{ staleness: "unknown", validatedAt: 5_000 }])
   })
 
   it("does not rewrite a verdict that has not changed", async () => {

@@ -23,7 +23,6 @@ jest.mock("@/lib/db/memory-governance", () => ({
 import {
   runMemoryMaintenance,
   scheduleMemoryMaintenance,
-  __resetMaintenanceGuard,
   type MemoryMaintenanceDeps,
 } from "./maintenance"
 
@@ -394,7 +393,6 @@ describe("scheduleMemoryMaintenance", () => {
     mockFailJob.mockReset()
     mockDrainAfterTurn.mockReset()
     mockDrainAfterTurn.mockResolvedValue(1)
-    __resetMaintenanceGuard()
     jest.useFakeTimers()
     mockBuildDeps.mockResolvedValue({
       distillDeps: { distill: async () => [], consolidate: async () => ({ applied: [] }) },
@@ -480,7 +478,6 @@ describe("scheduleMemoryMaintenance", () => {
     jest.clearAllMocks()
     mockEnqueueJob.mockResolvedValue({ id: "job-1" })
     mockClaimJob.mockResolvedValueOnce({ id: "job-1" })
-    __resetMaintenanceGuard()
     scheduleMemoryMaintenance({
       ...base,
       sessionId: "s2",
@@ -490,6 +487,32 @@ describe("scheduleMemoryMaintenance", () => {
     expect(
       mockEnqueueJob.mock.calls.filter(([draft]) => draft.kind === "project-claim-revalidate")
     ).toEqual([])
+  })
+
+  it("honors session.memoryLearn opt-in even when global learnFromChats is off (N17)", async () => {
+    const projectTranscript = Array.from({ length: 26 }, (_, index) => ({
+      id: `m${index}`,
+      role: index % 2 === 0 ? "user" : "assistant",
+      text:
+        index % 2 === 0
+          ? "why does pnpm build fail in packages/memory/src/index.ts"
+          : "it must be in SERVER_ONLY_PACKAGES, because the static export breaks otherwise",
+    }))
+    scheduleMemoryMaintenance({
+      ...base,
+      session: { id: "s1", projectId: "p1", memoryLearn: true, transcriptRevision: 2 } as never,
+      transcript: projectTranscript,
+      config: cfg({ learnFromChats: false, mineProjectContext: true }),
+    })
+    await jest.runAllTimersAsync()
+    expect(mockEnqueueJob).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "session-distill" }),
+      { reuseCompleted: true }
+    )
+    expect(mockEnqueueJob).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "project-mining" }),
+      { reuseCompleted: true }
+    )
   })
 
   it("flushes the trailing mining window that the live turn path held back", async () => {

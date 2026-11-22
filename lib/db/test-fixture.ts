@@ -122,9 +122,9 @@ export function createDbTestFixture(options: DbTestFixtureOptions = {}): DbTestF
       import("@/lib/execution/personal-egress"),
       import("@/lib/execution/personal-marks"),
     ])
-    marks.__resetPersonalMarksForDatabase(db)
-    egress.__resetPersonalEgressForDatabase(db)
-    messages.__resetMessageSnapshotsForDatabase(db)
+    marks.__resetPersonalMarksForDatabase?.(db)
+    egress.__resetPersonalEgressForDatabase?.(db)
+    messages.__resetMessageSnapshotsForDatabase?.(db)
   }
 
   const deleteCurrentDatabase = async () => {

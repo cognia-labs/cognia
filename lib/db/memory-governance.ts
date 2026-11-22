@@ -475,10 +475,10 @@ export async function isMemoryJobClaimActive(claimed: MemoryJob): Promise<boolea
   const current = await getDb().memoryJobs.get(claimed.id)
   return Boolean(
     current &&
-      current.status === "running" &&
-      current.leaseOwner === claimed.leaseOwner &&
-      current.fencingEpoch === claimed.fencingEpoch &&
-      current.cancellationRequestedAt === undefined
+    current.status === "running" &&
+    current.leaseOwner === claimed.leaseOwner &&
+    current.fencingEpoch === claimed.fencingEpoch &&
+    current.cancellationRequestedAt === undefined
   )
 }
 
@@ -709,11 +709,6 @@ export async function finishMemoryJob(
     await db.memoryJobs.update(id, patch)
     return "finished"
   })
-}
-
-/** Compatibility wrapper for existing callers; success is now explicit. */
-export async function completeMemoryJob(id: string, now: number = Date.now()): Promise<void> {
-  await finishMemoryJob(id, "succeeded", "completed", now)
 }
 
 export async function heartbeatMemoryJob(

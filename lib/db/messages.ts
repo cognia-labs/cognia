@@ -505,6 +505,7 @@ async function replaceSessionTranscriptNow(
   const orphanCandidates = new Set<string>()
   let publishedRevision: number | null = null
   let publishedTurnKeys: string[] | undefined
+  let revokedMessageIds: string[] = []
 
   await withDbReopenRetry(() => {
     assertDatabaseScope(db.name)
@@ -670,6 +671,15 @@ async function replaceSessionTranscriptNow(
                     ? previousById.get(row.id)?.workingSetSnapshot
                     : (currentSession?.workingSet ?? emptyWorkingSet())
                 }
+                const editedExistingIds = rows
+                  .filter(
+                    (row) =>
+                      existingIds.has(row.id) &&
+                      JSON.stringify(row.parts ?? []) !==
+                        JSON.stringify(previousById.get(row.id)?.parts ?? [])
+                  )
+                  .map((row) => row.id)
+                revokedMessageIds = [...new Set([...toDelete, ...editedExistingIds])]
                 if (toDelete.length > 0) await transactionDb.messages.bulkDelete(toDelete)
                 if (rows.length > 0) await transactionDb.messages.bulkPut(rows)
                 // Stamp while holding the message write transaction: a delayed
@@ -726,6 +736,9 @@ async function replaceSessionTranscriptNow(
   })
 
   assertDatabaseScope(db.name)
+  if (revokedMessageIds.length > 0) {
+    await revokeClaimsForDeletedMessages(revokedMessageIds)
+  }
   if (orphanCandidates.size > 0) {
     await collectUnreferencedMessageMedia(orphanCandidates)
   }
@@ -848,6 +861,7 @@ async function commitMessageDeltaNow(
   let deletedMessageIds: string[] = []
   let publishedRevision: number | null = null
   let publishedTurnKeys: string[] | undefined
+  let revokedMessageIds: string[] = []
 
   await db.transaction(
     "rw",
@@ -925,6 +939,15 @@ async function commitMessageDeltaNow(
         .filter((row): row is StoredMessage => row?.sessionId === sessionId)
         .map((row) => row.id)
       deletedMessageIds = effectiveDeleteIds
+      const editedIds = rows
+        .filter(
+          (row) =>
+            existingById.has(row.id) &&
+            JSON.stringify(row.parts ?? []) !==
+              JSON.stringify(existingById.get(row.id)?.parts ?? [])
+        )
+        .map((row) => row.id)
+      revokedMessageIds = [...new Set([...effectiveDeleteIds, ...editedIds])]
       const changedIds = [...effectiveDeleteIds, ...upsertIds]
       if (changedIds.length === 0) return
 
@@ -970,6 +993,9 @@ async function commitMessageDeltaNow(
     for (const messageId of deletedMessageIds)
       publishChatLifecycleEvent({ type: "message-deleted", sessionId, messageId })
     invalidatePersistSnapshot(sessionId)
+    if (revokedMessageIds.length > 0) {
+      await revokeClaimsForDeletedMessages(revokedMessageIds)
+    }
     if (orphanCandidates.size > 0) {
       await collectUnreferencedMessageMedia(orphanCandidates)
     }
@@ -1265,7 +1291,7 @@ async function clearMessagesNow(sessionId: string): Promise<void> {
   // Every citation captured in this session now points at nothing. Session-level
   // rather than message-level because turn citations carry a `sessionId` and no
   // `messageId`, so an id sweep would leave them behind.
-  void revokeClaimsForDeletedSession(sessionId)
+  await revokeClaimsForDeletedSession(sessionId)
   if (refs.length > 0) {
     await collectUnreferencedMessageMedia(refs.map((ref) => ref.hash))
   }
@@ -1331,7 +1357,7 @@ async function deleteStoredMessageNow(messageId: string, sessionId: string): Pro
     )
   invalidatePersistSnapshot(sessionId)
   markMessagesRemoved([messageId])
-  void revokeClaimsForDeletedMessages([messageId])
+  await revokeClaimsForDeletedMessages([messageId])
   if (refs.length > 0) {
     await collectUnreferencedMessageMedia(refs.map((ref) => ref.hash))
   }
@@ -1520,7 +1546,7 @@ async function truncateAfterNow(
   markSessionDirty(sessionId)
   // `markSessionDirty` above already covers the search index for a truncate;
   // only the memory leg needs the explicit id list.
-  if (removedIds.length > 0) void revokeClaimsForDeletedMessages(removedIds)
+  if (removedIds.length > 0) await revokeClaimsForDeletedMessages(removedIds)
   if (orphanCandidates.size > 0) {
     await collectUnreferencedMessageMedia(orphanCandidates)
   }
