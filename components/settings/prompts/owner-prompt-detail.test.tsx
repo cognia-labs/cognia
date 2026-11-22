@@ -254,3 +254,25 @@ it("retries a failed read", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Retry" }))
   await waitFor(() => expect(editor().value).toBe("Back."))
 })
+
+it("preserves unsaved typing when context object identity changes for the same resource (T11 sibling)", async () => {
+  const preset = await createPreset({ name: "Mine", content: "Saved text." })
+  const resource = await summaryFor(resourceKey("preset", preset.id))
+  const onChanged = jest.fn()
+  const onSelect = jest.fn()
+  const { rerender } = render(
+    <OwnerPromptDetail resource={resource} ctx={{}} onChanged={onChanged} onSelect={onSelect} />
+  )
+  await waitFor(() => expect(editor().value).toBe("Saved text."))
+  fireEvent.change(editor(), { target: { value: "Unsaved draft." } })
+
+  rerender(
+    <OwnerPromptDetail
+      resource={resource}
+      ctx={{ workspace: { id: "ws-other", name: "Other", roots: [] } }}
+      onChanged={onChanged}
+      onSelect={onSelect}
+    />
+  )
+  await waitFor(() => expect(editor().value).toBe("Unsaved draft."))
+})

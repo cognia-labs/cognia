@@ -86,6 +86,8 @@ export interface EffectivePreviewInput {
   workspace?: { name: string; customInstructions?: string } | null
   /** The active mode's resolved section. */
   mode?: { name: string; text: string } | null
+  /** True when the mode segment already shows the resolved plan-mode section. */
+  planPreviewed?: boolean
   /** Names of the Skills the agent may deliver. */
   skills?: readonly string[]
 }
@@ -156,6 +158,8 @@ export function composeEffectivePreview(input: EffectivePreviewInput): Effective
     text,
     chars: text.length,
     tokens: estimateFallbackTokens(text),
-    sendTime: SEND_TIME_SECTIONS,
+    sendTime: input.planPreviewed
+      ? SEND_TIME_SECTIONS.filter((section) => section !== "plan")
+      : SEND_TIME_SECTIONS,
   }
 }

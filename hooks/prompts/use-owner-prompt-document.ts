@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useState } from "react"
+import * as dbSchema from "@/lib/db/schema"
 import { ownerAdapterFor } from "@/lib/prompts/adapters"
 import type { OwnerPromptDocument, PromptResourceContext } from "@/lib/prompts/resources"
 
@@ -24,6 +25,14 @@ export function useOwnerPromptDocument(
   const [state, setState] = useState<OwnerPromptDocumentState>({ status: "loading" })
   const [loadedFor, setLoadedFor] = useState(key)
   const reload = useCallback(() => setEpoch((value) => value + 1), [])
+
+  useEffect(() => {
+    if (typeof dbSchema.onActiveDatabaseChange !== "function") return
+    return dbSchema.onActiveDatabaseChange(() => {
+      setState({ status: "loading" })
+      setEpoch((value) => value + 1)
+    })
+  }, [])
 
   // A different resource starts from "loading", never from the previous text.
   if (loadedFor !== key) {

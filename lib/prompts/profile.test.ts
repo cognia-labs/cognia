@@ -242,4 +242,56 @@ describe("applyPromptProfileImport", () => {
     const preview = await previewPromptProfileImport(await profileWith([{ body: "Be terse." }]))
     expect(preview[0].status).toBe("unchanged")
   })
+
+  it("aborts the entire batch with zero writes when the active account switches before commit (T12)", async () => {
+    const { activateAccountDatabase, clearAccountDatabaseSelection, getDb } =
+      await import("@/lib/db/schema")
+    const { encryptedAccountDatabaseName } = await import("@/lib/accounts/account-db")
+    const { AccountContentCipher, activateAccountContentCipher, lockAccountContentCipher } =
+      await import("@/lib/accounts/content-cipher")
+    const acctA = "acct_profile_batch_a"
+    const acctB = "acct_profile_batch_b"
+    const switchTo = async (id: string, fill: number) => {
+      const cipher = await AccountContentCipher.fromRawKey(
+        id,
+        encryptedAccountDatabaseName(id),
+        new Uint8Array(32).fill(fill)
+      )
+      activateAccountContentCipher(cipher)
+      activateAccountDatabase(id)
+    }
+    try {
+      await switchTo(acctA, 7)
+      const profile = await profileWith([
+        { body: "Entry one." },
+        { scope: "workspace", targetId: "ws-src", body: "Entry two." },
+      ])
+      const preview = await previewPromptProfileImport(profile, { "workspace:ws-src": "ws-local" })
+      expect(preview).toHaveLength(2)
+
+      await switchTo(acctB, 8)
+      await expect(applyPromptProfileImport(preview, new Set([0, 1]))).rejects.toMatchObject({
+        code: "prompt_override_account_changed",
+      })
+      expect((await readPromptSlot(BRIEF_MODE_PROMPT.id, account)).binding).toBeUndefined()
+
+      await switchTo(acctA, 7)
+      expect((await readPromptSlot(BRIEF_MODE_PROMPT.id, account)).binding).toBeUndefined()
+      expect(
+        (await readPromptSlot(BRIEF_MODE_PROMPT.id, { scope: "workspace", targetId: "ws-local" }))
+          .binding
+      ).toBeUndefined()
+    } finally {
+      for (const [id, fill] of [
+        [acctA, 7],
+        [acctB, 8],
+      ] as const) {
+        await switchTo(id, fill)
+        await getDb().delete()
+      }
+      lockAccountContentCipher()
+      clearAccountDatabaseSelection()
+      invalidatePromptOverrideSnapshot()
+    }
+  })
 })

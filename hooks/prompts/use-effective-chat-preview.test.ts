@@ -13,6 +13,7 @@ jest.mock("@/lib/agents/instructions/load", () => ({
 
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { BUILT_IN_MODE_PROMPTS } from "@/lib/agent/modes/built-ins"
+import { PLAN_MODE_PROMPT } from "@/lib/agent/prompts/plan-mode"
 import { createCharacter } from "@/lib/db/characters"
 import { createSkill } from "@/lib/db/skills"
 import { createDbTestFixture } from "@/lib/db/test-fixture"
@@ -47,7 +48,9 @@ beforeEach(async () => {
 })
 afterAll(dbFixture.dispose)
 
-const [modeId, modeDef] = [...BUILT_IN_MODE_PROMPTS.entries()][0]
+const [modeId, modeDef] = [...BUILT_IN_MODE_PROMPTS.entries()].find(
+  ([id, def]) => id !== "plan" && id !== "workflow" && !def.defaultBody.includes("{{")
+)!
 
 it("previews a new chat with the agent, mode and workspace", async () => {
   const skill = await createSkill({ name: "Cite sources", content: "x" })
@@ -245,4 +248,24 @@ it("does not record a preview as the slot's last use", async () => {
   )
   await waitFor(() => expect(result.current.state.status).toBe("ready"))
   expect(lastPromptResolution(modeDef.id)).toBeUndefined()
+})
+
+it("previews normal Plan mode with agent.plan-mode rather than legacy agent.mode.plan (F04)", async () => {
+  const legacyPlan = BUILT_IN_MODE_PROMPTS.get("plan")!
+  const customPlan = "Custom plan mode guidance keeping ExitPlanMode and exit_plan_mode intact."
+  await publishPromptBody({
+    def: PLAN_MODE_PROMPT,
+    target: { scope: "workspace", targetId: "ws-1" },
+    body: customPlan,
+    expectedRev: 0,
+  })
+  const { result } = renderHook(() =>
+    useEffectiveChatPreview({ agentId: null, modeId: "plan", workspaceId: "ws-1" })
+  )
+  await waitFor(() => expect(result.current.state.status).toBe("ready"))
+  const preview = result.current.state.status === "ready" ? result.current.state.preview : null
+  const modeSegment = preview?.segments.find((segment) => segment.kind === "mode")
+  expect(modeSegment?.text).toContain(customPlan)
+  expect(modeSegment?.text).not.toContain(legacyPlan.defaultBody)
+  expect(preview?.sendTime).not.toContain("plan")
 })

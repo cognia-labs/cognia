@@ -138,6 +138,7 @@ const ACCESSOR_BINDINGS: ReadonlyArray<{
   {
     consumer: "lib/claude/build-options.ts",
     use: /\bshippedModePrompt\(/,
+    test: /\bBUILT_IN_MODE_PROMPTS\b/,
     reaches: (def) => {
       const modeId = [...BUILT_IN_MODE_PROMPTS].find(([, candidate]) => candidate === def)?.[0]
       return modeId !== undefined && shippedModePrompt(modeId, def.defaultBody) === def

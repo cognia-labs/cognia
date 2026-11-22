@@ -26,6 +26,7 @@ import {
   listPromptOverrideBindingsFor,
   listPromptOverrideRevisions,
   publishPromptOverride,
+  publishPromptOverrideBatch,
   resetPromptOverride,
   savePromptOverrideDraft,
   type PromptOverrideBindingRow,
@@ -116,6 +117,45 @@ export async function publishPromptBody(
     origin: request.origin ?? "editor",
   })
   return settle(binding)
+}
+
+export async function publishPromptBodyBatch(
+  requests: readonly PromptWriteRequest[],
+  options: PinnedRequest = {}
+): Promise<{ applied: number; conflictedIndices: number[] }> {
+  const expectDatabase = pinned({
+    database: options.database ?? requests[0]?.database,
+  })
+  for (const request of requests) {
+    assertScope(request.def, request.target)
+    const issues = validatePromptBody(request.def, request.body)
+    if (issues.length > 0) throw new PromptValidationError(issues)
+  }
+  const digests = new Map<string, string>()
+  await Promise.all(
+    [...new Map(requests.map((request) => [request.def.id, request.def])).values()].map(
+      async (def) => {
+        digests.set(def.id, await shippedBodyDigest(def))
+      }
+    )
+  )
+  const inputs = requests.map((request) => ({
+    expectDatabase: request.database ?? expectDatabase,
+    promptId: request.def.id,
+    target: request.target,
+    body: request.body,
+    contractVersion: request.def.contractVersion,
+    baseDigest: digests.get(request.def.id)!,
+    expectedRev: request.expectedRev,
+    mutationId: request.mutationId ?? mutationId(),
+    origin: request.origin ?? "editor",
+  }))
+  const result = await publishPromptOverrideBatch(inputs, { expectDatabase })
+  invalidatePromptOverrideSnapshot()
+  if (activeDatabaseName() === expectDatabase) {
+    await loadPromptOverrideSnapshot().catch(() => undefined)
+  }
+  return result
 }
 
 export async function savePromptDraft(

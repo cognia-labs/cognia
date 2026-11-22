@@ -94,6 +94,59 @@ export function estimateEvalTaskCost(
   return targetCost + primaryJudgeCost + secondJudgeCost
 }
 
+const NON_EXECUTION_ENTITY_KEYS = new Set([
+  "avatarColor",
+  "avatarEmoji",
+  "avatarUrl",
+  "createdAt",
+  "updatedAt",
+  "lastUsedAt",
+  "lastRunAt",
+  "usageCount",
+  "isFavorite",
+  "sortOrder",
+])
+
+function stripNonExecutionFields(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripNonExecutionFields)
+  if (value && typeof value === "object" && !(value instanceof Date)) {
+    return Object.fromEntries(
+      Object.entries(value as Record<string, unknown>)
+        .filter(([key]) => !NON_EXECUTION_ENTITY_KEYS.has(key))
+        .map(([key, nested]) => [key, stripNonExecutionFields(nested)])
+    )
+  }
+  return value
+}
+
+function bindingAppliesToEvalVariant(
+  binding: { scope: string; targetId: string },
+  variant: EvalVariant
+): boolean {
+  if (variant.kind === "team") {
+    // Isolated team eval uses pure model targets and does not read promptOverrides.
+    return false
+  }
+  if (binding.scope === "account") return true
+  if (variant.kind === "chat") {
+    return (
+      binding.scope === "agent" &&
+      Boolean(variant.targetId) &&
+      binding.targetId === variant.targetId
+    )
+  }
+  if (variant.kind === "workflow") {
+    const workspaceId = variant.parameters?.workspaceId
+    return (
+      binding.scope === "workspace" &&
+      typeof workspaceId === "string" &&
+      workspaceId.length > 0 &&
+      binding.targetId === workspaceId
+    )
+  }
+  return false
+}
+
 /** Hash the live definition and published prompt revisions, never persist content. */
 export async function readEvalTargetDependency(
   variant: EvalVariant,
@@ -114,38 +167,54 @@ export async function readEvalTargetDependency(
     scope?.assertActive()
     return { variant, executionSettings }
   }
-  const bindings = (await db.promptOverrides.toArray()).filter(
-    (binding) => binding.activeRevisionId
-  )
-  const revisions = await db.promptOverrideRevisions.bulkGet(
-    bindings.map((binding) => binding.activeRevisionId!)
-  )
+  const readActivePrompts = async () => {
+    const allBindings = (await db.promptOverrides.toArray()).filter(
+      (binding) => binding.activeRevisionId && bindingAppliesToEvalVariant(binding, variant)
+    )
+    const revisions = await db.promptOverrideRevisions.bulkGet(
+      allBindings.map((binding) => binding.activeRevisionId!)
+    )
+    return { bindings: allBindings, revisions }
+  }
+  const { bindings, revisions } =
+    typeof (db as { transaction?: unknown }).transaction === "function"
+      ? await db.transaction("r", db.promptOverrides, db.promptOverrideRevisions, readActivePrompts)
+      : await readActivePrompts()
   let definition: unknown
   if (variant.kind === "team") {
     const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
     const store = useAgentTeamStore.getState()
-    definition = {
+    definition = stripNonExecutionFields({
       team: store.getTeam(variant.targetId ?? ""),
       teammates: store.getTeammates(variant.targetId ?? ""),
-      tasks: store.getTeamTasks(variant.targetId ?? ""),
-    }
+    })
   } else if (variant.kind === "chat") {
-    definition = variant.targetId ? await db.characters.get(variant.targetId) : null
+    let rawCharacter: unknown = null
+    if (!variant.targetId) {
+      rawCharacter = null
+    } else if (!scope) {
+      const { resolveCharacterById } = await import("@/lib/db/characters")
+      rawCharacter = (await resolveCharacterById(variant.targetId)) ?? null
+    } else {
+      rawCharacter = (await db.characters.get(variant.targetId)) ?? null
+    }
+    definition = stripNonExecutionFields(rawCharacter)
   } else {
     const versionId = variant.parameters?.workflowVersionId
-    definition =
+    const rawWorkflow =
       typeof versionId === "string"
         ? await db.workflowVersions.get(versionId)
         : await db.workflows.get(variant.targetId ?? "")
+    definition = stripNonExecutionFields(rawWorkflow)
   }
   scope?.assertActive()
   return {
     variant,
     executionSettings,
     definition,
-    // What the target runs, never the editing state around it: a saved draft,
-    // the binding's concurrency counter or its timestamps change nothing a
-    // call sends, so they must not mark the manifest's target as changed.
+    // What the target runs, never the editing state or unrelated targets around
+    // it: a saved draft, another agent's or workspace's override, or cosmetic
+    // fields like avatars and timestamps change nothing this target sends.
     prompts: bindings
       .map((binding, index) => {
         const revision = revisions[index]

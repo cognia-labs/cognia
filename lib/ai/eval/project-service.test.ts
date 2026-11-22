@@ -307,4 +307,60 @@ describe("EvalProjectService v2", () => {
     expect(JSON.stringify(experiment.manifest)).not.toContain("changed-default-model")
     expect(experiment.manifest.targetDigests?.[variant.id]).toMatch(/^sha256:/)
   })
+
+  it("ignores unrelated agent/workspace overrides and cosmetic character edits in target digest (T06)", async () => {
+    await getDb().characters.put({
+      id: "agent-1",
+      name: "Agent One",
+      systemPrompt: "Stable system prompt",
+      avatarUrl: "https://example.invalid/a.png",
+      updatedAt: new Date("2026-11-22T00:00:00Z"),
+      createdAt: new Date("2026-11-22T00:00:00Z"),
+    } as never)
+    const variant = { ...project().variants[0], kind: "chat" as const, targetId: "agent-1" }
+    const baseline = await digestEvalDependency(await readEvalTargetDependency(variant))
+
+    // Cosmetic avatar and timestamp updates must not invalidate the target digest.
+    await getDb().characters.update("agent-1", {
+      avatarUrl: "https://example.invalid/b.png",
+      updatedAt: new Date("2026-11-22T01:00:00Z"),
+    } as never)
+    expect(await digestEvalDependency(await readEvalTargetDependency(variant))).toBe(baseline)
+
+    // Publishing overrides for another agent or workspace must not invalidate agent-1's chat eval.
+    await publishPromptOverride({
+      promptId: "chat.brief-mode",
+      target: { scope: "agent", targetId: "agent-2" },
+      body: "Other agent brevity.",
+      contractVersion: 1,
+      baseDigest: "sha256:base",
+      expectedRev: 0,
+      mutationId: "other-agent",
+      origin: "editor",
+    })
+    await publishPromptOverride({
+      promptId: "chat.brief-mode",
+      target: { scope: "workspace", targetId: "ws-other" },
+      body: "Other workspace brevity.",
+      contractVersion: 1,
+      baseDigest: "sha256:base",
+      expectedRev: 0,
+      mutationId: "other-ws",
+      origin: "editor",
+    })
+    expect(await digestEvalDependency(await readEvalTargetDependency(variant))).toBe(baseline)
+
+    // Publishing an override scoped to agent-1 itself DOES change its target digest.
+    await publishPromptOverride({
+      promptId: "chat.brief-mode",
+      target: { scope: "agent", targetId: "agent-1" },
+      body: "Agent-1 brevity.",
+      contractVersion: 1,
+      baseDigest: "sha256:base",
+      expectedRev: 0,
+      mutationId: "this-agent",
+      origin: "editor",
+    })
+    expect(await digestEvalDependency(await readEvalTargetDependency(variant))).not.toBe(baseline)
+  })
 })

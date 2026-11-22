@@ -20,7 +20,12 @@ const account = { scope: "account" as const, targetId: "" }
 
 it("follows a slot's published revision, draft and history live", async () => {
   const { result } = renderHook(() => usePromptSlot(BRIEF_MODE_PROMPT.id, account))
-  await waitFor(() => expect(result.current).toEqual({ slot: {}, revisions: [] }))
+  await waitFor(() =>
+    expect(result.current).toEqual({
+      slot: { database: expect.any(String) },
+      revisions: [],
+    })
+  )
 
   await act(async () => {
     await publishPromptBody({
@@ -61,4 +66,21 @@ it("lists every scope holding a binding", async () => {
     "account",
     "workspace",
   ])
+})
+
+it("drops the previous target's slot state synchronously when switching targets (T11)", async () => {
+  const wsA = { scope: "workspace" as const, targetId: "ws-1" }
+  const wsB = { scope: "workspace" as const, targetId: "ws-2" }
+  await publishPromptBody({ def: BRIEF_MODE_PROMPT, target: wsA, body: "A text.", expectedRev: 0 })
+  await publishPromptBody({ def: BRIEF_MODE_PROMPT, target: wsB, body: "B text.", expectedRev: 0 })
+
+  const { result, rerender } = renderHook(
+    ({ target }) => usePromptSlot(BRIEF_MODE_PROMPT.id, target),
+    { initialProps: { target: wsA } }
+  )
+  await waitFor(() => expect(result.current?.slot.active?.body).toBe("A text."))
+
+  rerender({ target: wsB })
+  expect(result.current).toBeUndefined()
+  await waitFor(() => expect(result.current?.slot.active?.body).toBe("B text."))
 })

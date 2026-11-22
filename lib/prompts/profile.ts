@@ -12,15 +12,30 @@
  */
 
 import { z } from "zod"
+import * as dbSchema from "@/lib/db/schema"
 import {
-  getPromptOverrideRevisions,
   isPromptOverrideConflict,
-  listPromptOverrideBindings,
+  PromptOverrideAccountChangedError,
+  readActivePromptOverrides,
 } from "@/lib/db/prompt-overrides"
 import { getPromptDefinition, loadPromptCatalog } from "./catalog"
-import { publishPromptBody, readPromptSlot, shippedBodyDigest } from "./service"
+import {
+  publishPromptBody,
+  publishPromptBodyBatch,
+  readPromptSlot,
+  shippedBodyDigest,
+} from "./service"
 import { validatePromptBody, type PromptValidationIssue } from "./template"
 import type { PromptScope, PromptTargetRef } from "./types"
+
+function currentDatabaseName(): string | undefined {
+  try {
+    if (typeof dbSchema.activeDatabaseName === "function") return dbSchema.activeDatabaseName()
+    return dbSchema.getDb?.()?.name
+  } catch {
+    return undefined
+  }
+}
 
 export const PROMPT_PROFILE_KIND = "cognia.prompt-profile" as const
 export const PROMPT_PROFILE_SCHEMA_VERSION = 1 as const
@@ -85,16 +100,10 @@ export interface ExportPromptProfileOptions {
 export async function exportPromptProfile(
   options: ExportPromptProfileOptions = {}
 ): Promise<PromptProfileV1> {
-  const bindings = (await listPromptOverrideBindings()).filter(
-    (binding) =>
-      binding.activeRevisionId && (!options.scopes || options.scopes.includes(binding.scope))
-  )
-  const revisions = await getPromptOverrideRevisions(
-    bindings.map((binding) => binding.activeRevisionId!)
-  )
+  const { entries: activeRows } = await readActivePromptOverrides()
   const entries: PromptProfileEntryV1[] = []
-  bindings.forEach((binding, index) => {
-    const revision = revisions[index]
+  activeRows.forEach(({ binding, revision }) => {
+    if (options.scopes && !options.scopes.includes(binding.scope)) return
     if (!revision || revision.kind !== "published") return
     entries.push({
       promptId: binding.promptId,
@@ -174,9 +183,16 @@ export async function previewPromptProfileImport(
   profile: PromptProfileV1,
   targetMap: PromptImportTargetMap = {}
 ): Promise<PromptImportPreviewEntry[]> {
+  const expectedDatabase = currentDatabaseName()
   await loadPromptCatalog()
   const preview: PromptImportPreviewEntry[] = []
   for (const [index, entry] of profile.entries.entries()) {
+    if (expectedDatabase !== undefined && currentDatabaseName() !== expectedDatabase) {
+      throw new PromptOverrideAccountChangedError(
+        expectedDatabase,
+        currentDatabaseName() ?? "unknown"
+      )
+    }
     const def = getPromptDefinition(entry.promptId)
     const base = { index, entry, upstreamChanged: false, issues: [] as PromptValidationIssue[] }
     if (!def) {
@@ -203,6 +219,9 @@ export async function previewPromptProfileImport(
       continue
     }
     const slot = await readPromptSlot(def.id, target)
+    if (expectedDatabase !== undefined && slot.database !== expectedDatabase) {
+      throw new PromptOverrideAccountChangedError(expectedDatabase, slot.database)
+    }
     const status: PromptImportStatus = !slot.active
       ? "new"
       : slot.active.kind === "published" &&
@@ -218,6 +237,12 @@ export async function previewPromptProfileImport(
       baseRev: slot.binding?.rev ?? 0,
       database: slot.database,
     })
+  }
+  if (expectedDatabase !== undefined && currentDatabaseName() !== expectedDatabase) {
+    throw new PromptOverrideAccountChangedError(
+      expectedDatabase,
+      currentDatabaseName() ?? "unknown"
+    )
   }
   return preview
 }
@@ -249,8 +274,13 @@ export async function applyPromptProfileImport(
   selected: ReadonlySet<number>
 ): Promise<PromptImportResult> {
   await loadPromptCatalog()
-  let applied = 0
   const conflicted: PromptImportPreviewEntry[] = []
+  const candidates: Array<{
+    item: PromptImportPreviewEntry
+    def: NonNullable<ReturnType<typeof getPromptDefinition>>
+  }> = []
+  let expectedDatabase: string | undefined
+
   for (const item of preview) {
     if (!selected.has(item.index) || !applicable(item.status) || !item.target) continue
     if (item.baseRev === undefined || item.database === undefined) {
@@ -258,17 +288,49 @@ export async function applyPromptProfileImport(
         `import preview entry ${item.index} carries no slot revision to apply against`
       )
     }
+    if (expectedDatabase === undefined) {
+      expectedDatabase = item.database
+    } else if (item.database !== expectedDatabase) {
+      throw new PromptOverrideAccountChangedError(expectedDatabase, item.database)
+    }
     const def = getPromptDefinition(item.entry.promptId)
     if (!def) {
       conflicted.push(item)
       continue
     }
+    candidates.push({ item, def })
+  }
+
+  if (candidates.length === 0) return { applied: 0, conflicted }
+
+  if (typeof publishPromptBodyBatch === "function") {
+    const batch = await publishPromptBodyBatch(
+      candidates.map(({ item, def }) => ({
+        def,
+        target: item.target!,
+        body: item.entry.body,
+        expectedRev: item.baseRev!,
+        origin: "import" as const,
+        database: item.database,
+      })),
+      { database: expectedDatabase }
+    )
+    for (const conflictedIndex of batch.conflictedIndices) {
+      const match = candidates[conflictedIndex]
+      if (match) conflicted.push(match.item)
+    }
+    return { applied: batch.applied, conflicted }
+  }
+
+  // Fallback only when a custom test stub wraps `publishPromptBody` without batching.
+  let applied = 0
+  for (const { item, def } of candidates) {
     try {
       await publishPromptBody({
         def,
-        target: item.target,
+        target: item.target!,
         body: item.entry.body,
-        expectedRev: item.baseRev,
+        expectedRev: item.baseRev!,
         origin: "import",
         database: item.database,
       })

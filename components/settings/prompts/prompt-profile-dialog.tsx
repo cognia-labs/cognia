@@ -10,10 +10,11 @@
  * definitions, and only the entries the user ticks are published.
  */
 
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { toast } from "sonner"
 import { DownloadIcon, FileUpIcon } from "lucide-react"
 import { downloadBlob } from "@cognia/plugin-sdk/api/download"
+import * as dbSchema from "@/lib/db/schema"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -157,29 +158,71 @@ function readFileText(file: File): Promise<string> {
   })
 }
 
+function subscribeActiveDb(listener: () => void): () => void {
+  return typeof dbSchema?.onActiveDatabaseChange === "function"
+    ? dbSchema.onActiveDatabaseChange(() => listener())
+    : () => undefined
+}
+
+function readActiveDb(): string {
+  try {
+    if (typeof dbSchema?.activeDatabaseName === "function") return dbSchema.activeDatabaseName()
+    return dbSchema?.getDb?.()?.name ?? ""
+  } catch {
+    return ""
+  }
+}
+
 function ImportPane({ onDone }: { onDone(): void }) {
   const { t, entryTitle } = usePromptLabels()
   const fileRef = useRef<HTMLInputElement>(null)
+  const activeDb = useSyncExternalStore(subscribeActiveDb, readActiveDb, () => "")
   const [profile, setProfile] = useState<PromptProfileV1 | null>(null)
   const [targetMap, setTargetMap] = useState<Record<string, string>>({})
-  const [preview, setPreview] = useState<PromptImportPreviewEntry[] | null>(null)
+  const [previewState, setPreviewState] = useState<{
+    key: string
+    entries: PromptImportPreviewEntry[]
+  } | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [busy, setBusy] = useState(false)
+
+  const requestKey = useMemo(
+    () =>
+      JSON.stringify([
+        activeDb,
+        Object.entries(targetMap).sort(([left], [right]) => left.localeCompare(right)),
+      ]),
+    [activeDb, targetMap]
+  )
+  const preview = previewState?.entries ?? null
+  const previewReady = previewState !== null && previewState.key === requestKey
 
   useEffect(() => {
     if (!profile) return
     let cancelled = false
-    void previewPromptProfileImport(profile, targetMap).then((next) => {
-      if (cancelled) return
-      setPreview(next)
-      setSelected(
-        new Set(next.filter((item) => APPLICABLE.has(item.status)).map((item) => item.index))
-      )
-    })
+    void previewPromptProfileImport(profile, targetMap)
+      .then((next) => {
+        if (cancelled) return
+        setPreviewState({ key: requestKey, entries: next })
+        setSelected(
+          new Set(next.filter((item) => APPLICABLE.has(item.status)).map((item) => item.index))
+        )
+      })
+      .catch((error) => {
+        if (cancelled) return
+        setPreviewState(null)
+        setSelected(new Set())
+        if (isPromptOverrideAccountChanged(error)) toast.error(t("toast.accountChanged"))
+        else {
+          toast.error(
+            t("toast.failed", { message: error instanceof Error ? error.message : String(error) })
+          )
+        }
+      })
     return () => {
       cancelled = true
     }
-  }, [profile, targetMap])
+  }, [profile, requestKey, t, targetMap])
 
   /** Each scoped source target the profile names, once. */
   const sourceTargets = useMemo(() => {
@@ -195,7 +238,8 @@ function ImportPane({ onDone }: { onDone(): void }) {
     try {
       const parsed = parsePromptProfile(await readFileText(file))
       setTargetMap({})
-      setPreview(null)
+      setPreviewState(null)
+      setSelected(new Set())
       setProfile(parsed)
     } catch (error) {
       toast.error(
@@ -207,7 +251,7 @@ function ImportPane({ onDone }: { onDone(): void }) {
   }
 
   const apply = async () => {
-    if (!preview) return
+    if (!preview || !previewReady) return
     setBusy(true)
     try {
       const result = await applyPromptProfileImport(preview, selected)
@@ -292,7 +336,7 @@ function ImportPane({ onDone }: { onDone(): void }) {
                 <li key={item.index} className="flex items-start gap-2 px-3 py-2">
                   <Checkbox
                     className="mt-0.5"
-                    disabled={!applicable}
+                    disabled={!applicable || !previewReady}
                     checked={selected.has(item.index)}
                     aria-label={entryTitle(item.entry.promptId)}
                     onCheckedChange={(checked) =>
@@ -331,7 +375,11 @@ function ImportPane({ onDone }: { onDone(): void }) {
             })}
           </ul>
           <DialogFooter>
-            <Button size="sm" disabled={busy || selected.size === 0} onClick={() => void apply()}>
+            <Button
+              size="sm"
+              disabled={busy || !previewReady || selected.size === 0}
+              onClick={() => void apply()}
+            >
               {t("profile.applyAction", { count: selected.size })}
             </Button>
           </DialogFooter>

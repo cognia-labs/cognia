@@ -330,3 +330,42 @@ it("shows the last use recorded in this window", async () => {
   )
   expect(screen.getByText(/Override at the Workspace scope/)).toBeInTheDocument()
 })
+
+it("loads Workspace B's text instead of overwriting it with Workspace A's when both are at rev 1 (T11)", async () => {
+  useProjectStore.setState({
+    projects: [
+      { id: "ws-1", name: "Workspace A", roots: [] },
+      { id: "ws-2", name: "Workspace B", roots: [] },
+    ],
+  } as never)
+  const workspaceA = { scope: "workspace" as const, targetId: "ws-1" }
+  const workspaceB = { scope: "workspace" as const, targetId: "ws-2" }
+  await publishPromptBody({
+    def: BRIEF_MODE_PROMPT,
+    target: workspaceA,
+    expectedRev: 0,
+    body: "Workspace A wording.",
+  })
+  await publishPromptBody({
+    def: BRIEF_MODE_PROMPT,
+    target: workspaceB,
+    expectedRev: 0,
+    body: "Workspace B wording.",
+    origin: "import",
+  })
+
+  await renderDetail(BRIEF_MODE_PROMPT)
+  fireEvent.change(screen.getAllByRole("combobox")[0], { target: { value: "workspace" } })
+  fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "ws-1" } })
+  await waitFor(() => expect(editor().value).toBe("Workspace A wording."))
+
+  fireEvent.change(screen.getAllByRole("combobox")[1], { target: { value: "ws-2" } })
+  await waitFor(() => expect(editor().value).toBe("Workspace B wording."))
+
+  await userEvent.click(screen.getByRole("button", { name: "Publish" }))
+  await waitFor(async () => {
+    const slot = await readPromptSlot(BRIEF_MODE_PROMPT.id, workspaceB)
+    expect(slot.binding?.rev).toBe(2)
+    expect(slot.active?.body).toBe("Workspace B wording.")
+  })
+})

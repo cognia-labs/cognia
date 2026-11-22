@@ -89,11 +89,11 @@ export function CodePromptDetail({ def }: { def: PromptDefinitionV1 }) {
   // The editor's text and the binding revision it was seeded from.
   const savedText = slot?.draft?.body ?? slot?.active?.body ?? def.defaultBody
   const slotRev = slot?.binding?.rev ?? 0
-  const seedKey = `${target.scope}:${target.targetId}`
   // The account database the slot was read from: every write names it, so an
   // edit begun before an account switch is refused instead of landing in the
   // account that is active by then.
   const slotDatabase = slot?.database
+  const seedKey = `${slotDatabase ?? ""}:${def.id}:${target.scope}:${target.targetId}`
   const [text, setText] = useState(savedText)
   const [seed, setSeed] = useState<{
     key: string
@@ -108,7 +108,13 @@ export function CodePromptDetail({ def }: { def: PromptDefinitionV1 }) {
   }
   const dirty = seed !== null && text !== seed.text
   // A write elsewhere moved the slot: follow it unless the user has edits.
-  if (seed && seed.key === seedKey && slotRev !== seed.rev && !dirty) {
+  if (
+    loaded &&
+    seed &&
+    seed.key === seedKey &&
+    !dirty &&
+    (slotRev !== seed.rev || savedText !== seed.text || slotDatabase !== seed.database)
+  ) {
     setSeed({ key: seedKey, rev: slotRev, text: savedText, database: slotDatabase })
     setText(savedText)
   }

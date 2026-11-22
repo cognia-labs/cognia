@@ -53,10 +53,16 @@ export function OwnerPromptDetail({ resource, ctx, onChanged, onSelect }: OwnerP
 
   // The editor text and the document it was seeded from.
   const [text, setText] = useState("")
+  const [seededKey, setSeededKey] = useState<string | null>(null)
   const [seededFrom, setSeededFrom] = useState<OwnerPromptDocument | null>(null)
-  if (document && document !== seededFrom) {
-    // A reload of the same text (after our own save) keeps nothing to lose;
-    // a different resource always starts from its own text.
+  if (seededKey !== resource.key) {
+    setSeededKey(resource.key)
+    setSeededFrom(null)
+  }
+  const hasUnsavedEdit = seededFrom !== null && text !== seededFrom.text
+  if (document && document !== seededFrom && (seededFrom === null || !hasUnsavedEdit)) {
+    // A reload of the same text (after our own save) or an untouched resource
+    // takes the freshly read text; unsaved typing on the same resource is kept.
     setSeededFrom(document)
     setText(document.text)
   }
@@ -88,6 +94,7 @@ export function OwnerPromptDetail({ resource, ctx, onChanged, onSelect }: OwnerP
     try {
       await adapter.save(resource.key, text, version, ctx)
       setConflict(null)
+      setSeededFrom(null)
       toast.success(t("toast.saved"))
       onChanged()
       reload()
@@ -140,6 +147,7 @@ export function OwnerPromptDetail({ resource, ctx, onChanged, onSelect }: OwnerP
     setBusy(true)
     try {
       await adapter.reset(resource.key, ctx)
+      setSeededFrom(null)
       toast.success(t("toast.followsBase"))
       onChanged()
       reload()

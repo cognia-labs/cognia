@@ -17,11 +17,14 @@
  */
 
 import { useCallback, useEffect, useState } from "react"
+import { isAxisOnlyLegacyModeId } from "@/lib/agent/composition/legacy-mode-mapping"
 import {
   BUILT_IN_AGENT_MODES,
   BUILT_IN_MODE_PROMPTS,
   MODE_PROMPT_PASSTHROUGH_VALUES,
 } from "@/lib/agent/modes/built-ins"
+import { PLAN_MODE_PROMPT, PLAN_MODE_STRUCTURED_STEPS_PROMPT } from "@/lib/agent/prompts/plan-mode"
+import * as dbSchema from "@/lib/db/schema"
 import { resolveCharacterById } from "@/lib/db/characters"
 import { listEnabledSkillsByIds } from "@/lib/db/skills"
 import { renderHarnessSections } from "@/lib/harness/render"
@@ -65,6 +68,13 @@ export function useEffectiveChatPreview(selection: EffectiveChatPreviewSelection
     state: Exclude<EffectiveChatPreviewState, { status: "loading" }>
   } | null>(null)
   const reload = useCallback(() => setEpoch((value) => value + 1), [])
+  useEffect(() => {
+    if (typeof dbSchema.onActiveDatabaseChange !== "function") return
+    return dbSchema.onActiveDatabaseChange(() => {
+      setResult(null)
+      setEpoch((value) => value + 1)
+    })
+  }, [])
   const settings = useSettingsStore((store) => store.settings)
   // Subscribed so an edited mode recomposes; the lookup itself goes through
   // `resolveActiveAgentMode`. Plugin records likewise, so a contributed mode
@@ -121,18 +131,39 @@ export function useEffectiveChatPreview(selection: EffectiveChatPreviewSelection
           modeDescription: source.description,
           tools: source.tools ? [...source.tools] : undefined,
         })
+      let planPreviewed = false
       if (builtIn) {
-        const def = BUILT_IN_MODE_PROMPTS.get(builtIn.id)
-        const raw = def
-          ? (
-              await resolvePromptAsync(def, {
-                context: workspaceId ? { workspaceId } : {},
-                values: MODE_PROMPT_PASSTHROUGH_VALUES,
-                record: false,
-              })
-            ).text
-          : (builtIn.systemPrompt ?? "")
-        mode = { name: builtIn.name, text: renderMode(raw, builtIn) }
+        if (builtIn.id === "plan") {
+          // Normal Plan composition maps `plan` to Standard + `authority: "plan"`,
+          // which sends `PLAN_MODE_PROMPT` (`agent.plan-mode`) rather than legacy `agent.mode.plan`.
+          const resolvedPlan = await resolvePromptAsync(PLAN_MODE_PROMPT, {
+            context: {
+              ...(workspaceId ? { workspaceId } : {}),
+              ...(agentId ? { agentId } : {}),
+            },
+            record: false,
+          })
+          const planParts = [
+            resolvedPlan.text,
+            settings?.planSettings?.interactiveHtmlView
+              ? PLAN_MODE_STRUCTURED_STEPS_PROMPT.defaultBody
+              : "",
+          ].filter(Boolean)
+          mode = { name: builtIn.name, text: planParts.join("\n\n") }
+          planPreviewed = true
+        } else if (!isAxisOnlyLegacyModeId(builtIn.id)) {
+          const def = BUILT_IN_MODE_PROMPTS.get(builtIn.id)
+          const raw = def
+            ? (
+                await resolvePromptAsync(def, {
+                  context: workspaceId ? { workspaceId } : {},
+                  values: MODE_PROMPT_PASSTHROUGH_VALUES,
+                  record: false,
+                })
+              ).text
+            : (builtIn.systemPrompt ?? "")
+          mode = { name: builtIn.name, text: renderMode(raw, builtIn) }
+        }
       } else if (other) {
         mode = { name: other.name, text: renderMode(other.systemPrompt ?? "", other) }
       }
@@ -158,6 +189,7 @@ export function useEffectiveChatPreview(selection: EffectiveChatPreviewSelection
           ? { name: project.name, customInstructions: project.customInstructions }
           : null,
         mode,
+        ...(planPreviewed ? { planPreviewed: true } : {}),
         skills,
       })
     }

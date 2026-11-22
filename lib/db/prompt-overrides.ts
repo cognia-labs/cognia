@@ -333,6 +333,87 @@ export async function publishPromptOverride(
   })
 }
 
+/**
+ * Publish a batch of overrides atomically in one transaction of one account
+ * database. An account switch before the transaction starts aborts the whole
+ * batch with zero writes; per-slot concurrency conflicts are skipped and
+ * returned by index while valid slots commit together.
+ */
+export async function publishPromptOverrideBatch(
+  inputs: readonly WriteBodyInput[],
+  opts: { expectDatabase?: string } = {}
+): Promise<{ applied: number; conflictedIndices: number[] }> {
+  const db = getDb()
+  const outcome = await db.transaction(
+    "rw",
+    db.promptOverrides,
+    db.promptOverrideRevisions,
+    async () => {
+      assertDatabase(db, opts.expectDatabase ?? inputs[0]?.expectDatabase)
+      let applied = 0
+      let anyChanged = false
+      const conflictedIndices: number[] = []
+      for (const [index, input] of inputs.entries()) {
+        assertDatabase(db, input.expectDatabase)
+        const { scope, targetId } = normalizeTarget(input.target)
+        const existing = await db.promptOverrides
+          .where("[promptId+scope+targetId]")
+          .equals([input.promptId, scope, targetId])
+          .first()
+        if (existing) {
+          const replay = await db.promptOverrideRevisions
+            .where("bindingId")
+            .equals(existing.id)
+            .filter((row) => row.mutationId === input.mutationId)
+            .first()
+          if (replay) {
+            applied += 1
+            continue
+          }
+        }
+        const currentRev = existing?.rev ?? 0
+        if (currentRev !== input.expectedRev) {
+          conflictedIndices.push(index)
+          continue
+        }
+        const now = Math.max(input.now ?? Date.now(), (existing?.updatedAt ?? -1) + 1)
+        const binding: PromptOverrideBindingRow = existing ?? {
+          id: newId("pob"),
+          promptId: input.promptId,
+          scope,
+          targetId,
+          activeRevisionId: null,
+          draftRevisionId: null,
+          rev: 0,
+          createdAt: now,
+          updatedAt: now,
+        }
+        const published = revision(binding, input, now, {
+          kind: "published",
+          body: input.body,
+          contractVersion: input.contractVersion,
+          baseDigest: input.baseDigest,
+        })
+        const next: PromptOverrideBindingRow = {
+          ...binding,
+          activeRevisionId: published.id,
+          draftRevisionId: null,
+          rev: currentRev + 1,
+          updatedAt: now,
+        }
+        await db.promptOverrideRevisions.put(published)
+        await db.promptOverrides.put(next)
+        await pruneRevisions(next)
+        applied += 1
+        anyChanged = true
+      }
+      return { applied, conflictedIndices, anyChanged }
+    }
+  )
+  if (outcome.anyChanged) notify()
+  return { applied: outcome.applied, conflictedIndices: outcome.conflictedIndices }
+}
+
 /** Return the slot to inheritance. History is kept; the draft is discarded. */
 export async function resetPromptOverride(
   input: MutationBase & { contractVersion: number; baseDigest: string }

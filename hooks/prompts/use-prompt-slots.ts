@@ -6,7 +6,9 @@
  * second window or an import shows up without a manual refresh.
  */
 
+import { useSyncExternalStore } from "react"
 import { useLiveQuery } from "dexie-react-hooks"
+import * as dbSchema from "@/lib/db/schema"
 import {
   listPromptOverrideRevisions,
   type PromptOverrideRevisionRow,
@@ -14,19 +16,49 @@ import {
 import { listPromptSlots, readPromptSlot, type PromptSlotState } from "@/lib/prompts/service"
 import type { PromptTargetRef } from "@/lib/prompts/types"
 
-/** Every scope that holds a binding for the prompt; `undefined` while loading. */
-export function usePromptSlots(promptId: string): PromptSlotState[] | undefined {
-  return useLiveQuery(() => listPromptSlots(promptId), [promptId])
+function subscribeActiveDatabase(listener: () => void): () => void {
+  return typeof dbSchema.onActiveDatabaseChange === "function"
+    ? dbSchema.onActiveDatabaseChange(() => listener())
+    : () => undefined
 }
 
-/** One slot and its history; `undefined` while loading. */
+function readActiveDatabase(): string {
+  try {
+    if (typeof dbSchema.activeDatabaseName === "function") return dbSchema.activeDatabaseName()
+    return dbSchema.getDb?.()?.name ?? ""
+  } catch {
+    return ""
+  }
+}
+
+function useActivePromptDatabase(): string {
+  return useSyncExternalStore(subscribeActiveDatabase, readActiveDatabase, () => "")
+}
+
+/** Every scope that holds a binding for the prompt; `undefined` while loading. */
+export function usePromptSlots(promptId: string): PromptSlotState[] | undefined {
+  const database = useActivePromptDatabase()
+  const queryKey = `${database}:${promptId}`
+  const queried = useLiveQuery(async () => {
+    const slots = await listPromptSlots(promptId)
+    return { queryKey, slots }
+  }, [database, promptId])
+  return queried?.queryKey === queryKey ? queried.slots : undefined
+}
+
+/** One slot and its history; `undefined` while loading or switching targets/accounts. */
 export function usePromptSlot(
   promptId: string,
   target: PromptTargetRef
 ): { slot: PromptSlotState; revisions: PromptOverrideRevisionRow[] } | undefined {
-  return useLiveQuery(async () => {
+  const database = useActivePromptDatabase()
+  const queryKey = `${database}:${promptId}:${target.scope}:${target.targetId}`
+  const queried = useLiveQuery(async () => {
     const slot = await readPromptSlot(promptId, target)
     const revisions = slot.binding ? await listPromptOverrideRevisions(slot.binding.id) : []
-    return { slot, revisions }
-  }, [promptId, target.scope, target.targetId])
+    return { queryKey, slot, revisions }
+  }, [database, promptId, target.scope, target.targetId])
+  return queried?.queryKey === queryKey
+    ? { slot: queried.slot, revisions: queried.revisions }
+    : undefined
 }

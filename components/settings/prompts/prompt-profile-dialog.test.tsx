@@ -188,3 +188,35 @@ it("rejects a file that is not a profile", async () => {
   )
   expect(screen.queryByTestId("prompt-import-preview")).toBeNull()
 })
+
+it("disables Publish while a target remapping preview is in flight so stale targets cannot be written (T12)", async () => {
+  const text = await profileText()
+  await publishPromptBody({
+    def: BRIEF_MODE_PROMPT,
+    target: { scope: "workspace", targetId: "ws-other" },
+    expectedRev: 0,
+    body: "Existing destination.",
+  })
+  await openImport(text)
+  const preview = await screen.findByTestId("prompt-import-preview")
+  const mapping = await mappingFor("ws-src")
+  await waitFor(() => expect(within(preview).getAllByText("New")).toHaveLength(2))
+
+  fireEvent.change(mapping, { target: { value: "ws-other" } })
+  const publishButton = screen.getByRole("button", { name: "Publish 2 overrides" })
+  expect(publishButton).toBeDisabled()
+  fireEvent.click(publishButton)
+
+  await within(preview).findByText(/replace/i)
+  await waitFor(() => expect(publishButton).not.toBeDisabled())
+  expect(
+    (await readPromptSlot(BRIEF_MODE_PROMPT.id, { scope: "workspace", targetId: "ws-src" })).binding
+  ).toBeUndefined()
+
+  await userEvent.click(publishButton)
+  await waitFor(() => expect(toast.success).toHaveBeenCalledWith("Published 2 overrides."))
+  expect(
+    (await readPromptSlot(BRIEF_MODE_PROMPT.id, { scope: "workspace", targetId: "ws-other" }))
+      .active?.body
+  ).toBe("Workspace brevity.")
+})
