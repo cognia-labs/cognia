@@ -1,10 +1,10 @@
 /** ADR-0243 identity records and explicitly marked phase-3A run-tree caps. */
-import type {
-  AgentPermissionMode,
-  UnattendedPermissionProfileV1,
-} from "@cognia/plugin-contract/types/agent-config/index"
+import type { AgentPermissionMode } from "@cognia/plugin-contract/types/agent-config/agent-modes"
 import { narrowAuthority } from "@cognia/plugin-contract/types/agent-config/agent-composition"
-import { narrowPermissionProfile } from "@cognia/plugin-contract/types/agent-config/unattended-permission"
+import {
+  narrowPermissionProfile,
+  type UnattendedPermissionProfileV1,
+} from "@cognia/plugin-contract/types/agent-config/unattended-permission"
 
 export type PrincipalRefV1 =
   | { kind: "local-person"; userId?: string; accountId?: string }

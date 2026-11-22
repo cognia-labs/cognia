@@ -18,7 +18,7 @@
  */
 
 import { CogsetSwitcher } from "@/components/plugins/cogsets/cogset-switcher"
-import { useCallback } from "react"
+import { useCallback, useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { useLiveQuery } from "dexie-react-hooks"
 import { toast } from "sonner"
@@ -39,8 +39,11 @@ interface PluginRow {
 export function PluginsPanel() {
   const t = useTranslations("mobile.plugins")
   const tFeedback = useTranslations("plugins.lifecycleFeedback")
-  const rows =
-    useLiveQuery<PluginRow[]>(() => getDb().plugins.toArray() as Promise<PluginRow[]>, []) ?? []
+  const liveRows = useLiveQuery<PluginRow[]>(
+    () => getDb().plugins.toArray() as Promise<PluginRow[]>,
+    []
+  )
+  const rows = useMemo(() => liveRows ?? [], [liveRows])
 
   // Declared *before* the early return so the hook order is stable.
   const onToggle = useCallback(

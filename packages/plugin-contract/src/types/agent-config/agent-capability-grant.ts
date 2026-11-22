@@ -24,13 +24,14 @@
 
 import type { ValidationResult } from "./agent-execution"
 import { AUTHORITY_RANK, narrowAuthority } from "./agent-composition"
-import type { AgentPermissionMode } from "./agent-modes"
-import type { SendOptions } from "./index"
+import type { AgentEffortLevel, AgentPermissionMode } from "./agent-modes"
 import {
   narrowPermissionProfile,
   validatePermissionProfile,
   type UnattendedPermissionProfileV1,
 } from "./unattended-permission"
+
+export type { RunAuthorityV1 } from "../execution/acting-identity"
 
 /** Wire-format version of {@link AgentCapabilityGrantV1}. */
 export const AGENT_CAPABILITY_GRANT_SCHEMA_VERSION = 1
@@ -92,7 +93,7 @@ export interface AgentCapabilityGrantV1 {
   model?: string
   /** Provider for this run. Heads the provider chain, like {@link model}. */
   provider?: string
-  effort?: SendOptions["effort"]
+  effort?: AgentEffortLevel
   /** Agentic-turn ceiling for this run, 1 through 100. */
   maxTurns?: number
   /** Per-attempt USD ceiling; composed grants may only lower it. */

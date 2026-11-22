@@ -97,7 +97,7 @@ function planDeps(overrides: Partial<CogpackImportPlanDeps> = {}): CogpackImport
         dependencies: { "not-here": "^1.0.0", "too-old": "^2.0.0" },
         configSchema: { properties: { token: { type: "string", secret: true } } },
       } as unknown as PluginManifest,
-      install: (installers.older = jest.fn(async () => ({}))),
+      install: (installers.older = jest.fn(async () => undefined)),
     },
     fresh: {
       manifest: {
@@ -105,7 +105,7 @@ function planDeps(overrides: Partial<CogpackImportPlanDeps> = {}): CogpackImport
         type: "wasm",
         permissions: ["clipboard:read"],
       } as unknown as PluginManifest,
-      install: (installers.fresh = jest.fn(async () => ({}))),
+      install: (installers.fresh = jest.fn(async () => undefined)),
     },
     shipped: { unavailable: { reason: "builtin-missing" } },
     "wasm-git": {

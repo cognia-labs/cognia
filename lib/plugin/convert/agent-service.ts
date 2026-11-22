@@ -106,7 +106,9 @@ const workspaceFs: PluginConversionWorkspaceFs = {
   readText: readWorkspaceFile,
   createDir: createWorkspaceDir,
   writeText: writeWorkspaceFile,
-  copy: copyWorkspaceEntry,
+  copy: async (root, fromRelPath, toRelPath) => {
+    await copyWorkspaceEntry(root, fromRelPath, toRelPath)
+  },
 }
 
 function normalizeRelativeDirectory(value: string, field: string): string {

@@ -43,6 +43,8 @@
       "@cognia/a2ui-core/*": ["../../packages/a2ui-core/src/*"],
       "@cognia/time": ["../time/src/index.ts"],
       "@cognia/time/*": ["../../packages/time/src/*"],
+      "@cognia/feishu-protocol": ["../feishu-protocol/src/index.ts"],
+      "@cognia/feishu-protocol/*": ["../../packages/feishu-protocol/src/*"],
       "@cognia/github-bot-kit": ["../github-bot-kit/src/index.ts"],
       "@cognia/github-bot-kit/*": ["../../packages/github-bot-kit/src/*"],
       "@cognia/latex": ["../latex/src/index.ts"],

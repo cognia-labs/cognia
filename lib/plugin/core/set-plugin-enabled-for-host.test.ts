@@ -4,27 +4,31 @@
 
 import "fake-indexeddb/auto"
 
-const mockToggle = jest.fn()
-const mockIsCapacitor = jest.fn()
-const mockHasWebCompanionTarget = jest.fn()
-const mockRecordAnalytic = jest.fn()
-
 jest.mock("./toggle-plugin-enabled", () => ({
-  togglePluginEnabled: (...args: unknown[]) => mockToggle(...args),
+  togglePluginEnabled: jest.fn(),
 }))
 jest.mock("@/lib/platform/detect", () => ({
   ...jest.requireActual("@/lib/platform/detect"),
-  isCapacitor: () => mockIsCapacitor(),
+  isCapacitor: jest.fn(() => false),
 }))
 jest.mock("@/lib/platform/web-companion", () => ({
-  hasWebCompanionTarget: () => mockHasWebCompanionTarget(),
+  hasWebCompanionTarget: jest.fn(() => false),
 }))
 jest.mock("@/lib/plugin/analytics/record", () => ({
   PLUGIN_ANALYTIC_KEYS: { enabled: "lifecycle.enabled", disabled: "lifecycle.disabled" },
-  recordPluginAnalytic: (...args: unknown[]) => mockRecordAnalytic(...args),
+  recordPluginAnalytic: jest.fn(),
 }))
 
+import { togglePluginEnabled } from "./toggle-plugin-enabled"
+import { isCapacitor } from "@/lib/platform/detect"
+import { hasWebCompanionTarget } from "@/lib/platform/web-companion"
+import { recordPluginAnalytic } from "@/lib/plugin/analytics/record"
 import { isMirroredPluginClient, setPluginEnabledForHost } from "./set-plugin-enabled-for-host"
+
+const mockToggle = togglePluginEnabled as jest.Mock
+const mockIsCapacitor = isCapacitor as jest.Mock
+const mockHasWebCompanionTarget = hasWebCompanionTarget as jest.Mock
+const mockRecordAnalytic = recordPluginAnalytic as jest.Mock
 import { mirrorViolations } from "@/lib/plugin/lifecycle/contract"
 import { settleMirroredPluginToggle } from "./mirrored-toggle-receipt"
 import { __resetDbForTesting, activateAccountDatabase, getDb } from "@/lib/db/schema"
@@ -54,7 +58,7 @@ beforeEach(async () => {
     capabilities: [],
     path: "/plugins/p1",
     manifest: {},
-    installedAt: 1,
+    createdAt: 1,
     updatedAt: 1,
   })
 })
@@ -148,17 +152,18 @@ describe("setPluginEnabledForHost", () => {
       mockIsCapacitor.mockReturnValue(true)
       const db = getDb()
       const update = db.plugins.update.bind(db.plugins)
-      jest.spyOn(db.plugins, "update").mockImplementationOnce(async (key, changes) => {
-        const count = await update(key, changes)
-        setActiveRuntimeTargetContext(
-          change === "account" ? "acct_other" : scope.accountId,
-          change === "target" ? "host-b" : scope.targetId,
-          change === "generation"
-            ? getActiveRuntimeTargetContext()!.routingGeneration + 1
-            : undefined
-        )
-        return count
-      })
+      jest.spyOn(db.plugins, "update").mockImplementationOnce((key, changes) =>
+        update(key, changes).then((count) => {
+          setActiveRuntimeTargetContext(
+            change === "account" ? "acct_other" : scope.accountId,
+            change === "target" ? "host-b" : scope.targetId,
+            change === "generation"
+              ? getActiveRuntimeTargetContext()!.routingGeneration + 1
+              : undefined
+          )
+          return count
+        })
+      )
 
       const result = await setPluginEnabledForHost("p1", true)
       const jobs = await db.mobileOutboundQueue.toArray()
@@ -175,11 +180,12 @@ describe("setPluginEnabledForHost", () => {
     mockIsCapacitor.mockReturnValue(true)
     const db = getDb()
     const put = db.mobileOutboundQueue.put.bind(db.mobileOutboundQueue)
-    jest.spyOn(db.mobileOutboundQueue, "put").mockImplementationOnce(async (row) => {
-      const id = await put(row)
-      setActiveRuntimeTargetContext(scope.accountId, "host-b")
-      return id
-    })
+    jest.spyOn(db.mobileOutboundQueue, "put").mockImplementationOnce((row) =>
+      put(row).then((id) => {
+        setActiveRuntimeTargetContext(scope.accountId, "host-b")
+        return id
+      })
+    )
 
     await expect(setPluginEnabledForHost("p1", true)).resolves.toMatchObject({ ok: false })
     expect(await db.plugins.get("p1")).toMatchObject({ enabled: false, updatedAt: 1 })
@@ -190,12 +196,13 @@ describe("setPluginEnabledForHost", () => {
     mockIsCapacitor.mockReturnValue(true)
     const db = getDb()
     const update = db.plugins.update.bind(db.plugins)
-    jest.spyOn(db.plugins, "update").mockImplementationOnce(async (key, changes) => {
-      const count = await update(key, changes)
-      activateAccountDatabase("acct_other", "host-b")
-      setActiveRuntimeTargetContext("acct_other", "host-b")
-      return count
-    })
+    jest.spyOn(db.plugins, "update").mockImplementationOnce((key, changes) =>
+      update(key, changes).then((count) => {
+        activateAccountDatabase("acct_other", "host-b")
+        setActiveRuntimeTargetContext("acct_other", "host-b")
+        return count
+      })
+    )
 
     try {
       await expect(setPluginEnabledForHost("p1", true)).resolves.toMatchObject({ ok: false })
@@ -232,10 +239,11 @@ describe("setPluginEnabledForHost", () => {
     mockIsCapacitor.mockReturnValue(true)
     const db = getDb()
     const put = db.mobileOutboundQueue.put.bind(db.mobileOutboundQueue)
-    jest.spyOn(db.mobileOutboundQueue, "put").mockImplementationOnce(async (row) => {
-      await put(row)
-      throw new Error("enqueue failed after insertion")
-    })
+    jest.spyOn(db.mobileOutboundQueue, "put").mockImplementationOnce((row) =>
+      put(row).then(() => {
+        throw new Error("enqueue failed after insertion")
+      })
+    )
 
     await expect(setPluginEnabledForHost("p1", true)).resolves.toEqual({
       ok: false,

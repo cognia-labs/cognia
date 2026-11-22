@@ -3,7 +3,6 @@
  */
 import type { ContextLevel } from "../claude/usage"
 import type { LimitsMeter, RepresentativeClaim, UsageStatus } from "../../types/subscription/index"
-import type { UsageLevel } from "../subscription/anthropic/usage-analytics"
 import type { UsageNote, UsageScopeReport } from "../usage/usage-report"
 import type { UsageWindowsSource } from "../subscription/anthropic/overview-windows"
 
