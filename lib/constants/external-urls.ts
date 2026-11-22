@@ -33,7 +33,10 @@ export const LICENSE_URL = `${GITHUB_URL}/blob/master/LICENSE`
 export const COMMUNITY_URL = `${GITHUB_URL}/discussions`
 
 /** Privacy policy (hosted on the docs site). */
-export const PRIVACY_URL = `${DOCS_URL}/docs/en/privacy`
+export const PRIVACY_URL = `${DOCS_URL}/en/docs/privacy`
+
+/** Terms of service (hosted on the docs site). */
+export const TERMS_URL = `${DOCS_URL}/en/docs/terms`
 
 /**
  * Deep link to the "connect your phone to the desktop" guide. Used by the

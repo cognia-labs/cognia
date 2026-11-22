@@ -60,6 +60,21 @@ describe("the deletion endpoint", () => {
     await expect(
       cancelAccountDeletion(current, { fetchImpl: respond(200, { status: "weird" }) })
     ).rejects.toMatchObject({ code: "failed" })
+
+    await expect(
+      readAccountDeletion(current, {
+        fetchImpl: respond(200, { status: "purging", coolingOffDays: 7 }),
+      })
+    ).resolves.toEqual({ status: "purging", coolingOffDays: 7 })
+
+    await expect(
+      cancelAccountDeletion(current, {
+        fetchImpl: respond(409, {
+          error: "deletion_in_progress",
+          error_description: "already purging",
+        }),
+      })
+    ).rejects.toMatchObject({ code: "in-progress", message: "already purging" })
   })
 
   it("names a refused token, a stale sign-in, and anything else", async () => {

@@ -1579,8 +1579,16 @@
         "tokenLabel": "Invitation token",
         "tokenPlaceholder": "Paste the token"
       },
+      "legal": {
+        "and": "and",
+        "prefix": "By signing in, you agree to the",
+        "privacy": "Privacy Policy",
+        "suffix": ".",
+        "terms": "Terms of Service"
+      },
       "official": {
         "description": "One account for Cognia on all your devices. Signing in is optional: everything you do stays on this device either way.",
+        "noProviders": "No sign-in providers are currently enabled on this service. You can continue offline and sign in later.",
         "offlineHint": "You can sign in later from Settings → Account. This screen will not appear again.",
         "privacy": "Cognia keeps only who you are (your name, email and linked sign-ins), never access to the account you sign in with.",
         "title": "Sign in to your Cognia account"
@@ -1655,6 +1663,7 @@
       "errorUnknown": "Unlocking failed. Copy the details below if it keeps happening.",
       "errorVaultIncompatible": "This account's vault was written by a newer version of the app.",
       "errorVaultNotProvisioned": "This profile's local encryption vault is missing on this device. Restore from a backup before continuing, or reset local data if you want to start fresh.",
+      "firstRunDescription": "Step 1 of 2 — create an encrypted profile on this device. Optional Cognia cloud sign-in comes next.",
       "firstRunForm": "Create local account",
       "firstRunTitle": "Create local account",
       "hidePassword": "Hide password",
@@ -1675,6 +1684,7 @@
       "recoveryDescription": "Save this recovery key before continuing. It can unlock this profile's encrypted local data on this device if you forget the password.",
       "recoveryDownload": "Download .txt",
       "recoveryForm": "Save recovery key",
+      "recoveryKeyDistinction": "This is your Local Vault Recovery Key for this device only — it is separate from your optional Cognia cloud account and Cloud Sync Recovery Key.",
       "recoveryKeyLabel": "Recovery key",
       "recoveryKeyPlaceholder": "Paste your recovery key",
       "recoverySaved": "I saved this recovery key",
@@ -1735,6 +1745,7 @@
         "error": {
           "differentPerson": "You confirmed with a different account than the one signed in here. Nothing was deleted.",
           "generic": "Could not reach the account service: {message}",
+          "inProgress": "Cooling-off has ended and deletion is already in progress. It can no longer be cancelled.",
           "notScheduled": "Account deletion was not scheduled because the server state changed. Refresh and check your account status.",
           "nothingToCancel": "There was no pending deletion to cancel. Your account may already have been deleted or cleared.",
           "staleSignIn": "That sign-in was not recent enough. Confirm again.",
@@ -1744,6 +1755,7 @@
         "loading": "Checking the account",
         "pending": "Your account will be deleted after {date}.",
         "pendingNoDate": "Your account is scheduled for deletion.",
+        "purging": "Your account and cloud sync space are now being permanently deleted and can no longer be cancelled.",
         "requested": "Account deletion scheduled.",
         "retry": "Try again",
         "stop": "Stop",
@@ -1754,7 +1766,37 @@
       "description": "Who this profile is on the shared deployment, and which organization it works in.",
       "endSessionBlocked": "Signed out locally, but the browser blocked opening the identity provider's sign-out page.",
       "foreignSession": "This profile holds a session from another provider. Sign in to use the configured deployment, or sign out to clear it.",
+      "layerGuide": {
+        "cloud": "Cognia account & Sync Recovery Key connect your devices; keep a backup sign-in linked so losing one provider never locks out your cloud account.",
+        "local": "Local profile & Local Vault Recovery Key protect data stored on this device (managed under Security and Danger zone)."
+      },
       "linked": "Signs in with",
+      "linkedManage": {
+        "add": "Add {provider}",
+        "added": "{provider} added as a sign-in method.",
+        "awaitingProvider": "Finish linking {provider} in the browser…",
+        "awaitingReauth": "Confirm your identity in the browser…",
+        "description": "Link a second provider so you can still sign in if you lose access to one external account.",
+        "error": {
+          "alreadyLinked": "That {provider} account already belongs to another Cognia account.",
+          "differentPerson": "You confirmed with a different Cognia account than the one signed in here.",
+          "expired": "Linking timed out before completion. Try again.",
+          "generic": "Could not update sign-in methods: {message}",
+          "lastIdentity": "Cannot remove your only remaining sign-in method. Link a backup method first.",
+          "providerAlreadyLinked": "Another {provider} account is already linked here.",
+          "staleSignIn": "That confirmation was not recent enough. Try again.",
+          "unauthorized": "Your session expired. Sign in again first.",
+          "unavailable": "{provider} sign-in is not available right now."
+        },
+        "lastMethodHint": "At least one sign-in method must stay linked. Add a backup provider before removing this one.",
+        "loading": "Loading sign-in methods…",
+        "onlyMethodBadge": "Only method",
+        "remove": "Remove",
+        "removed": "{provider} removed from your sign-in methods.",
+        "retry": "Try again",
+        "stop": "Stop",
+        "title": "Sign-in methods & backup access"
+      },
       "linkedNone": "No linked sign-ins reported.",
       "loadFailed": "Could not read this profile's cloud identity: {message}",
       "loading": "Reading the cloud session",
@@ -46123,9 +46165,11 @@
         "license": "License",
         "privacy": "Privacy",
         "runtimeDependencies": "Runtime dependencies",
+        "terms": "Terms",
         "title": "Legal & credits",
         "viewLicense": "View license",
-        "viewPrivacy": "Privacy policy"
+        "viewPrivacy": "Privacy policy",
+        "viewTerms": "Terms of service"
       },
       "metadataLoadFailed": "Failed to load app metadata.",
       "resources": {

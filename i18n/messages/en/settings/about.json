@@ -38,9 +38,11 @@
     "license": "License",
     "privacy": "Privacy",
     "runtimeDependencies": "Runtime dependencies",
+    "terms": "Terms",
     "title": "Legal & credits",
     "viewLicense": "View license",
-    "viewPrivacy": "Privacy policy"
+    "viewPrivacy": "Privacy policy",
+    "viewTerms": "Terms of service"
   },
   "metadataLoadFailed": "Failed to load app metadata.",
   "resources": {

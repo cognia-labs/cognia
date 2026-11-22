@@ -86,6 +86,32 @@ describe("readEnrollmentStatus", () => {
       reason: "empty-list",
     })
   })
+
+  it("maps a 410 space_purged tombstone to empty-list integrity without wiping local data", async () => {
+    const server = testServer()
+    const { context } = await spaceWithFirstDevice(server)
+    const purgedFetch = jest.fn(async () =>
+      Response.json(
+        { error: "space_purged", message: "this account's sync space was deleted" },
+        { status: 410 }
+      )
+    ) as unknown as typeof fetch
+    const afterTombstone = createAccountSyncContext(
+      {
+        localAccountId: "l",
+        issuer: "https://id.test/api/auth",
+        userId: "usr_1",
+        spaceId: TEST_SPACE,
+        syncUrl: "https://sync.test",
+        accessToken: async () => "t",
+      },
+      { fetchImpl: purgedFetch, vault: context.vault }
+    )
+    await expect(readEnrollmentStatus(afterTombstone)).resolves.toEqual({
+      kind: "integrity",
+      reason: "empty-list",
+    })
+  })
 })
 
 describe("isActiveDevice", () => {

@@ -7,7 +7,7 @@ const openExternalMock = jest.fn(async (_u: string) => {})
 jest.mock("@/lib/tauri/opener", () => ({ openExternal: (u: string) => openExternalMock(u) }))
 
 import { LegalCreditsCard } from "./legal-credits-card"
-import { LICENSE_URL, PRIVACY_URL } from "@/lib/constants/external-urls"
+import { LICENSE_URL, PRIVACY_URL, TERMS_URL } from "@/lib/constants/external-urls"
 
 describe("<LegalCreditsCard />", () => {
   it("renders a copyright range with the holder", () => {
@@ -23,12 +23,14 @@ describe("<LegalCreditsCard />", () => {
     expect(screen.getByTestId("copyright-line")).not.toHaveTextContent("–")
   })
 
-  it("links to license and privacy", () => {
+  it("links to license, privacy, and terms", () => {
     render(<LegalCreditsCard currentYear={2026} />)
     fireEvent.click(screen.getByTestId("view-license"))
     expect(openExternalMock).toHaveBeenCalledWith(LICENSE_URL)
     fireEvent.click(screen.getByTestId("view-privacy"))
     expect(openExternalMock).toHaveBeenCalledWith(PRIVACY_URL)
+    fireEvent.click(screen.getByTestId("view-terms"))
+    expect(openExternalMock).toHaveBeenCalledWith(TERMS_URL)
   })
 
   it("renders open-source acknowledgements that open on click", () => {

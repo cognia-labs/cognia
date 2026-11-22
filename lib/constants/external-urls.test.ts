@@ -8,6 +8,7 @@ import {
   LICENSE_URL,
   PRIVACY_URL,
   RELEASES_URL,
+  TERMS_URL,
 } from "./external-urls"
 
 describe("external-urls", () => {
@@ -24,7 +25,8 @@ describe("external-urls", () => {
   })
 
   it("derives docs-hosted URLs from the docs root", () => {
-    expect(PRIVACY_URL.startsWith(DOCS_URL)).toBe(true)
+    expect(PRIVACY_URL).toBe(`${DOCS_URL}/en/docs/privacy`)
+    expect(TERMS_URL).toBe(`${DOCS_URL}/en/docs/terms`)
     expect(DOCS_COMPANION_SETUP_URL.startsWith(DOCS_URL)).toBe(true)
   })
 
@@ -38,6 +40,7 @@ describe("external-urls", () => {
       LICENSE_URL,
       COMMUNITY_URL,
       PRIVACY_URL,
+      TERMS_URL,
       DOCS_COMPANION_SETUP_URL,
     ]) {
       expect(url).toMatch(/^https:\/\//)

@@ -1,0 +1,52 @@
+---
+title: Privacy Policy
+description: How Cognia handles local encrypted workspace data, optional cloud sign-in, end-to-end encrypted sync, and account deletion.
+---
+
+# Privacy Policy
+
+Effective date: November 22, 2026
+
+Cognia is designed local-first. You can use the browser, desktop (Tauri), and mobile (Capacitor) applications without signing in to any Cognia cloud account. This page explains what data stays on your device, what data our optional hosted services process when you choose to use them, and how you control or delete that data.
+
+## 1. Data stored locally on your device
+
+By default, your conversations, agents, skills, memories, files, settings, and model provider API keys are stored locally on your device:
+
+- **Browser**: Stored in per-profile IndexedDB databases and encrypted secrets inside the Browser Vault (`Web Crypto` PBKDF2 / AES-GCM).
+- **Desktop (Tauri)** and **Mobile (Capacitor)**: Stored in the local application data directory and protected by the platform credential store or your local profile password.
+- **Model provider calls**: Prompts, attachments, and tool outputs sent to AI model providers you configure (such as Anthropic, OpenAI, or custom endpoints) go directly from your runtime to those providers under their respective privacy policies. Cognia does not proxy your personal API keys through our identity or sync services.
+
+## 2. Optional official Cognia account (`id.cognia.cn`)
+
+Signing in to an official Cognia account is optional. When you sign in using Feishu, GitHub, Google, or Apple:
+
+- **Identity records**: Our OIDC issuer stores an internal Cognia account identifier (`usr_...`), your display name, avatar URL (when provided), verified email address (or an unroutable `.invalid` placeholder when signing in with Feishu), and the stable external subject identifier of each linked sign-in method.
+- **No retained third-party OAuth tokens**: Access tokens, refresh tokens, and ID tokens returned by Feishu, GitHub, Google, or Apple during sign-in or account linking are stripped before database storage. Cognia keeps proof of who you are, never ongoing access to your third-party account.
+- **Tokens and logs**: Short-lived OAuth authorization state, session tokens, refresh tokens, and rate-limit counters are stored in Cloudflare D1 to authenticate your devices and protect the service against abuse.
+
+## 3. Optional end-to-end encrypted sync (`sync.cognia.cn`)
+
+When you enable Account Sync on a signed-in profile:
+
+- **End-to-end encryption**: Synced items (chats, characters, skills, memories, and shared preferences) and device names are encrypted on your device before upload. The sync service stores only the signed device registry, sealed epoch-key envelopes, enrollment requests, and encrypted operation batches.
+- **What never syncs**: Third-party model API keys, local vault passwords, and device-specific settings remain on each individual device.
+- **Server visibility**: The sync service verifies device signatures and enforces storage quotas, and never receives your plaintext sync keys, recovery keys, or conversation content.
+
+## 4. Other optional hosted services
+
+- **Public share links (`share.cognia.cn`)**: When you explicitly publish a zero-knowledge share link, the encrypted payload is stored on the share service while the decryption key stays in the URL fragment (`#k=...`), which browsers do not send to the server.
+- **Companion signaling (`signaling.cognia.cn`)**: Used transiently to establish peer connections when pairing your own devices; session payloads remain authenticated end-to-end between your paired endpoints.
+- **Self-hosted deployments**: If you connect Cognia to an organization's self-hosted gateway, your sign-in and workspace data on that deployment are governed by your organization's administrator and policies.
+
+## 5. Account deletion and data retention
+
+You can schedule deletion of your official Cognia account at any time from **Settings → Account → Identity → Delete account**:
+
+- **Confirmation and cooling-off period**: Scheduling deletion requires a fresh sign-in and starts the server-configured cooling-off period (7 days by default). During that window, you can sign back in and cancel the request.
+- **Permanent purge**: Once the cooling-off period ends, our scheduled purge deletes your cloud sync space (synced ciphertext, sealed envelopes, device registry, and operation log, leaving only a non-reversible tombstone so expired sessions cannot re-seed the space) and removes your sessions, tokens, consents, linked sign-in methods, and user record.
+- **Local data is separate**: Deleting your cloud account does not erase local conversations or files on your devices. To erase data on a device, delete the local profile in **Account → Danger zone** or clear the application's storage.
+
+## 6. Contact
+
+Questions or privacy requests regarding Cognia can be submitted through the [Cognia GitHub repository](https://github.com/cognia-labs/cognia/issues).

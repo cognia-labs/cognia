@@ -16,7 +16,9 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Spinner } from "@/components/ui/spinner"
 import { Surface } from "@/components/surface/surface"
+import { PRIVACY_URL, TERMS_URL } from "@/lib/constants/external-urls"
 import { isInvitationTokenShaped } from "@/lib/identity/pending-invitation"
+import { openExternal } from "@/lib/tauri/opener"
 
 import type { CollabAccountMembership, CollabExternalIdentity } from "@/lib/collab/client"
 import {
@@ -42,6 +44,8 @@ export type CloudSignInView =
       kind: "official"
       deployment: OfficialDeployment
       reauth?: CloudSessionReauthReason
+      /** Live enabled providers from `/api/account/config`, when resolved. */
+      enabledProviders?: OfficialSocialProvider[]
     }
   | { kind: "awaiting-code" }
   | { kind: "signing-in"; canContinueOffline?: boolean }
@@ -247,6 +251,43 @@ function OfflineButton({ onClick, hint }: { onClick: () => void; hint?: string }
   )
 }
 
+function LegalLinks() {
+  const t = useTranslations("account.cloud.legal")
+  return (
+    <p className="text-xs text-muted-foreground" data-testid="cloud-sign-in-legal">
+      {t("prefix")}{" "}
+      <a
+        href={TERMS_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="underline underline-offset-2 hover:text-foreground"
+        onClick={(event) => {
+          event.preventDefault()
+          void openExternal(TERMS_URL)
+        }}
+        data-testid="cloud-sign-in-terms"
+      >
+        {t("terms")}
+      </a>{" "}
+      {t("and")}{" "}
+      <a
+        href={PRIVACY_URL}
+        target="_blank"
+        rel="noreferrer"
+        className="underline underline-offset-2 hover:text-foreground"
+        onClick={(event) => {
+          event.preventDefault()
+          void openExternal(PRIVACY_URL)
+        }}
+        data-testid="cloud-sign-in-privacy"
+      >
+        {t("privacy")}
+      </a>
+      {t("suffix")}
+    </p>
+  )
+}
+
 function SignInBody({
   view,
   busy,
@@ -305,6 +346,8 @@ function SignInBody({
 
       {view.canContinueOffline ? <OfflineButton onClick={onContinueOffline} /> : null}
 
+      <LegalLinks />
+
       <div className="flex flex-col gap-2">
         <Button
           type="button"
@@ -330,6 +373,7 @@ function OfficialBody({
   onContinueOffline,
 }: CloudSignInScreenProps & { view: Extract<CloudSignInView, { kind: "official" }> }) {
   const t = useTranslations("account.cloud")
+  const providers = view.enabledProviders ?? view.deployment.social
   return (
     <div className="flex flex-col gap-4" data-testid="cloud-sign-in-official">
       <Heading icon={<UserRoundIcon className="size-5" aria-hidden />}>
@@ -342,23 +386,30 @@ function OfficialBody({
       ) : (
         <p className="text-sm text-muted-foreground">{t("official.description")}</p>
       )}
-      <div className="flex flex-col gap-2">
-        {view.deployment.social.map((provider) => (
-          <Button
-            key={provider}
-            type="button"
-            variant="outline"
-            disabled={busy}
-            onClick={() => onOfficialProvider(provider)}
-            data-testid={`cloud-sign-in-official-${provider}`}
-          >
-            <ProviderMark provider={provider} />
-            {t("continueWith", { provider: t(`provider.${provider}`) })}
-          </Button>
-        ))}
-      </div>
+      {providers.length > 0 ? (
+        <div className="flex flex-col gap-2">
+          {providers.map((provider) => (
+            <Button
+              key={provider}
+              type="button"
+              variant="outline"
+              disabled={busy}
+              onClick={() => onOfficialProvider(provider)}
+              data-testid={`cloud-sign-in-official-${provider}`}
+            >
+              <ProviderMark provider={provider} />
+              {t("continueWith", { provider: t(`provider.${provider}`) })}
+            </Button>
+          ))}
+        </div>
+      ) : (
+        <p className="text-sm text-muted-foreground" data-testid="cloud-sign-in-official-empty">
+          {t("official.noProviders")}
+        </p>
+      )}
       <OfflineButton onClick={onContinueOffline} hint={t("official.offlineHint")} />
       <p className="text-xs text-muted-foreground">{t("official.privacy")}</p>
+      <LegalLinks />
     </div>
   )
 }

@@ -23,6 +23,7 @@
     "errorVaultNotProvisioned": "This profile's local encryption vault is missing on this device. Restore from a backup before continuing, or reset local data if you want to start fresh.",
     "firstRunForm": "Create local account",
     "firstRunTitle": "Create local account",
+    "firstRunDescription": "Step 1 of 2 — create an encrypted profile on this device. Optional Cognia cloud sign-in comes next.",
     "hidePassword": "Hide password",
     "loading": "Loading accounts...",
     "newPasswordLabel": "New password",
@@ -36,6 +37,7 @@
     "recoveryCopy": "Copy recovery key",
     "recoveryContinue": "Continue",
     "recoveryDescription": "Save this recovery key before continuing. It can unlock this profile's encrypted local data on this device if you forget the password.",
+    "recoveryKeyDistinction": "This is your Local Vault Recovery Key for this device only — it is separate from your optional Cognia cloud account and Cloud Sync Recovery Key.",
     "recoveryDownload": "Download .txt",
     "recoveryForm": "Save recovery key",
     "recoveryKeyLabel": "Recovery key",
@@ -488,7 +490,15 @@
       "title": "Sign in to your Cognia account",
       "description": "One account for Cognia on all your devices. Signing in is optional: everything you do stays on this device either way.",
       "offlineHint": "You can sign in later from Settings → Account. This screen will not appear again.",
-      "privacy": "Cognia keeps only who you are (your name, email and linked sign-ins), never access to the account you sign in with."
+      "privacy": "Cognia keeps only who you are (your name, email and linked sign-ins), never access to the account you sign in with.",
+      "noProviders": "No sign-in providers are currently enabled on this service. You can continue offline and sign in later."
+    },
+    "legal": {
+      "prefix": "By signing in, you agree to the",
+      "terms": "Terms of Service",
+      "and": "and",
+      "privacy": "Privacy Policy",
+      "suffix": "."
     },
     "callback": {
       "working": "Completing sign-in…",
@@ -550,8 +560,38 @@
     },
     "officialTitle": "Cognia account",
     "officialDescription": "The person this profile is signed in as, and the sign-ins linked to them.",
+    "layerGuide": {
+      "local": "Local profile & Local Vault Recovery Key protect data stored on this device (managed under Security and Danger zone).",
+      "cloud": "Cognia account & Sync Recovery Key connect your devices; keep a backup sign-in linked so losing one provider never locks out your cloud account."
+    },
     "linked": "Signs in with",
     "linkedNone": "No linked sign-ins reported.",
+    "linkedManage": {
+      "title": "Sign-in methods & backup access",
+      "description": "Link a second provider so you can still sign in if you lose access to one external account.",
+      "loading": "Loading sign-in methods…",
+      "retry": "Try again",
+      "add": "Add {provider}",
+      "remove": "Remove",
+      "onlyMethodBadge": "Only method",
+      "lastMethodHint": "At least one sign-in method must stay linked. Add a backup provider before removing this one.",
+      "awaitingReauth": "Confirm your identity in the browser…",
+      "awaitingProvider": "Finish linking {provider} in the browser…",
+      "stop": "Stop",
+      "added": "{provider} added as a sign-in method.",
+      "removed": "{provider} removed from your sign-in methods.",
+      "error": {
+        "differentPerson": "You confirmed with a different Cognia account than the one signed in here.",
+        "staleSignIn": "That confirmation was not recent enough. Try again.",
+        "unauthorized": "Your session expired. Sign in again first.",
+        "lastIdentity": "Cannot remove your only remaining sign-in method. Link a backup method first.",
+        "alreadyLinked": "That {provider} account already belongs to another Cognia account.",
+        "providerAlreadyLinked": "Another {provider} account is already linked here.",
+        "unavailable": "{provider} sign-in is not available right now.",
+        "expired": "Linking timed out before completion. Try again.",
+        "generic": "Could not update sign-in methods: {message}"
+      }
+    },
     "selfHosted": "Use your organization’s deployment instead",
     "deletion": {
       "title": "Delete account",
@@ -568,6 +608,7 @@
       "stop": "Stop",
       "pending": "Your account will be deleted after {date}.",
       "pendingNoDate": "Your account is scheduled for deletion.",
+      "purging": "Your account and cloud sync space are now being permanently deleted and can no longer be cancelled.",
       "cancel": "Cancel deletion",
       "requested": "Account deletion scheduled.",
       "cancelled": "Account deletion cancelled.",
@@ -576,6 +617,7 @@
         "differentPerson": "You confirmed with a different account than the one signed in here. Nothing was deleted.",
         "staleSignIn": "That sign-in was not recent enough. Confirm again.",
         "unauthorized": "Your session expired. Sign in again first.",
+        "inProgress": "Cooling-off has ended and deletion is already in progress. It can no longer be cancelled.",
         "nothingToCancel": "There was no pending deletion to cancel. Your account may already have been deleted or cleared.",
         "stillPending": "Account deletion is still pending. Refresh and try again.",
         "notScheduled": "Account deletion was not scheduled because the server state changed. Refresh and check your account status.",

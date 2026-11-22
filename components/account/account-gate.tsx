@@ -195,6 +195,12 @@ export function AccountGate({ children, guestView }: AccountGateProps) {
           <div>
             <h1 className="text-lg font-semibold">{t("recoveryTitle")}</h1>
             <p className="mt-1 text-sm text-muted-foreground">{t("recoveryDescription")}</p>
+            <p
+              className="mt-1.5 text-xs text-muted-foreground"
+              data-testid="account-vault-recovery-distinction"
+            >
+              {t("recoveryKeyDistinction")}
+            </p>
           </div>
           <code className="select-all break-all rounded-md border border-transparent bg-muted/80 p-4 font-mono text-sm">
             {pendingRecoveryKey}
@@ -338,11 +344,16 @@ export function AccountGate({ children, guestView }: AccountGateProps) {
           className="flex w-full max-w-sm flex-col gap-4"
           onSubmit={(event) => void handleCreate(event)}
         >
-          <div className="flex items-center gap-3">
-            <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
-              <UserRoundPlusIcon className="size-5" aria-hidden="true" />
+          <div className="flex flex-col gap-1.5">
+            <div className="flex items-center gap-3">
+              <div className="flex size-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <UserRoundPlusIcon className="size-5" aria-hidden="true" />
+              </div>
+              <h1 className="text-lg font-semibold">{t("firstRunTitle")}</h1>
             </div>
-            <h1 className="text-lg font-semibold">{t("firstRunTitle")}</h1>
+            <p className="text-xs text-muted-foreground" data-testid="account-gate-first-run-hint">
+              {t("firstRunDescription")}
+            </p>
           </div>
           <FieldBlock>
             <Label htmlFor={displayNameId}>{t("displayNameLabel")}</Label>

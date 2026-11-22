@@ -66,6 +66,11 @@ jest.mock("@/components/account/manage/official-account-deletion", () => ({
     <div data-testid="stub-official-deletion" data-token={props.session.accessToken} />
   ),
 }))
+jest.mock("@/components/account/manage/official-linked-identities", () => ({
+  OfficialLinkedIdentities: (props: { session: { accessToken: string } }) => (
+    <div data-testid="stub-official-linked-identities" data-token={props.session.accessToken} />
+  ),
+}))
 import type { LocalAccountRecord } from "@/lib/accounts/account-types"
 import { officialDeployment } from "@/lib/identity/official-deployment"
 import { IDENTITIES_CLAIM } from "@/lib/identity/issuer-identities"
@@ -298,6 +303,8 @@ describe("AccountIdentityTab", () => {
       expect(screen.getByTestId("stub-account-sync")).toHaveAttribute("data-account", "Ada")
       // A self-hosted gateway can still replace the official account.
       expect(screen.getByText("selfHosted")).toBeInTheDocument()
+      expect(screen.getByTestId("account-identity-layer-guide")).toBeInTheDocument()
+      expect(screen.getByTestId("stub-official-linked-identities")).toBeInTheDocument()
       expect(screen.getByTestId("stub-deployment-card")).toBeInTheDocument()
     })
 

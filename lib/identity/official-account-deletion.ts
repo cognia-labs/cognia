@@ -38,8 +38,8 @@ import {
 export const DEFAULT_DELETION_COOLING_OFF_DAYS = 7
 
 export interface OfficialDeletionState {
-  status: "none" | "pending" | "cancelled"
-  /** ISO timestamps, present while `pending`. */
+  status: "none" | "pending" | "purging" | "cancelled"
+  /** ISO timestamps, present while `pending` or `purging`. */
   requestedAt?: string
   purgeAfter?: string
   /** Server-configured cooling-off window in days, when advertised. */
@@ -53,6 +53,8 @@ export type AccountDeletionErrorCode =
   | "stale-sign-in"
   /** The fresh sign-in named a different person than this profile's. */
   | "different-person"
+  /** Cooling-off ended and purge is already running; cannot be cancelled. */
+  | "in-progress"
   | "failed"
 
 export class AccountDeletionError extends Error {
@@ -82,7 +84,12 @@ function readState(body: unknown): OfficialDeletionState {
     throw new AccountDeletionError("failed", "Malformed account deletion response")
   }
   const record = body as Record<string, unknown>
-  if (record.status !== "none" && record.status !== "pending" && record.status !== "cancelled") {
+  if (
+    record.status !== "none" &&
+    record.status !== "pending" &&
+    record.status !== "purging" &&
+    record.status !== "cancelled"
+  ) {
     throw new AccountDeletionError(
       "failed",
       `Unexpected account deletion status: ${String(record.status)}`
@@ -128,6 +135,7 @@ async function call(
       : `HTTP ${response.status}`
   if (response.status === 401) throw new AccountDeletionError("unauthorized", description)
   if (response.status === 403) throw new AccountDeletionError("stale-sign-in", description)
+  if (response.status === 409) throw new AccountDeletionError("in-progress", description)
   throw new AccountDeletionError("failed", description)
 }
 

@@ -1066,6 +1066,9 @@ describe("share viewer route", () => {
     setGateState({ accounts: [], pendingRecoveryKey: "ABCD-EFGH" })
     renderShareRoute()
     expect(screen.getByTestId("account-vault-recovery")).toBeInTheDocument()
+    expect(screen.getByTestId("account-vault-recovery-distinction")).toHaveTextContent(
+      "recoveryKeyDistinction"
+    )
     expect(screen.queryByText("guest viewer")).not.toBeInTheDocument()
   })
 
@@ -1082,6 +1085,9 @@ describe("share viewer route", () => {
     setGateState({ accounts: [] })
     renderShareRoute()
     expect(screen.getByText("firstRunTitle")).toBeInTheDocument()
+    expect(screen.getByTestId("account-gate-first-run-hint")).toHaveTextContent(
+      "firstRunDescription"
+    )
     expect(screen.queryByText("guest viewer")).not.toBeInTheDocument()
   })
 

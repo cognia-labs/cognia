@@ -23,6 +23,7 @@
     "errorVaultNotProvisioned": "本设备上缺少此档案的本地加密保险库记录。请先从备份恢复，或在确认放弃旧本地数据后重置本机数据。",
     "firstRunForm": "创建本地账户",
     "firstRunTitle": "创建本地账户",
+    "firstRunDescription": "第 1 / 2 步 —— 先在本设备创建加密本地档案；可选的 Cognia 云端账号将在下一步决定。",
     "hidePassword": "隐藏密码",
     "loading": "正在加载账户...",
     "newPasswordLabel": "新密码",
@@ -36,6 +37,7 @@
     "recoveryCopy": "复制恢复密钥",
     "recoveryContinue": "继续",
     "recoveryDescription": "继续前请保存这枚恢复密钥。忘记账户密码时，可用它在本设备上恢复并解锁此档案的本地加密数据。",
+    "recoveryKeyDistinction": "这是仅作用于本设备的「本地保险库恢复密钥」，与可选的 Cognia 云端账号及「云同步恢复密钥」彼此独立。",
     "recoveryDownload": "下载 .txt",
     "recoveryForm": "保存恢复密钥",
     "recoveryKeyLabel": "恢复密钥",
@@ -488,7 +490,15 @@
       "title": "登录你的 Cognia 账号",
       "description": "一个账号，在你所有设备上使用 Cognia。登录是可选的：无论是否登录，你的数据都保存在本设备上。",
       "offlineHint": "之后可以在“设置 → 账号”中登录。此页面不会再次出现。",
-      "privacy": "Cognia 只保存你是谁（姓名、邮箱和已关联的登录方式），不会获得你所用登录账号的访问权限。"
+      "privacy": "Cognia 只保存你是谁（姓名、邮箱和已关联的登录方式），不会获得你所用登录账号的访问权限。",
+      "noProviders": "当前服务暂未启用可用的登录方式，你可以先离线继续并稍后登录。"
+    },
+    "legal": {
+      "prefix": "登录即表示你已阅读并同意",
+      "terms": "服务条款",
+      "and": "与",
+      "privacy": "隐私政策",
+      "suffix": "。"
     },
     "callback": {
       "working": "正在完成登录…",
@@ -550,8 +560,38 @@
     },
     "officialTitle": "Cognia 账号",
     "officialDescription": "此配置文件登录的身份，以及与之关联的登录方式。",
+    "layerGuide": {
+      "local": "本地档案与「本地保险库恢复密钥」仅保护当前设备上的本地数据（在「安全」与「危险区」标签页管理）。",
+      "cloud": "Cognia 云账号与「同步恢复密钥」用于连接多台设备；建议绑定至少一种备用登录方式，以免单一第三方账号失效导致无法登录。"
+    },
     "linked": "登录方式",
     "linkedNone": "未报告已关联的登录方式。",
+    "linkedManage": {
+      "title": "登录方式与备用入口",
+      "description": "绑定第二种登录方式作为备用入口，避免单一外部账号停用后失去云账号访问权。",
+      "loading": "正在读取登录方式…",
+      "retry": "重试",
+      "add": "添加 {provider}",
+      "remove": "移除",
+      "onlyMethodBadge": "唯一方式",
+      "lastMethodHint": "至少需要保留一种登录方式。请先添加备用登录方式，再移除当前方式。",
+      "awaitingReauth": "请在浏览器中重新登录确认身份…",
+      "awaitingProvider": "请在浏览器中完成 {provider} 绑定…",
+      "stop": "停止",
+      "added": "已添加 {provider} 作为登录方式。",
+      "removed": "已移除 {provider} 登录方式。",
+      "error": {
+        "differentPerson": "你确认时使用的 Cognia 账号与当前登录账号不一致。",
+        "staleSignIn": "该次身份确认不够新，请重试。",
+        "unauthorized": "当前会话已过期，请先重新登录。",
+        "lastIdentity": "无法移除唯一剩余的登录方式，请先绑定备用登录方式。",
+        "alreadyLinked": "该 {provider} 账号已绑定到另一个 Cognia 账号。",
+        "providerAlreadyLinked": "当前账号已绑定了另一个 {provider} 账号。",
+        "unavailable": "{provider} 登录当前不可用。",
+        "expired": "绑定超时未完成，请重新发起。",
+        "generic": "无法更新登录方式：{message}"
+      }
+    },
     "selfHosted": "改用你所在组织的部署",
     "deletion": {
       "title": "注销账号",
@@ -568,6 +608,7 @@
       "stop": "停止",
       "pending": "你的账号将在 {date} 之后删除。",
       "pendingNoDate": "你的账号已安排注销。",
+      "purging": "冷静期已结束，正在永久清除你的账号与云端同步空间，已无法撤销。",
       "cancel": "撤销注销",
       "requested": "已安排注销账号。",
       "cancelled": "已撤销注销。",
@@ -576,6 +617,7 @@
         "differentPerson": "你确认时使用的账号与此处登录的账号不同。未删除任何内容。",
         "staleSignIn": "该次登录不够新，请再次确认。",
         "unauthorized": "会话已过期，请先重新登录。",
+        "inProgress": "冷静期已结束，注销清除正在执行中，无法再撤销。",
         "nothingToCancel": "没有可撤销的待处理注销请求，账号可能已被删除或已清除。",
         "stillPending": "账号仍处于待注销状态，请刷新后重试。",
         "notScheduled": "服务端状态已变化，本次注销请求未生效。请刷新并检查账号状态。",

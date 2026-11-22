@@ -78,6 +78,7 @@ import {
   shouldOfferOfficialSignIn,
 } from "@/lib/identity/official-sign-in-prompt"
 import { signInToOfficialAccount } from "@/lib/identity/personal-sign-in"
+import { fetchOfficialAccountConfig } from "@/lib/identity/official-account-config"
 import { isOfficialIssuer } from "@/lib/identity/official-deployment"
 import { subscribeCloudSignInRequest } from "@/lib/identity/sign-in-request"
 import {
@@ -114,6 +115,8 @@ export interface CloudSignInGateDeps {
   signIn?: typeof signInWithDeployment
   /** Sign in to the official account. Defaults to the personal flow. */
   signInOfficial?: typeof signInToOfficialAccount
+  /** Fetch live enabled providers for the official deployment. */
+  readOfficialConfig?: typeof fetchOfficialAccountConfig
   settle?: typeof settleAfterSignIn
   adopt?: typeof adoptOrganization
   claim?: typeof claimDeployment
@@ -201,6 +204,7 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
   const [discoveryEpoch, setDiscoveryEpoch] = useState(0)
   const deploymentRef = useRef<ReadyDeployment | null>(null)
   const officialRef = useRef<OfficialDeployment | null>(null)
+  const officialProvidersRef = useRef<OfficialSocialProvider[] | undefined>(undefined)
   const sessionRef = useRef<LogtoSession | null>(null)
   // The decision effect reads its collaborators through refs: the deps
   // object, the translator and the settle step all take new identities on
@@ -329,10 +333,22 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
             const official = officialRef.current
             const deployment = deploymentRef.current
             if (!official && !deployment) return
+            if (official) {
+              const runtimeCfg = await (
+                depsRef.current.readOfficialConfig ?? fetchOfficialAccountConfig
+              )(official)
+              if (runtimeCfg) officialProvidersRef.current = runtimeCfg.providers
+            }
             setError(null)
             setView(
               official
-                ? { kind: "official", deployment: official }
+                ? {
+                    kind: "official",
+                    deployment: official,
+                    ...(officialProvidersRef.current !== undefined
+                      ? { enabledProviders: officialProvidersRef.current }
+                      : {}),
+                  }
                 : { kind: "sign-in", deployment: deployment!, canContinueOffline: true }
             )
             setRequested(true)
@@ -412,10 +428,18 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
                 setPhase("pass")
                 return
               }
+              const runtimeCfg = await (
+                depsRef.current.readOfficialConfig ?? fetchOfficialAccountConfig
+              )(discovery.deployment)
+              if (cancelled) return
+              if (runtimeCfg) officialProvidersRef.current = runtimeCfg.providers
               setView({
                 kind: "official",
                 deployment: discovery.deployment,
                 reauth: state.reason,
+                ...(officialProvidersRef.current !== undefined
+                  ? { enabledProviders: officialProvidersRef.current }
+                  : {}),
               })
               setPhase("screen")
               return
@@ -424,9 +448,17 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
               setPhase("pass")
               return
             }
+            const runtimeCfg = await (
+              depsRef.current.readOfficialConfig ?? fetchOfficialAccountConfig
+            )(discovery.deployment)
+            if (cancelled) return
+            if (runtimeCfg) officialProvidersRef.current = runtimeCfg.providers
             setView({
               kind: "official",
               deployment: discovery.deployment,
+              ...(officialProvidersRef.current !== undefined
+                ? { enabledProviders: officialProvidersRef.current }
+                : {}),
             })
             setPhase("screen")
             return
@@ -571,8 +603,17 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
     setError(null)
     const official = officialRef.current
     const deployment = deploymentRef.current
-    if (official) setView({ kind: "official", deployment: official })
-    else if (deployment) setView({ kind: "sign-in", deployment, canContinueOffline: true })
+    if (official) {
+      setView({
+        kind: "official",
+        deployment: official,
+        ...(officialProvidersRef.current !== undefined
+          ? { enabledProviders: officialProvidersRef.current }
+          : {}),
+      })
+    } else if (deployment) {
+      setView({ kind: "sign-in", deployment, canContinueOffline: true })
+    }
   }
 
   const runSignIn = async (method: CloudSignInMethod) => {
@@ -634,7 +675,13 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
       setBusy(false)
       const message = explain(cause)
       setError(message || null)
-      setView({ kind: "official", deployment })
+      setView({
+        kind: "official",
+        deployment,
+        ...(officialProvidersRef.current !== undefined
+          ? { enabledProviders: officialProvidersRef.current }
+          : {}),
+      })
     } finally {
       endCodeWait()
     }

@@ -11,6 +11,12 @@ jest.mock("next-intl", () => ({
   },
 }))
 
+const openExternalMock = jest.fn(async (_url: string) => undefined)
+jest.mock("@/lib/tauri/opener", () => ({
+  openExternal: (url: string) => openExternalMock(url),
+}))
+
+import { PRIVACY_URL, TERMS_URL } from "@/lib/constants/external-urls"
 import type { ReadyDeployment } from "@/lib/identity/deployment-discovery"
 import { officialDeployment } from "@/lib/identity/official-deployment"
 
@@ -342,5 +348,46 @@ describe("CloudSignInScreen", () => {
     expect(h.onSignOut).toHaveBeenCalledTimes(1)
     fireEvent.click(screen.getByTestId("cloud-sign-in-offline"))
     expect(h.onContinueOffline).toHaveBeenCalledTimes(2)
+  })
+
+  it("renders clickable Terms & Privacy links and filters official providers by enabledProviders", () => {
+    openExternalMock.mockClear()
+    const { rerender } = render(
+      <CloudSignInScreen
+        view={{
+          kind: "official",
+          deployment: officialDeployment({})!,
+          enabledProviders: ["feishu", "github"],
+        }}
+        error={null}
+        busy={false}
+        {...handlers()}
+      />
+    )
+    expect(screen.getByTestId("cloud-sign-in-official-feishu")).toBeInTheDocument()
+    expect(screen.getByTestId("cloud-sign-in-official-github")).toBeInTheDocument()
+    expect(screen.queryByTestId("cloud-sign-in-official-google")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("cloud-sign-in-official-apple")).not.toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("cloud-sign-in-terms"))
+    expect(openExternalMock).toHaveBeenCalledWith(TERMS_URL)
+    fireEvent.click(screen.getByTestId("cloud-sign-in-privacy"))
+    expect(openExternalMock).toHaveBeenCalledWith(PRIVACY_URL)
+
+    rerender(
+      <CloudSignInScreen
+        view={{
+          kind: "official",
+          deployment: officialDeployment({})!,
+          enabledProviders: [],
+        }}
+        error={null}
+        busy={false}
+        {...handlers()}
+      />
+    )
+    expect(screen.getByTestId("cloud-sign-in-official-empty")).toHaveTextContent(
+      "official.noProviders"
+    )
   })
 })

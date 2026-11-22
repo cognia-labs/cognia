@@ -121,6 +121,9 @@ describe("AccountSyncDataPanel", () => {
 
     withEngine(running({ error: "the server returned an empty device list" }))
     expect(screen.getByTestId("account-sync-data-error")).toHaveTextContent("spaceCleared")
+
+    withEngine(running({ error: "this account's sync space was deleted" }))
+    expect(screen.getByTestId("account-sync-data-error")).toHaveTextContent("spaceCleared")
   })
 
   it("switches a class through the engine, and says when that failed", async () => {

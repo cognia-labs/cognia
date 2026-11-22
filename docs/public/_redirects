@@ -2,6 +2,8 @@
 # the bare roots to the default locale explicitly.
 / /zh/ 302
 /docs /zh/docs 302
+/docs/en/* /en/docs/:splat 301
+/docs/zh/* /zh/docs/:splat 301
 /docs/* /zh/docs/:splat 302
 
 # Previous URLs for renamed documentation pages and their Markdown exports.

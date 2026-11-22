@@ -266,4 +266,30 @@ describe("OfficialAccountDeletion", () => {
     fireEvent.click(screen.getByTestId("official-account-deletion-retry"))
     expect(await screen.findByTestId("official-account-deletion-start")).toBeInTheDocument()
   })
+
+  it("renders non-cancellable purging state and reloads when cancel gets 409 in-progress", async () => {
+    const read = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "pending" as const, purgeAfter: "2026-10-12" })
+      .mockResolvedValueOnce({ status: "purging" as const })
+    const cancel = jest.fn(async () => {
+      throw new AccountDeletionError("in-progress", "already purging")
+    })
+    renderWith({ read, cancel })
+
+    fireEvent.click(await screen.findByTestId("official-account-deletion-cancel"))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("error.inProgress"))
+    expect(await screen.findByTestId("official-account-deletion-purging")).toHaveTextContent(
+      "purging"
+    )
+    expect(screen.queryByTestId("official-account-deletion-cancel")).not.toBeInTheDocument()
+  })
+
+  it("uses coolingOffDays from runtime config when GET /api/account/deletion omits it", async () => {
+    renderWith({
+      read: jest.fn(async () => ({ status: "none" as const })),
+      readConfig: jest.fn(async () => ({ providers: ["feishu" as const], coolingOffDays: 14 })),
+    })
+    expect(await screen.findByText("description(14)")).toBeInTheDocument()
+  })
 })

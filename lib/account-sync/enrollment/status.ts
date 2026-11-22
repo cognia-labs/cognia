@@ -15,6 +15,7 @@ import type { FoldedRegistry, RegistryState } from "@cognia/sync-protocol"
 
 import type { DeviceKeys } from "../crypto"
 import { RegistryIntegrityError, verifyRegistry } from "../registry-sync"
+import { SyncApiError } from "../sync-api"
 import { AccountSyncVaultLockedError, type RemovalRecord } from "../vault-store"
 import type { AccountSyncContext } from "./context"
 import { applyRevocation } from "./revoked"
@@ -49,6 +50,9 @@ export async function readEnrollmentStatus(context: AccountSyncContext): Promise
     return { kind: "enrolled", device, registry }
   } catch (error) {
     if (error instanceof AccountSyncVaultLockedError) return { kind: "locked" }
+    if (error instanceof SyncApiError && error.code === "space_purged") {
+      return { kind: "integrity", reason: "empty-list" }
+    }
     if (error instanceof RegistryIntegrityError) {
       const reason =
         error.reason === "rollback" && /empty device list/i.test(error.message)

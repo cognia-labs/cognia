@@ -5,7 +5,7 @@ import { ScaleIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { COPYRIGHT_HOLDER, COPYRIGHT_START_YEAR, LICENSE_NAME } from "@/lib/app-metadata"
-import { LICENSE_URL, PRIVACY_URL } from "@/lib/constants/external-urls"
+import { LICENSE_URL, PRIVACY_URL, TERMS_URL } from "@/lib/constants/external-urls"
 import { openExternal } from "@/lib/tauri/opener"
 
 import { AboutCard } from "./about-card"
@@ -65,6 +65,21 @@ export function LegalCreditsCard({ currentYear }: { currentYear?: number } = {})
             </Button>
           }
           testid="row-privacy"
+        />
+        <InfoRow
+          label={t("legal.terms")}
+          value={
+            <Button
+              variant="link"
+              size="sm"
+              className="h-auto p-0 text-xs"
+              onClick={() => void openExternal(TERMS_URL)}
+              data-testid="view-terms"
+            >
+              {t("legal.viewTerms")}
+            </Button>
+          }
+          testid="row-terms"
         />
       </div>
 

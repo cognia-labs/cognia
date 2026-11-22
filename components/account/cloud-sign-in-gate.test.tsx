@@ -1018,4 +1018,20 @@ describe("CloudSignInGate with the official account", () => {
     expect(await screen.findByTestId("app")).toBeInTheDocument()
     expect(readOfficialPromptDecision("acct_a")).toBe("signed-in")
   })
+
+  it("filters official provider buttons using live /api/account/config discovery", async () => {
+    renderGate(
+      deps({
+        discover: discoverOfficial(),
+        readOfficialConfig: jest.fn(async () => ({
+          providers: ["feishu" as const, "github" as const],
+          coolingOffDays: 7,
+        })),
+      })
+    )
+    expect(await screen.findByTestId("cloud-sign-in-official-feishu")).toBeInTheDocument()
+    expect(screen.getByTestId("cloud-sign-in-official-github")).toBeInTheDocument()
+    expect(screen.queryByTestId("cloud-sign-in-official-google")).not.toBeInTheDocument()
+    expect(screen.queryByTestId("cloud-sign-in-official-apple")).not.toBeInTheDocument()
+  })
 })

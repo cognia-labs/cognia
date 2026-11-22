@@ -26,6 +26,7 @@ import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { captureAccountScope } from "@/lib/accounts/active-account-id"
 import { readCloudSessionState } from "@/lib/identity/cloud-session"
+import { fetchOfficialAccountConfig } from "@/lib/identity/official-account-config"
 import {
   AccountDeletionError,
   DEFAULT_DELETION_COOLING_OFF_DAYS,
@@ -45,6 +46,7 @@ export interface OfficialAccountDeletionDeps {
   read?: typeof readAccountDeletion
   cancel?: typeof cancelAccountDeletion
   confirm?: typeof confirmAccountDeletion
+  readConfig?: typeof fetchOfficialAccountConfig
   drivers?: typeof platformSignInDrivers
   /** Resolve a fresh bearer session for this profile before API calls. */
   resolveSession?: () => Promise<LogtoSession | null>
@@ -75,6 +77,7 @@ export function OfficialAccountDeletion({
 }: OfficialAccountDeletionProps) {
   const t = useTranslations("account.identity.deletion")
   const [state, setState] = useState<OfficialDeletionState | null>(null)
+  const [configCoolingDays, setConfigCoolingDays] = useState<number | null>(null)
   const [readError, setReadError] = useState<string | null>(null)
   const [phase, setPhase] = useState<Phase>("idle")
   const signInWait = useRef<AbortController | null>(null)
@@ -109,6 +112,7 @@ export function OfficialAccountDeletion({
         if (cause.code === "different-person") return t("error.differentPerson")
         if (cause.code === "stale-sign-in") return t("error.staleSignIn")
         if (cause.code === "unauthorized") return t("error.unauthorized")
+        if (cause.code === "in-progress") return t("error.inProgress")
       }
       return t("error.generic", { message: cause instanceof Error ? cause.message : String(cause) })
     },
@@ -128,12 +132,16 @@ export function OfficialAccountDeletion({
       const next = await (depsRef.current.read ?? readAccountDeletion)(activeSession)
       if (!mountedRef.current) return
       setState(next)
+      if (next.coolingOffDays === undefined) {
+        const cfg = await (depsRef.current.readConfig ?? fetchOfficialAccountConfig)(deployment)
+        if (mountedRef.current && cfg) setConfigCoolingDays(cfg.coolingOffDays)
+      }
     } catch (cause) {
       if (!mountedRef.current) return
       setState(null)
       setReadError(explainRef.current(cause))
     }
-  }, [resolveActiveSession])
+  }, [deployment, resolveActiveSession])
 
   useEffect(() => {
     mountedRef.current = true
@@ -234,12 +242,16 @@ export function OfficialAccountDeletion({
     } catch (cause) {
       if (!mountedRef.current) return
       toast.error(explain(cause))
+      if (cause instanceof AccountDeletionError && cause.code === "in-progress") {
+        void load()
+      }
     } finally {
       if (mountedRef.current) setPhase("idle")
     }
   }
 
-  const coolingOffDays = state?.coolingOffDays ?? DEFAULT_DELETION_COOLING_OFF_DAYS
+  const coolingOffDays =
+    state?.coolingOffDays ?? configCoolingDays ?? DEFAULT_DELETION_COOLING_OFF_DAYS
 
   return (
     <section
@@ -269,6 +281,13 @@ export function OfficialAccountDeletion({
         <p className="flex items-center gap-2 text-xs text-muted-foreground" role="status">
           <Spinner className="size-3" />
           {t("loading")}
+        </p>
+      ) : state.status === "purging" ? (
+        <p
+          className="text-sm text-muted-foreground"
+          data-testid="official-account-deletion-purging"
+        >
+          {t("purging")}
         </p>
       ) : state.status === "pending" ? (
         <div className="flex flex-col gap-2">

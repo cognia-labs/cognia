@@ -50,6 +50,7 @@ import { tryOpenUrl } from "@/lib/native/opener"
 import { forgetOfflineChoice } from "@/components/account/cloud-sign-in-gate"
 import { CloudDeploymentCard } from "@/components/settings/companion/cloud-deployment-card"
 import { OfficialAccountDeletion } from "@/components/account/manage/official-account-deletion"
+import { OfficialLinkedIdentities } from "@/components/account/manage/official-linked-identities"
 import { AccountSyncSection } from "@/components/account/sync/account-sync-section"
 import { useAccountStore } from "@/stores/account/account-store"
 
@@ -265,6 +266,16 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
         </p>
       </div>
 
+      {official ? (
+        <div
+          className="flex flex-col gap-1 rounded-md border border-dashed bg-muted/30 px-3 py-2 text-[11px] text-muted-foreground"
+          data-testid="account-identity-layer-guide"
+        >
+          <p>{t("layerGuide.local")}</p>
+          <p>{t("layerGuide.cloud")}</p>
+        </div>
+      ) : null}
+
       {state.status === "active" ? (
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
           <dt className="text-muted-foreground">{t("person")}</dt>
@@ -404,6 +415,15 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
           </Button>
         ) : null}
       </div>
+
+      {isServedProfile && official && officialSession ? (
+        <OfficialLinkedIdentities
+          deployment={official}
+          session={officialSession}
+          localAccountId={account.id}
+          onChanged={() => void load()}
+        />
+      ) : null}
 
       {isServedProfile && official && officialSession && state.status === "active" ? (
         <AccountSyncSection
