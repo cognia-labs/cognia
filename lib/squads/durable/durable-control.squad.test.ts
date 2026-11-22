@@ -399,10 +399,6 @@ describe("controlSquadRun", () => {
       executionConstraints: {
         version: 1,
         teamConfig: {
-          maxTeammates: 2,
-          maxConcurrentTeammates: 1,
-          executionMode: "coordinated",
-          displayMode: "expanded",
           repositories: [{ id: "primary", role: "primary", path: "/repo", writable: true }],
           environmentRef: { environmentId: "env-1", versionId: "env-1:v1" },
         },
@@ -417,7 +413,7 @@ describe("controlSquadRun", () => {
       const res = await controlSquadRun({ runId: RUN }, "resume", {
         coordinator: coordinator as unknown as DurableTeamCoordinator,
         isLive: () => false,
-        readiness: async () => ({ ready: true, blockers: [] }),
+        readiness: async () => ({ blocked: false }),
       })
       expect(res).toEqual({ ok: true, status: "running" })
       const deadline = Date.now() + 2_000

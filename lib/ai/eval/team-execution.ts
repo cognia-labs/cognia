@@ -88,7 +88,7 @@ export interface IsolatedTeamEvalResult {
   wallTimeMs: number
   costKnown: boolean
   executionProfile: "isolated-text"
-  evidenceSummary: IsolatedTeamEvalEvidenceSummary
+  evidenceSummary?: IsolatedTeamEvalEvidenceSummary
 }
 
 const MAX_TASKS = 32

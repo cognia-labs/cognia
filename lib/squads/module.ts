@@ -150,6 +150,8 @@ export default defineHostModule({
       team_list_members: { consent: "default", effect: "read", cancellable: false },
       task_add_comment: { consent: "default", effect: "write", cancellable: false },
       task_get: { consent: "default", effect: "read", cancellable: false },
+      task_list: { consent: "default", effect: "read", cancellable: false },
+      task_claim: { consent: "default", effect: "write", cancellable: false },
       twin_knowledge_search: { consent: "default", effect: "read", cancellable: false },
       team_post_to_chat: { consent: "default", effect: "write", cancellable: false },
       team_propose_decision: { consent: "default", effect: "write", cancellable: false },

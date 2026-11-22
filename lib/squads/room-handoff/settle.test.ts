@@ -1,4 +1,5 @@
 /** @jest-environment node */
+import "fake-indexeddb/auto"
 import type { UIMessage } from "ai"
 import type { BackgroundTaskJournalRecord } from "@/lib/background-tasks/registry-core"
 import { SQUAD_HANDOFF_RECONCILE_WINDOW_MS } from "@/lib/background-tasks/squad-handoff-outbox"
@@ -275,7 +276,6 @@ describe("reconcileRoomHandoffs", () => {
   })
 
   it("recovers missing outbox entries across crash window, preserves close-timestamp attempt reports, and delivers once across duplicate startups (T04)", async () => {
-    await import("fake-indexeddb/auto")
     const { __enableDbRuntimeForTesting, __resetDbForTesting, getDb } =
       await import("@/lib/db/schema")
     const { toStoredMessageRow } = await import("@/lib/db/messages")

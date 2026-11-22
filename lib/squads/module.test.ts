@@ -13,6 +13,7 @@ describe("squads module manifest", () => {
       "app/agent-teams/",
       "components/settings/agent/agent-team-templates-section",
       "components/settings/squads/",
+      "lib/db/squad-parked-delegations.ts",
     ])
   })
 
@@ -44,18 +45,35 @@ describe("squads module manifest", () => {
           mobile: "./runtime/squad-bootstrap",
         },
       },
+      {
+        name: "room-handoff-reconcile",
+        criticality: "optional",
+        adapters: {
+          brain: { module: "./room-handoff/runtime-reconcile", hosts: ["brain"] },
+          desktop: "./room-handoff/runtime-reconcile",
+        },
+        absent: {
+          mobile:
+            "A phone never orchestrates a room: its Host runs the room's Squad hand-offs and reports them.",
+        },
+      },
     ])
   })
 
   it("declares the collaboration tools without a tier, and the Squad template tools allowed", async () => {
     const declare = squads.tools!.declare
     expect(Object.keys(declare).sort()).toEqual(
-      [...Object.values(TEAM_TOOL_NAMES), ...Object.values(SQUAD_TOOL_NAMES)].sort()
+      [
+        ...Object.values(TEAM_TOOL_NAMES),
+        ...Object.values(SQUAD_TOOL_NAMES),
+        "room_handoff_to_squad",
+      ].sort()
     )
     const teamReads = new Set<string>([
       TEAM_TOOL_NAMES.readMemory,
       TEAM_TOOL_NAMES.listMembers,
       TEAM_TOOL_NAMES.getTask,
+      TEAM_TOOL_NAMES.listTasks,
       TEAM_TOOL_NAMES.twinKnowledgeSearch,
     ])
     for (const name of Object.values(TEAM_TOOL_NAMES)) {

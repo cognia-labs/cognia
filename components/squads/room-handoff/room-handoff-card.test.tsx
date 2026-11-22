@@ -47,7 +47,11 @@ const requestDecision = jest.fn(async (..._args: unknown[]): Promise<unknown> =>
 jest.mock("@/lib/squads/room-handoff/decide-client", () => ({
   requestRoomSquadHandoffDecision: (...args: unknown[]) => requestDecision(...args),
 }))
-const dispatchRunControl = jest.fn(async (..._args: unknown[]) => ({ accepted: true }))
+import type { RunControlOutcome } from "@/lib/execution/run-control-dispatch"
+
+const dispatchRunControl = jest.fn<Promise<RunControlOutcome>, unknown[]>(async () => ({
+  accepted: true,
+}))
 jest.mock("@/lib/execution/run-control-dispatch", () => ({
   dispatchRunControl: (...args: unknown[]) => dispatchRunControl(...args),
 }))

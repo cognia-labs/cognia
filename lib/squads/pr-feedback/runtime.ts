@@ -9,7 +9,6 @@
  * decoupled from the store types and is testable with a fake octokit + Dexie.
  */
 
-import { getDb } from "@/lib/db/schema"
 import {
   getTeamPrObservation,
   recordTeamPrObservation,

@@ -1491,7 +1491,7 @@ describe("F09 durable teammate messaging & opt-in atomic task self-claim", () =>
       db.agentTeamRuns.clear(),
       db.agentTeamChildRuns.clear(),
       db.agentTeamSteeringReceipts.clear(),
-      db.agentTeamTrajectoryEvents?.clear(),
+      db.agentTeamTrajectory.clear(),
     ])
   })
 

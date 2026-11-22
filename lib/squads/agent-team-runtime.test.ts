@@ -111,12 +111,9 @@ function buildTypedWorkspaceLeaseFixture(
   const makeTaskRun = (logicalRootId: string, executionRoot: string): TaskRun => ({
     runId: `ws-${input.taskId}-${logicalRootId}`,
     taskId: `task:team:${options.runId}`,
-    sessionId: options.runId,
     parentRunId: null,
     agentId: input.teammateId,
     agentKind: "agent-team",
-    workspaceRoot:
-      options.roots.find((root) => root.logicalRootId === logicalRootId)?.sourceRoot ?? "/repo",
     executionRoot,
     isolationKind: "gitWorktree",
     isolationRef: null,
@@ -2573,7 +2570,7 @@ describe("runTeamLifecycle — budget governance, extension & restart preservati
     // Unpause via canonical control plane and re-enter on the SAME runId for remaining work (b3):
     const resumeCtrl = await controlSquadRun({ runId }, "resume", {
       isLive: () => false,
-      readiness: async () => ({ ready: true, blockers: [] }),
+      readiness: async () => ({ blocked: false }),
       reenter: async () => undefined,
     })
     expect(resumeCtrl).toMatchObject({ ok: true, status: "running" })

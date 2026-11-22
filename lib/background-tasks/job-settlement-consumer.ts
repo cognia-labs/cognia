@@ -31,7 +31,7 @@ export interface JobSettlementConsumerDeps {
     monitors: readonly BackgroundMonitorSettlementShape[]
   }>
   /** Record an owed end and deliver it (idempotent by job id). */
-  onSettled: (record: BackgroundTaskJournalRecord) => Promise<void>
+  onSettled: (record: BackgroundTaskJournalRecord) => Promise<void | boolean>
   /** Called with a resolver to run when the transport missed `jobs` events. */
   registerResync?: (domain: string, resolver: () => Promise<void>) => () => void
   now?: () => number

@@ -9,6 +9,8 @@
  * Scans never overlap: one asked for while another runs waits for it.
  */
 
+import type { RendererRuntimeContext } from "@/lib/modules/manifest-types"
+
 const MAX_RECONCILE_RETRIES = 4
 const BASE_RETRY_DELAY_MS = 1_000
 
@@ -17,11 +19,14 @@ export interface ReconcileRuntimeOptions {
   maxRetries?: number
 }
 
-export async function start(options: ReconcileRuntimeOptions = {}): Promise<() => void> {
+export async function start(
+  ctxOrOptions: Pick<RendererRuntimeContext, "log"> | ReconcileRuntimeOptions = {}
+): Promise<() => void> {
   const [settleMod, { onSquadRunEnded }] = await Promise.all([
     import("./settle"),
     import("../squad/squad-lifecycle-runner"),
   ])
+  const options = ctxOrOptions as Partial<ReconcileRuntimeOptions>
   const maxRetries = options.maxRetries ?? MAX_RECONCILE_RETRIES
   const baseDelayMs = options.retryDelayMs ?? BASE_RETRY_DELAY_MS
   let stopped = false

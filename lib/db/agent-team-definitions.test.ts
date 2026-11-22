@@ -2,6 +2,7 @@
  * @jest-environment jsdom
  */
 import "fake-indexeddb/auto"
+import Dexie from "dexie"
 
 import {
   agentTeamFromRow,
@@ -273,10 +274,10 @@ describe("stored definitions", () => {
 
     let readFailedOnce = false
     const originalToArray = getDb().agentTeams.toArray.bind(getDb().agentTeams)
-    const readSpy = jest.spyOn(getDb().agentTeams, "toArray").mockImplementation(async () => {
+    const readSpy = jest.spyOn(getDb().agentTeams, "toArray").mockImplementation(() => {
       if (!readFailedOnce) {
         readFailedOnce = true
-        throw closedError
+        return Dexie.Promise.reject(closedError)
       }
       return originalToArray()
     })
