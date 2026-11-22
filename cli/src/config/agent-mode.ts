@@ -26,6 +26,8 @@ import { z } from "zod"
 import { BUILT_IN_AGENT_MODES } from "@/lib/agent/modes/built-ins"
 import type { AgentModeConfig } from "@/types/agent/agent-mode"
 
+export type { AgentModeConfig }
+
 import { PERMISSION_MODES } from "./schema"
 
 /** A concrete permission-mode value (mirrors `state/types.PermissionMode`). */

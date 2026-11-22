@@ -3,7 +3,7 @@ import nodeOs from "node:os"
 import nodePath from "node:path"
 
 import { extractRichDocBlock } from "./documents"
-import type { ProcessedDocument } from "@/types/document/document"
+import type { ProcessedDocument } from "@cognia/document/types"
 
 const fakeProcessed = (content: string): ProcessedDocument => ({
   id: "x",

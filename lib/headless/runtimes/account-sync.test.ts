@@ -51,7 +51,12 @@ it("does nothing when the serve process left account sync off", async () => {
 it("syncs the brain's own database and stops with the brain", async () => {
   const stop = jest.fn()
   startHeadlessAccountSync.mockReturnValue({ stop, check: jest.fn() })
-  const host = { session: async () => null, keyring: {} as never, backup: async () => undefined }
+  const host = {
+    session: async () => null,
+    signInCommand: "cognia-agent account-sync login",
+    keyring: {} as never,
+    backup: async () => undefined,
+  }
   const ctx = context(host)
   const entry = await runtime()
   const teardown = await entry.start(ctx)

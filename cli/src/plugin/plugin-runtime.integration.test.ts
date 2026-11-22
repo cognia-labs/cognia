@@ -146,9 +146,16 @@ describe("plugin runtime (real bootstrap)", () => {
       const adapter = createNodePluginRuntimeAdapter({
         manager: async () => ({
           registerDiskPlugin: async () => {},
+          getPlugin: () => undefined,
+          getPluginLifecycleState: async () => ({ intent: "auto" }),
           loadPlugin: async () => {},
           enablePlugin: async () => {},
+          disablePlugin: async () => {},
+          suspendPlugin: async () => {},
           unloadPlugin,
+          reservePluginRuntimeGraph: () => ({ release: () => {} }) as never,
+          releasePluginRuntimeGraph: () => undefined,
+          withPluginPackageMutation: async (_id, operation) => operation(),
         }),
       })
       await adapter.reconcile({ action: "uninstalled", pluginId: manifest.id })
