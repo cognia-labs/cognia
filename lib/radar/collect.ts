@@ -66,6 +66,18 @@ function summarizeDraftSegments(segments: unknown): string {
     .slice(0, 200)
 }
 
+function parseTaskUpdatedMs(updatedAt: Date | string | number | undefined): number {
+  if (updatedAt instanceof Date) return updatedAt.getTime()
+  if (typeof updatedAt === "number") return Number.isFinite(updatedAt) ? updatedAt : 0
+  if (typeof updatedAt === "string") {
+    const asNum = Number(updatedAt)
+    if (Number.isFinite(asNum)) return asNum
+    const parsed = Date.parse(updatedAt)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return 0
+}
+
 export async function collectLocalObligations(
   cutoff: number,
   now: number,
@@ -129,7 +141,7 @@ export async function collectLocalObligations(
       if (!BLOCKED_GOAL_STATUSES.has(goal.status)) continue
       const at = goal.updatedAt ?? goal.createdAt
       if (at < cutoff) continue
-      const summary = (goal.safeObjective ?? goal.objective ?? "").trim().slice(0, 200)
+      const summary = (goal.safeObjective ?? goal.rawObjective ?? "").trim().slice(0, 200)
       if (!summary) continue
       items.push({
         id: `goal:${goal.id}`,
@@ -142,10 +154,11 @@ export async function collectLocalObligations(
     }
 
     for (const task of tasks) {
-      const updatedMs =
-        task.updatedAt instanceof Date ? task.updatedAt.getTime() : Number(task.updatedAt ?? 0)
+      const updatedMs = parseTaskUpdatedMs(task.updatedAt)
       const failedRecently =
-        task.status === "error" || (task.failureCount > 0 && task.lastRunStatus === "failed")
+        task.status === "error" ||
+        (task.consecutiveFailures ?? 0) > 0 ||
+        (task.failureCount > 0 && Boolean(task.lastError))
       if (!failedRecently || updatedMs < cutoff) continue
       items.push({
         id: `task:${task.id}`,
@@ -187,7 +200,7 @@ export async function describeRadarObligationSource(id: string): Promise<string 
     if (id.startsWith("goal:")) {
       const goal = await db.chatGoals.get(id.slice("goal:".length))
       if (!goal || !BLOCKED_GOAL_STATUSES.has(goal.status)) return null
-      return `Goal (${goal.status}): ${(goal.safeObjective ?? goal.objective ?? "").slice(0, 240)}`
+      return `Goal (${goal.status}): ${(goal.safeObjective ?? goal.rawObjective ?? "").slice(0, 240)}`
     }
     if (id.startsWith("task:")) {
       const task = await db.scheduledTasks.get(id.slice("task:".length))

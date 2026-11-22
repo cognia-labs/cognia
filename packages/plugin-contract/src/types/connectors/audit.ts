@@ -456,6 +456,10 @@ export type AuditKind =
   // `fields.fromAdapterId` (the run's origin bot) and `fields.targetAdapterId`
   // (the identity that posts), plus the team/teammate that issued the call.
   | "team.posted_as_bot"
+  // `/bind <code>`: a remote DM sender redeemed a single-use Host-owner bind code.
+  | "identity.host_owner_bound"
+  // `/resume <id>`: a conversation rebound to an existing cross-channel session.
+  | "session.cross_channel_resumed"
 
 export interface AuditEntry {
   id: string

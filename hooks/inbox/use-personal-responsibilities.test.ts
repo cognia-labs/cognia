@@ -60,7 +60,7 @@ describe("buildPersonalResponsibilities & usePersonalResponsibilities (F10)", ()
           {
             id: "g1",
             sessionId: "s1",
-            objective: "Ship Q4 memo",
+            rawObjective: "Ship Q4 memo",
             safeObjective: "Ship Q4 memo",
             status: "paused",
             createdAt: 2_000,

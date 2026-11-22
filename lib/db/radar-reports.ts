@@ -81,7 +81,7 @@ export async function saveRadarReport(
       const [memoryRows, tombstoneRows, captureRows] = await Promise.all([
         memoryIds.length > 0 ? db.memories.bulkGet(memoryIds) : Promise.resolve([]),
         memoryIds.length > 0
-          ? db.syncTombstones.bulkGet(memoryIds.map((id) => ["memories", id] as [string, string]))
+          ? db.syncTombstones.bulkGet(memoryIds.map((id): ["memories", string] => ["memories", id]))
           : Promise.resolve([]),
         captureIds.length > 0 ? db.capturedItems.bulkGet(captureIds) : Promise.resolve([]),
       ])

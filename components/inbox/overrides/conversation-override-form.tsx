@@ -1354,7 +1354,8 @@ function DelegationReadinessStrip({
               ? t("delegationReadiness.adapterDisabled")
               : adapterHealth.reauthRequired
                 ? t("delegationReadiness.reauthRequired")
-                : adapterHealth.current === "down" || adapterHealth.current === "degraded"
+                : adapterHealth.current.state === "down" ||
+                    adapterHealth.current.state === "degraded"
                   ? t("delegationReadiness.adapterDegraded")
                   : t("delegationReadiness.adapterReady")}
         </li>

@@ -28,6 +28,7 @@ import type {
   ConversationOverrideRow,
 } from "@/lib/db/connector-types"
 import { getDb } from "@/lib/db/schema"
+import type { DBScheduledTask } from "@/lib/db/scheduled-task-types"
 import {
   listPendingRadarSuggestions,
   type PendingRadarSuggestionItem,
@@ -130,9 +131,24 @@ export interface ResponsibilityDbSnapshot {
   overdueOverrides: ConversationOverrideRow[]
   recoveryJobs: ConnectorInboundJobRow[]
   blockedGoals: Goal[]
-  failedTasks: ScheduledTask[]
+  failedTasks: Array<DBScheduledTask | ScheduledTask>
   radarSuggestions: PendingRadarSuggestionItem[]
   now: number
+}
+
+function parseTaskUpdatedMs(
+  updatedAt: Date | string | number | undefined,
+  fallback: number
+): number {
+  if (updatedAt instanceof Date) return updatedAt.getTime()
+  if (typeof updatedAt === "number") return Number.isFinite(updatedAt) ? updatedAt : fallback
+  if (typeof updatedAt === "string") {
+    const asNum = Number(updatedAt)
+    if (Number.isFinite(asNum)) return asNum
+    const parsed = Date.parse(updatedAt)
+    if (!Number.isNaN(parsed)) return parsed
+  }
+  return fallback
 }
 
 export function buildPersonalResponsibilities(input: {
@@ -211,7 +227,7 @@ export function buildPersonalResponsibilities(input: {
       kind: "blocked_commitment",
       priority: "high",
       commitmentKind: "goal",
-      title: (goal.safeObjective ?? goal.objective ?? goal.id).trim().slice(0, 140),
+      title: (goal.safeObjective ?? goal.rawObjective ?? goal.id).trim().slice(0, 140),
       subtitle: goal.status,
       createdAt: goal.updatedAt ?? goal.createdAt,
       sessionId: goal.sessionId,
@@ -219,8 +235,7 @@ export function buildPersonalResponsibilities(input: {
   }
 
   for (const task of dbSnapshot.failedTasks) {
-    const updatedAt =
-      task.updatedAt instanceof Date ? task.updatedAt.getTime() : Number(task.updatedAt ?? now)
+    const updatedAt = parseTaskUpdatedMs(task.updatedAt, now)
     items.push({
       id: `task:${task.id}`,
       kind: "blocked_commitment",
@@ -283,7 +298,9 @@ async function queryResponsibilityDbSnapshot(): Promise<ResponsibilityDbSnapshot
       blockedGoals: goals.filter((goal) => BLOCKED_GOAL_STATUSES.has(goal.status)),
       failedTasks: tasks.filter(
         (task) =>
-          task.status === "error" || (task.failureCount > 0 && task.lastRunStatus === "failed")
+          task.status === "error" ||
+          (task.consecutiveFailures ?? 0) > 0 ||
+          (task.failureCount > 0 && Boolean(task.lastError))
       ),
       radarSuggestions,
       now,

@@ -34,7 +34,7 @@ import { Surface } from "@/components/surface/surface"
 import { mutateConversationOverride } from "@/lib/connectors/inbox-writes"
 import { dismissConnectorInboundJobRecovery } from "@/lib/db/connector-inbound-jobs"
 import { respondRunApproval } from "@/lib/execution/run-approvals"
-import { inboxSessionHref } from "@/lib/inbox/conversation-href"
+import { inboxConversationHref, inboxSessionHref } from "@/lib/inbox/conversation-href"
 import { decideRadarSuggestion } from "@/lib/radar/suggestions"
 import {
   usePersonalResponsibilities,
@@ -158,7 +158,11 @@ export function NeedsMeCenter() {
                 busy={busyId === item.id}
                 onRunAction={(fn) => runAction(item.id, fn)}
                 onOpenConversation={(conversationKey, sessionId) =>
-                  router.push(inboxSessionHref(conversationKey, sessionId))
+                  router.push(
+                    sessionId
+                      ? inboxSessionHref(conversationKey, sessionId)
+                      : inboxConversationHref(conversationKey)
+                  )
                 }
                 onOpenSession={openChatSession}
                 onNavigate={(href) => router.push(href)}
@@ -200,9 +204,8 @@ function ResponsibilityCard({
     const platform = safePlatform(item.conversationKey)
     return (
       <Surface
-        variant="panel"
-        padding="sm"
-        className="space-y-2"
+        radius="panel"
+        className="space-y-2 border p-3"
         data-testid={`needs-me-item-${item.id}`}
       >
         <div className="flex items-center gap-2 text-xs">
@@ -228,7 +231,7 @@ function ResponsibilityCard({
   }
 
   return (
-    <Surface variant="panel" padding="sm" data-testid={`needs-me-item-${item.id}`}>
+    <Surface radius="panel" className="border p-3" data-testid={`needs-me-item-${item.id}`}>
       <ItemGroup>
         <Item size="sm" className="px-0 py-0">
           <ItemContent className="min-w-0 space-y-1">

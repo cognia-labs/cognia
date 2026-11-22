@@ -54,6 +54,7 @@ const COMMAND_HEADERS: Record<ControlCommandName, { title: string; icon: LarkIco
   handoff: { title: "转交给人", icon: LARK_ICON.member },
   delegate: { title: "委派", icon: LARK_ICON.switch },
   auth: { title: "授权", icon: LARK_ICON.safe },
+  bind: { title: "绑定身份", icon: LARK_ICON.safe },
 }
 
 const READ_COMMANDS = new Set(["commands", "status", "sessions", "dir", "tasks", "agent"])
