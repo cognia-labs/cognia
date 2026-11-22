@@ -224,7 +224,7 @@ test("paired editor forwards workspace-folder callbacks and refuses workspace ed
     { accepted: true }
   )
   assert.deepEqual(await pending, folders)
-  await service.stop(owner)
+  await service.stop(owner.ownerId, owner.serverId)
 })
 
 test("server requests are correlated, carry workspace-edit preconditions, and accept responses", async () => {

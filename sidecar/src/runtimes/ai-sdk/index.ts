@@ -308,7 +308,7 @@ export function dispatchAiSdk({
   // The turn's sendOptions narrowed to the routed agent's tool scope. Reused for
   // both built-in/plugin tool building and the MCP tool/gate path so the agent's
   // allow + deny lists apply uniformly. Identity when no agent is routed.
-  const agentScopedSendOptions =
+  const agentScopedSendOptions: SendOptions =
     agentAllowedTools || agentDisallowedTools
       ? {
           ...sendOptions,

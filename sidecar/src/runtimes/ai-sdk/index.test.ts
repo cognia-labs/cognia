@@ -1924,7 +1924,7 @@ test("anthropic + cacheOptimizationEnabled places base cacheControl at the end o
       model: "claude-x",
       providerCredentials: { apiKey: "k", protocol: "anthropic" },
       agent: "reviewer",
-      agents: { reviewer: { prompt: "AGENT_ROLE" } },
+      agents: { reviewer: { description: "Reviewer", prompt: "AGENT_ROLE" } },
       systemPrompt: "CHAR_BASE",
       appendSystemPrompt: "STABLE_APPEND\n\nDYN_TAIL",
       dynamicSystemPrompt: "DYN_TAIL",

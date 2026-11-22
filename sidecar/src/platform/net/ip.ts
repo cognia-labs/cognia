@@ -1,5 +1,10 @@
 // IP-literal and CIDR parsing for exact-address proxy bypass (NO_PROXY).
 
+const ZERO = BigInt(0)
+const EIGHT = BigInt(8)
+const SIXTEEN = BigInt(16)
+const WORD_MASK = BigInt(0xffff)
+
 /** An IP literal as a fixed-width integer: 32 bits for IPv4, 128 for IPv6. */
 export interface ParsedIp {
   bits: 32 | 128
@@ -13,12 +18,12 @@ export interface ParsedCidr extends ParsedIp {
 function parseIpv4(input: string): ParsedIp | null {
   const parts = input.split(".")
   if (parts.length !== 4) return null
-  let value = 0n
+  let value = ZERO
   for (const part of parts) {
     if (!/^\d{1,3}$/.test(part)) return null
     const octet = Number(part)
     if (octet > 255) return null
-    value = (value << 8n) | BigInt(octet)
+    value = (value << EIGHT) | BigInt(octet)
   }
   return { bits: 32, value }
 }
@@ -31,7 +36,7 @@ function ipv6Words(part: string): number[] | null {
     if (token.includes(".")) {
       const ipv4 = parseIpv4(token)
       if (!ipv4) return null
-      words.push(Number((ipv4.value >> 16n) & 0xffffn), Number(ipv4.value & 0xffffn))
+      words.push(Number((ipv4.value >> SIXTEEN) & WORD_MASK), Number(ipv4.value & WORD_MASK))
       continue
     }
     if (!/^[0-9a-f]{1,4}$/i.test(token)) return null
@@ -51,8 +56,8 @@ function parseIpv6(input: string): ParsedIp | null {
   if (halves.length === 1 ? omitted !== 0 : omitted < 1) return null
   const words = [...left, ...Array.from({ length: omitted }, () => 0), ...right]
   if (words.length !== 8) return null
-  let value = 0n
-  for (const word of words) value = (value << 16n) | BigInt(word)
+  let value = ZERO
+  for (const word of words) value = (value << SIXTEEN) | BigInt(word)
   return { bits: 128, value }
 }
 

@@ -10,6 +10,7 @@ import type {
 } from "@cognia/agent-contracts/session-operations"
 import type { ConversationMessage } from "./conversation.ts"
 import type { VerificationBudgetStamp } from "@cognia/agent-config-types/execution-budget"
+import type { RunAuthorityV1 } from "@cognia/agent-config-types/agent-capability-grant"
 import type {
   AgentEffortLevel,
   AgentPermissionMode,
@@ -30,7 +31,7 @@ export interface SendOptions {
    * fence instead of this child's own session id.
    */
   workerToolAdmissionSessionId?: string
-  runAuthority?: NonNullable<import("@cognia/agent-config-types").SendOptions["runAuthority"]>
+  runAuthority?: RunAuthorityV1
   inheritedRunAuthority?: SendOptions["runAuthority"]
   runAuthorityMcpServerIds?: Record<string, string>
   /** ADR-0243 ledger hold: cap each model request at `tokens`; stop at `deadlineAt`. */
