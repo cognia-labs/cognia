@@ -604,3 +604,45 @@ it("syncs multi-tags, smart collections and centered search snippets across pair
     items: [],
   })
 })
+
+it("returns sanitized snapshot shares and live FileSpace grants over files_library_access_get (G08)", async () => {
+  library = [entry("artifact:a1", { title: "Spec" })]
+  const d = deps({
+    resolveAccess: async () => ({
+      sharedLinks: [
+        {
+          code: "sh_1",
+          title: "Spec Link",
+          kind: "file-bundle",
+          createdAt: 10,
+          expiresAt: 9_999,
+          url: "https://share.example/share/view?c=sh_1",
+        },
+      ],
+      liveGrants: [
+        {
+          id: "lg_1",
+          sessionId: "s1",
+          label: "SFTP Grant",
+          audienceKind: "credentials",
+          protocols: ["sftp"],
+          permissions: ["read", "download"],
+          status: "active",
+          expiresAt: 8_888,
+          matchedPaths: ["/artifacts/Spec.md"],
+        },
+      ],
+    }),
+  })
+  await expect(call("files_library_access_get", { key: "artifact:a1" }, d)).resolves.toEqual({
+    ok: true,
+    sharedLinks: [
+      expect.objectContaining({ code: "sh_1", url: "https://share.example/share/view?c=sh_1" }),
+    ],
+    liveGrants: [expect.objectContaining({ id: "lg_1", matchedPaths: ["/artifacts/Spec.md"] })],
+  })
+  await expect(call("files_library_access_get", { key: "artifact:missing" }, d)).resolves.toEqual({
+    ok: false,
+    code: "files_remote_not_found",
+  })
+})

@@ -9457,6 +9457,46 @@
       },
       "additionalProperties": false
     },
+    "WorkspaceTrashReceipt": {
+      "type": "object",
+      "x-cognia-wire-source": "crates/cognia-files/src/files.rs WorkspaceTrashReceipt",
+      "required": ["trashId", "root", "relPath", "isDir", "trashedAtMs"],
+      "properties": {
+        "trashId": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 96
+        },
+        "root": {
+          "type": "string"
+        },
+        "relPath": {
+          "type": "string"
+        },
+        "isDir": {
+          "type": "boolean"
+        },
+        "trashedAtMs": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "WorkspaceTrashRestoreResult": {
+      "type": "object",
+      "x-cognia-wire-source": "crates/cognia-files/src/files.rs WorkspaceTrashRestoreResult",
+      "required": ["relPath", "isDir"],
+      "properties": {
+        "relPath": {
+          "type": "string"
+        },
+        "isDir": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
     "WorkspaceWriteResult": {
       "type": "object",
       "x-cognia-wire-source": "crates/cognia-files/src/files.rs WorkspaceWriteResult",
@@ -13963,6 +14003,80 @@
         }
       ]
     },
+    "FilesRemoteAccess": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["ok", "sharedLinks", "liveGrants"],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "sharedLinks": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["code", "title", "kind", "createdAt", "expiresAt", "url"],
+                "properties": {
+                  "code": { "type": "string" },
+                  "title": { "type": "string" },
+                  "kind": { "type": "string" },
+                  "createdAt": { "type": "integer" },
+                  "expiresAt": { "type": "integer" },
+                  "url": { "type": "string" }
+                },
+                "additionalProperties": false
+              }
+            },
+            "liveGrants": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "sessionId",
+                  "label",
+                  "audienceKind",
+                  "protocols",
+                  "permissions",
+                  "status",
+                  "expiresAt",
+                  "matchedPaths"
+                ],
+                "properties": {
+                  "id": { "type": "string" },
+                  "sessionId": { "type": "string" },
+                  "label": { "type": ["string", "null"] },
+                  "audienceKind": { "type": "string", "enum": ["credentials", "collab"] },
+                  "protocols": {
+                    "type": "array",
+                    "items": { "type": "string", "enum": ["webdav", "sftp"] }
+                  },
+                  "permissions": {
+                    "type": "array",
+                    "items": { "type": "string", "enum": ["read", "download", "write"] }
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": ["active", "suspended", "stale"]
+                  },
+                  "expiresAt": { "type": "integer" },
+                  "matchedPaths": {
+                    "type": "array",
+                    "items": { "type": "string" }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/FilesRemoteRefused"
+        }
+      ]
+    },
     "FilesRemoteOk": {
       "oneOf": [
         {
@@ -18230,6 +18344,12 @@
     },
     "fs_delete_workspace_entry": {
       "$ref": "#/$defs/NullResult"
+    },
+    "fs_trash_workspace_entry": {
+      "$ref": "#/$defs/WorkspaceTrashReceipt"
+    },
+    "fs_restore_workspace_trash": {
+      "$ref": "#/$defs/WorkspaceTrashRestoreResult"
     },
     "fs_list_workspace_dir": {
       "$ref": "#/$defs/RawWorkspaceEntryList"
@@ -23965,6 +24085,9 @@
     },
     "files_library_get": {
       "$ref": "#/$defs/FilesRemoteDetail"
+    },
+    "files_library_access_get": {
+      "$ref": "#/$defs/FilesRemoteAccess"
     },
     "files_library_read_chunk": {
       "$ref": "#/$defs/FilesRemoteReadChunk"

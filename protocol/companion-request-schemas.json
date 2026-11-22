@@ -8625,6 +8625,26 @@
       },
       "additionalProperties": false
     },
+    "files_library_access_get": {
+      "type": "object",
+      "description": "Read-only summary of active snapshot share links (without secret decryption fragments) and live FileSpace grants covering one Files item.",
+      "required": [
+        "key"
+      ],
+      "properties": {
+        "key": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 300
+        },
+        "imageLimit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100000
+        }
+      },
+      "additionalProperties": false
+    },
     "files_library_attach": {
       "type": "object",
       "description": "Use an item in a conversation. A file or image is bound to the conversation on the host, without copying bytes; an artifact or canvas document is answered `referenced`, for the device to stage as a reference from its text.",
@@ -9907,6 +9927,24 @@
       },
       "additionalProperties": false
     },
+    "fs_restore_workspace_trash": {
+      "type": "object",
+      "required": [
+        "root",
+        "trashId"
+      ],
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "trashId": {
+          "type": "string",
+          "minLength": 8,
+          "maxLength": 96
+        }
+      },
+      "additionalProperties": false
+    },
     "fs_search_content_workspace": {
       "type": "object",
       "required": [
@@ -9950,6 +9988,22 @@
       "additionalProperties": false
     },
     "fs_stat_workspace_file": {
+      "type": "object",
+      "required": [
+        "root",
+        "relPath"
+      ],
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "relPath": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "fs_trash_workspace_entry": {
       "type": "object",
       "required": [
         "root",

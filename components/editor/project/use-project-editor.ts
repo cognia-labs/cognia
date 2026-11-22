@@ -20,6 +20,8 @@ import {
   writeWorkspaceFileChecked,
   createWorkspaceDir,
   deleteWorkspaceEntry,
+  trashWorkspaceEntry,
+  restoreWorkspaceTrash,
   renameWorkspaceEntry,
 } from "@/lib/files/workspace-fs"
 import { gitWorktreeList } from "@/lib/git/commands"
@@ -292,6 +294,8 @@ export interface ProjectEditorDeps {
   writeFileChecked: typeof writeWorkspaceFileChecked
   createDir: typeof createWorkspaceDir
   deleteEntry: typeof deleteWorkspaceEntry
+  trashEntry?: typeof trashWorkspaceEntry
+  restoreTrash?: typeof restoreWorkspaceTrash
   renameEntry: typeof renameWorkspaceEntry
   listWorktrees: typeof gitWorktreeList
   registerLspRoot: typeof registerProjectWorkspace
@@ -309,6 +313,8 @@ const defaultDeps: ProjectEditorDeps = {
   writeFileChecked: writeWorkspaceFileChecked,
   createDir: createWorkspaceDir,
   deleteEntry: deleteWorkspaceEntry,
+  trashEntry: trashWorkspaceEntry,
+  restoreTrash: restoreWorkspaceTrash,
   renameEntry: renameWorkspaceEntry,
   listWorktrees: gitWorktreeList,
   registerLspRoot: registerProjectWorkspace,

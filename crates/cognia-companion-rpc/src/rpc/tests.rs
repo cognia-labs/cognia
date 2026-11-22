@@ -5863,6 +5863,7 @@ fn files_library_commands_are_bridged_and_bind_the_caller() {
         "files_library_collection_list",
         "files_library_search",
         "files_library_get",
+        "files_library_access_get",
         "files_library_read_chunk",
     ];
     let writes = [

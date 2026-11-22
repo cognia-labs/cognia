@@ -2218,6 +2218,330 @@ pub fn fs_delete_workspace_entry(
     }
 }
 
+/// Receipt returned when a workspace file or directory is staged into Cognia's
+/// managed workspace trash (`<data_root>/workspace-trash/`) for undo/restore.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTrashReceipt {
+    pub trash_id: String,
+    pub root: String,
+    pub rel_path: String,
+    pub is_dir: bool,
+    pub trashed_at_ms: u64,
+}
+
+/// Outcome of restoring a previously trashed workspace entry back to its path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceTrashRestoreResult {
+    pub rel_path: String,
+    pub is_dir: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkspaceTrashManifest {
+    trash_id: String,
+    root_canonical: String,
+    rel_path: String,
+    is_dir: bool,
+    trashed_at_ms: u64,
+    byte_size: u64,
+}
+
+const WORKSPACE_TRASH_RETENTION_MS: u64 = 30 * 24 * 60 * 60 * 1000;
+const WORKSPACE_TRASH_MAX_ITEMS: usize = 200;
+const WORKSPACE_TRASH_MAX_BYTES: u64 = 512 * 1024 * 1024;
+
+fn resolve_workspace_trash_root() -> Result<PathBuf, String> {
+    if let Ok(raw) = std::env::var("COGNIA_DATA_DIR") {
+        let trimmed = raw.trim();
+        if !trimmed.is_empty() {
+            return Ok(PathBuf::from(trimmed).join("workspace-trash"));
+        }
+    }
+    dirs::data_dir()
+        .map(|dir| dir.join("cognia").join("workspace-trash"))
+        .ok_or_else(|| "cannot resolve Cognia data directory for workspace trash".to_string())
+}
+
+fn next_workspace_trash_id(now_ms: u64) -> String {
+    static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    let seq = SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    format!("wstrash_{}_{}_{}", now_ms, std::process::id(), seq)
+}
+
+fn is_safe_trash_id(id: &str) -> bool {
+    let len = id.len();
+    (8..=96).contains(&len)
+        && id
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+}
+
+fn measure_tree_bytes_disallow_symlinks(path: &Path) -> Result<u64, String> {
+    let meta =
+        std::fs::symlink_metadata(path).map_err(|e| format!("stat {}: {}", path.display(), e))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!(
+            "cannot stage symlink in workspace trash: {}",
+            path.display()
+        ));
+    }
+    if !meta.is_dir() {
+        return Ok(meta.len());
+    }
+    let mut total: u64 = 0;
+    for entry in
+        std::fs::read_dir(path).map_err(|e| format!("read_dir {}: {}", path.display(), e))?
+    {
+        let entry = entry.map_err(|e| format!("read_dir entry: {}", e))?;
+        total = total.saturating_add(measure_tree_bytes_disallow_symlinks(&entry.path())?);
+    }
+    Ok(total)
+}
+
+fn copy_tree_exact_no_symlinks(from: &Path, to: &Path) -> Result<(), String> {
+    let meta =
+        std::fs::symlink_metadata(from).map_err(|e| format!("stat {}: {}", from.display(), e))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!("refusing to copy symlink: {}", from.display()));
+    }
+    if meta.is_dir() {
+        std::fs::create_dir_all(to).map_err(|e| format!("mkdir {}: {}", to.display(), e))?;
+        for entry in
+            std::fs::read_dir(from).map_err(|e| format!("read_dir {}: {}", from.display(), e))?
+        {
+            let entry = entry.map_err(|e| format!("read_dir entry: {}", e))?;
+            copy_tree_exact_no_symlinks(&entry.path(), &to.join(entry.file_name()))?;
+        }
+        Ok(())
+    } else {
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("mkdir {}: {}", parent.display(), e))?;
+        }
+        std::fs::copy(from, to)
+            .map(|_| ())
+            .map_err(|e| format!("copy {} -> {}: {}", from.display(), to.display(), e))
+    }
+}
+
+fn move_path_cross_device(from: &Path, to: &Path, is_dir: bool) -> Result<(), String> {
+    if let Err(err) = copy_tree_exact_no_symlinks(from, to) {
+        let _ = if is_dir {
+            std::fs::remove_dir_all(to)
+        } else {
+            std::fs::remove_file(to)
+        };
+        return Err(err);
+    }
+    if is_dir {
+        std::fs::remove_dir_all(from).map_err(|e| format!("remove dir {}: {}", from.display(), e))
+    } else {
+        std::fs::remove_file(from).map_err(|e| format!("remove {}: {}", from.display(), e))
+    }
+}
+
+fn move_path_with_fallback(from: &Path, to: &Path, is_dir: bool) -> Result<(), String> {
+    match std::fs::rename(from, to) {
+        Ok(()) => Ok(()),
+        Err(_) => move_path_cross_device(from, to, is_dir),
+    }
+}
+
+fn prune_workspace_trash_in(trash_root: &Path, now_ms: u64, keep_id: &str) {
+    let Ok(read_dir) = std::fs::read_dir(trash_root) else {
+        return;
+    };
+    let mut survivors: Vec<(String, u64, u64, PathBuf)> = Vec::new();
+    for entry in read_dir.flatten() {
+        let dir_path = entry.path();
+        if !dir_path.is_dir() {
+            continue;
+        }
+        let Some(name) = dir_path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if name == keep_id {
+            continue;
+        }
+        let manifest_path = dir_path.join("manifest.json");
+        let parsed = std::fs::read_to_string(&manifest_path)
+            .ok()
+            .and_then(|raw| serde_json::from_str::<WorkspaceTrashManifest>(&raw).ok());
+        let Some(manifest) = parsed else {
+            let _ = std::fs::remove_dir_all(&dir_path);
+            continue;
+        };
+        if now_ms.saturating_sub(manifest.trashed_at_ms) > WORKSPACE_TRASH_RETENTION_MS {
+            let _ = std::fs::remove_dir_all(&dir_path);
+            continue;
+        }
+        survivors.push((
+            manifest.trash_id,
+            manifest.trashed_at_ms,
+            manifest.byte_size,
+            dir_path,
+        ));
+    }
+    // Newest first so oldest items beyond count or byte budget are evicted.
+    survivors.sort_by(|a, b| b.1.cmp(&a.1));
+    let mut acc_bytes: u64 = 0;
+    for (index, (_, _, size, dir_path)) in survivors.into_iter().enumerate() {
+        acc_bytes = acc_bytes.saturating_add(size);
+        if index >= WORKSPACE_TRASH_MAX_ITEMS || acc_bytes > WORKSPACE_TRASH_MAX_BYTES {
+            let _ = std::fs::remove_dir_all(&dir_path);
+        }
+    }
+}
+
+fn trash_workspace_entry_in(
+    trash_root: &Path,
+    root: &str,
+    rel_path: &str,
+    now_ms: u64,
+) -> Result<WorkspaceTrashReceipt, String> {
+    if rel_path.trim().is_empty() || has_dot_final_component(rel_path) {
+        return Err("refusing to trash the workspace root".into());
+    }
+    let clean_rel = rel_path.trim_end_matches(['/', '\\']);
+    let (root_path, target) = resolve_workspace_target(root, clean_rel, true)?;
+    let meta =
+        std::fs::symlink_metadata(&target).map_err(|e| format!("stat {}: {}", rel_path, e))?;
+    if meta.file_type().is_symlink() {
+        return Err(format!(
+            "cannot stage symlink {} in workspace trash; delete permanently instead",
+            rel_path
+        ));
+    }
+    let canonical = target
+        .canonicalize()
+        .map_err(|e| format!("canonicalize {}: {}", target.display(), e))?;
+    if canonical == root_path {
+        return Err("refusing to trash the workspace root".into());
+    }
+    let byte_size = measure_tree_bytes_disallow_symlinks(&target)?;
+    std::fs::create_dir_all(trash_root)
+        .map_err(|e| format!("mkdir trash {}: {}", trash_root.display(), e))?;
+    let canonical_trash = trash_root
+        .canonicalize()
+        .map_err(|e| format!("canonicalize trash {}: {}", trash_root.display(), e))?;
+    if canonical_trash == canonical || canonical_trash.starts_with(&canonical) {
+        return Err("refusing to trash directory containing workspace trash".into());
+    }
+
+    let trash_id = next_workspace_trash_id(now_ms);
+    let item_dir = canonical_trash.join(&trash_id);
+    std::fs::create_dir_all(&item_dir)
+        .map_err(|e| format!("mkdir trash item {}: {}", item_dir.display(), e))?;
+    let payload_path = item_dir.join("payload");
+    let is_dir = meta.is_dir();
+
+    if let Err(err) = move_path_with_fallback(&target, &payload_path, is_dir) {
+        let _ = std::fs::remove_dir_all(&item_dir);
+        return Err(err);
+    }
+
+    let normalized_rel = clean_rel.replace('\\', "/");
+    let manifest = WorkspaceTrashManifest {
+        trash_id: trash_id.clone(),
+        root_canonical: root_path.to_string_lossy().to_string(),
+        rel_path: normalized_rel.clone(),
+        is_dir,
+        trashed_at_ms: now_ms,
+        byte_size,
+    };
+    let manifest_json =
+        serde_json::to_string(&manifest).map_err(|e| format!("serialize trash manifest: {}", e))?;
+    if let Err(err) = std::fs::write(item_dir.join("manifest.json"), manifest_json) {
+        // Roll back the move so a metadata failure never strands user files.
+        let _ = move_path_with_fallback(&payload_path, &target, is_dir);
+        let _ = std::fs::remove_dir_all(&item_dir);
+        return Err(format!("write trash manifest: {}", err));
+    }
+
+    prune_workspace_trash_in(&canonical_trash, now_ms, &trash_id);
+
+    Ok(WorkspaceTrashReceipt {
+        trash_id,
+        root: root_path.to_string_lossy().to_string(),
+        rel_path: normalized_rel,
+        is_dir,
+        trashed_at_ms: now_ms,
+    })
+}
+
+fn restore_workspace_trash_in(
+    trash_root: &Path,
+    root: &str,
+    trash_id: &str,
+) -> Result<WorkspaceTrashRestoreResult, String> {
+    if !is_safe_trash_id(trash_id) {
+        return Err("invalid workspace trash id".into());
+    }
+    let item_dir = trash_root.join(trash_id);
+    let manifest_raw = std::fs::read_to_string(item_dir.join("manifest.json"))
+        .map_err(|_| format!("workspace trash item not found: {}", trash_id))?;
+    let manifest: WorkspaceTrashManifest = serde_json::from_str(&manifest_raw)
+        .map_err(|e| format!("corrupt workspace trash manifest: {}", e))?;
+    let payload_path = item_dir.join("payload");
+    if !payload_path.exists() {
+        return Err(format!("workspace trash payload missing: {}", trash_id));
+    }
+
+    let (root_path, dest) = resolve_workspace_target(root, &manifest.rel_path, false)?;
+    if root_path.to_string_lossy() != manifest.root_canonical {
+        return Err("workspace trash item belongs to a different workspace root".into());
+    }
+    if dest.exists() {
+        return Err(format!(
+            "destination already exists: {}",
+            manifest.rel_path
+        ));
+    }
+    reject_symlinked_final(&dest)?;
+    let canonical_dest = resolve_target_canonical_even_if_missing(&dest)?;
+    if canonical_dest == root_path {
+        return Err("refusing to overwrite the workspace root".into());
+    }
+    prepare_dest_parent(&root_path, &dest)?;
+    move_path_with_fallback(&payload_path, &dest, manifest.is_dir)?;
+    let _ = std::fs::remove_dir_all(&item_dir);
+
+    Ok(WorkspaceTrashRestoreResult {
+        rel_path: manifest.rel_path,
+        is_dir: manifest.is_dir,
+    })
+}
+
+/// Stage a workspace file or directory into Cognia's managed workspace trash
+/// (`<data_root>/workspace-trash/`) outside the Git working tree so it can be
+/// undone cleanly. Refuses symlinks and root aliases without deleting them.
+#[cfg_attr(feature = "tauri-host", tauri::command)]
+pub fn fs_trash_workspace_entry(
+    root: String,
+    rel_path: String,
+) -> Result<WorkspaceTrashReceipt, String> {
+    let trash_root = resolve_workspace_trash_root()?;
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0);
+    trash_workspace_entry_in(&trash_root, &root, &rel_path, now_ms)
+}
+
+/// Restore a previously staged workspace trash entry back to its original
+/// workspace-relative path, refusing cross-workspace restores and collisions.
+#[cfg_attr(feature = "tauri-host", tauri::command)]
+pub fn fs_restore_workspace_trash(
+    root: String,
+    trash_id: String,
+) -> Result<WorkspaceTrashRestoreResult, String> {
+    let trash_root = resolve_workspace_trash_root()?;
+    restore_workspace_trash_in(&trash_root, &root, &trash_id)
+}
+
 /// Rename/move `from_rel_path` → `to_rel_path` within the workspace. Both
 /// endpoints are sandbox-checked against `root`; the destination parent is
 /// created as needed. Refuses to clobber an existing destination, write
@@ -5376,5 +5700,89 @@ mod tests {
 
         std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn workspace_trash_stages_restores_guards_symlinks_and_prunes_expired_entries() {
+        let root = make_sandbox("workspace-trash-root");
+        let other_root = make_sandbox("workspace-trash-other");
+        let trash = make_sandbox("workspace-trash-store");
+        let root_str = root.to_string_lossy().to_string();
+        let other_str = other_root.to_string_lossy().to_string();
+
+        // File + directory round-trip, even when intermediate parent was deleted.
+        std::fs::create_dir_all(root.join("src").join("nested")).unwrap();
+        std::fs::write(root.join("src").join("nested").join("app.ts"), "export const x = 1;\n")
+            .unwrap();
+        let dir_receipt =
+            trash_workspace_entry_in(&trash, &root_str, "src/nested", 10_000).unwrap();
+        assert!(dir_receipt.is_dir);
+        assert!(!root.join("src").join("nested").exists());
+        std::fs::remove_dir(root.join("src")).unwrap();
+
+        let restored =
+            restore_workspace_trash_in(&trash, &root_str, &dir_receipt.trash_id).unwrap();
+        assert_eq!(
+            restored,
+            WorkspaceTrashRestoreResult {
+                rel_path: "src/nested".into(),
+                is_dir: true,
+            }
+        );
+        assert_eq!(
+            std::fs::read_to_string(root.join("src").join("nested").join("app.ts")).unwrap(),
+            "export const x = 1;\n"
+        );
+
+        // Cross-device copy+remove fallback preserves tree and removes source.
+        let cross_dst = trash.join("cross-copy");
+        move_path_cross_device(&root.join("src").join("nested"), &cross_dst, true).unwrap();
+        assert!(!root.join("src").join("nested").exists());
+        assert!(cross_dst.join("app.ts").exists());
+        let _ = std::fs::remove_dir_all(&cross_dst);
+
+        // Root alias, cross-workspace restore, and collision refusal.
+        assert!(trash_workspace_entry_in(&trash, &root_str, "", 10_000).is_err());
+        assert!(trash_workspace_entry_in(&trash, &root_str, ".", 10_000).is_err());
+
+        std::fs::write(root.join("note.md"), "v1").unwrap();
+        let note_receipt = trash_workspace_entry_in(&trash, &root_str, "note.md", 1_000).unwrap();
+        assert!(
+            restore_workspace_trash_in(&trash, &other_str, &note_receipt.trash_id).is_err(),
+            "cross-workspace restore must be refused"
+        );
+        std::fs::write(root.join("note.md"), "v2").unwrap();
+        assert!(
+            restore_workspace_trash_in(&trash, &root_str, &note_receipt.trash_id).is_err(),
+            "restore must refuse clobbering an existing file"
+        );
+        std::fs::remove_file(root.join("note.md")).unwrap();
+
+        // Retention pruning evicts entries older than 30 days while keeping fresh ones.
+        std::fs::write(root.join("fresh.md"), "fresh").unwrap();
+        let fresh_now = 1_000 + WORKSPACE_TRASH_RETENTION_MS + 5_000;
+        let fresh_receipt =
+            trash_workspace_entry_in(&trash, &root_str, "fresh.md", fresh_now).unwrap();
+        assert!(
+            restore_workspace_trash_in(&trash, &root_str, &note_receipt.trash_id).is_err(),
+            "expired >30d trash item should be pruned"
+        );
+        restore_workspace_trash_in(&trash, &root_str, &fresh_receipt.trash_id).unwrap();
+        assert_eq!(std::fs::read_to_string(root.join("fresh.md")).unwrap(), "fresh");
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::symlink;
+            symlink(root.join("fresh.md"), root.join("link.md")).unwrap();
+            assert!(
+                trash_workspace_entry_in(&trash, &root_str, "link.md", fresh_now).is_err(),
+                "symlinks must be refused without deleting target"
+            );
+            assert!(root.join("fresh.md").exists());
+        }
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&other_root);
+        let _ = std::fs::remove_dir_all(&trash);
     }
 }

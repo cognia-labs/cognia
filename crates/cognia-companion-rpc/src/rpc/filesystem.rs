@@ -130,6 +130,8 @@ pub(super) const COMMANDS: &[&str] = &[
     "fs_stat_workspace_file",
     "fs_create_workspace_dir",
     "fs_delete_workspace_entry",
+    "fs_trash_workspace_entry",
+    "fs_restore_workspace_trash",
     "fs_rename_workspace_entry",
     "fs_copy_workspace_entry",
 ];
@@ -1702,6 +1704,28 @@ pub(super) async fn dispatch(
             .map_err(|e| RpcError::internal(e.to_string()))?
             .map(|_| Value::Null)
             .map_err(RpcError::internal)
+        }
+        "fs_trash_workspace_entry" => {
+            let root = authorize_workspace_root(host, required(&args, "root")?)?;
+            let rel_path: String = required(&args, "relPath")?;
+            tokio::task::spawn_blocking(move || {
+                cognia_files::files::fs_trash_workspace_entry(root, rel_path)
+            })
+            .await
+            .map_err(|e| RpcError::internal(e.to_string()))?
+            .map_err(RpcError::internal)
+            .and_then(to_json)
+        }
+        "fs_restore_workspace_trash" => {
+            let root = authorize_workspace_root(host, required(&args, "root")?)?;
+            let trash_id: String = required(&args, "trashId")?;
+            tokio::task::spawn_blocking(move || {
+                cognia_files::files::fs_restore_workspace_trash(root, trash_id)
+            })
+            .await
+            .map_err(|e| RpcError::internal(e.to_string()))?
+            .map_err(RpcError::internal)
+            .and_then(to_json)
         }
         "fs_rename_workspace_entry" => {
             let root = authorize_workspace_root(host, required(&args, "root")?)?;

@@ -14,6 +14,7 @@ export const FILES_REMOTE_COMMANDS = {
   collectionList: "files_library_collection_list",
   search: "files_library_search",
   get: "files_library_get",
+  accessGet: "files_library_access_get",
   readChunk: "files_library_read_chunk",
   favorite: "files_library_favorite",
   tagsSet: "files_library_tags_set",
@@ -56,6 +57,7 @@ export const FILES_REMOTE_READ_COMMANDS: readonly FilesRemoteCommand[] = [
   FILES_REMOTE_COMMANDS.collectionList,
   FILES_REMOTE_COMMANDS.search,
   FILES_REMOTE_COMMANDS.get,
+  FILES_REMOTE_COMMANDS.accessGet,
   FILES_REMOTE_COMMANDS.readChunk,
 ]
 

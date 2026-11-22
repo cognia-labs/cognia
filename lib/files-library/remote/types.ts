@@ -27,6 +27,7 @@ import {
   LIBRARY_TAG_MAX_LENGTH,
   normalizeLibraryTags,
 } from "@/lib/db/files-library-types"
+import type { FilesEntryAccess } from "../access"
 import { FILES_FORMATS } from "../format"
 import { FILES_LENSES, FILES_MODIFIED_WITHIN, FILES_SIZE_BANDS, type FilesEntry } from "../types"
 
@@ -136,6 +137,9 @@ export interface FilesRemoteDetail {
   text?: string
   textTruncated?: boolean
 }
+
+/** `files_library_access_get`: active snapshot share links and live FileSpace grants. */
+export type FilesRemoteAccess = FilesEntryAccess
 
 /**
  * `files_library_read_chunk`: one slice of a workspace file's or large

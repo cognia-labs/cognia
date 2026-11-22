@@ -1012,6 +1012,8 @@ export function buildLocalHostFeatureManifest({
         "fs_stat_workspace_file",
         "fs_create_workspace_dir",
         "fs_delete_workspace_entry",
+        "fs_trash_workspace_entry",
+        "fs_restore_workspace_trash",
         "fs_rename_workspace_entry",
         "fs_copy_workspace_entry",
       ],

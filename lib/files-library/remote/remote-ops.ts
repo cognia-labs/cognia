@@ -20,6 +20,7 @@
 import type { ArtifactType } from "@/types/artifact/artifact"
 import { entitySelectionFrom } from "@/lib/chat/mentions/entity-sources"
 import { useChatStore } from "@/stores/chat"
+import { EMPTY_FILES_ENTRY_ACCESS } from "../access"
 import { documentFilenameFor, mediaFilenameFor } from "../download"
 import type { FilesCapabilities, FilesOps } from "../ops"
 import type { FilesEntry } from "../types"
@@ -207,6 +208,16 @@ export function createRemoteFilesOps({
     deleteCollection: (collectionId) => {
       if (!client.deleteCollection) throw new FilesRemoteError("files_remote_invalid_request")
       return changed(client.deleteCollection(collectionId))
+    },
+    accessFor: async (entry) => {
+      if (!client.access) return EMPTY_FILES_ENTRY_ACCESS
+      try {
+        const res = await client.access(entry.key, imageLimit())
+        return { sharedLinks: res.sharedLinks, liveGrants: res.liveGrants }
+      } catch (error) {
+        if (isGone(error)) return EMPTY_FILES_ENTRY_ACCESS
+        throw error
+      }
     },
   }
 }

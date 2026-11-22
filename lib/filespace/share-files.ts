@@ -18,6 +18,9 @@ import {
   assertSharedSessionFileShare,
   SharedSessionAccessError,
 } from "@/lib/collab/shared-session-access"
+import { recordLibraryItemsShared } from "@/lib/db/files-library-items"
+import type { LibraryItemSource } from "@/lib/db/files-library-types"
+import { loadLiveShareCodes } from "@/lib/files-library/sources"
 import {
   createShareLink,
   type CreateShareFile,
@@ -65,12 +68,17 @@ export interface CreateFileShareDeps {
   authorizeSharedSession: typeof assertSharedSessionFileShare
   loadPolicy: typeof loadEffectiveFileSharingPolicy
   createShareLink: typeof createShareLink
+  recordSharedItems?: (sources: readonly LibraryItemSource[], code: string) => Promise<void>
 }
 
 export const defaultCreateFileShareDeps: CreateFileShareDeps = {
   authorizeSharedSession: assertSharedSessionFileShare,
   loadPolicy: loadEffectiveFileSharingPolicy,
   createShareLink,
+  recordSharedItems: async (sources, code) => {
+    const live = await loadLiveShareCodes()
+    await recordLibraryItemsShared(sources, code, live)
+  },
 }
 
 /** Check, then create the share. A share without files skips the file checks. */
@@ -100,7 +108,7 @@ export async function createFileShare(
     const denial = checkSnapshotFileShare(effective.policy, share.ttlSeconds)
     if (denial) throw new FileShareRefusedError(denial)
   }
-  return deps.createShareLink(
+  const created = await deps.createShareLink(
     {
       ...share,
       sessionId: session?.id,
@@ -116,4 +124,13 @@ export async function createFileShare(
     },
     endpoint
   )
+  const sources = files.flatMap((file) => (file.librarySource ? [file.librarySource] : []))
+  if (sources.length > 0 && deps.recordSharedItems) {
+    try {
+      await deps.recordSharedItems(sources, created.code)
+    } catch {
+      // Recording Files metadata must never fail an already-published share link.
+    }
+  }
+  return created
 }

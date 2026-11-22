@@ -11,13 +11,17 @@
  * than the device may move says so rather than loading.
  */
 
-import { useEffect, useState } from "react"
+import { useCallback, useEffect, useState } from "react"
 import { useFormatter, useTranslations } from "next-intl"
 import { loggers } from "@cognia/logging"
+import { toast } from "sonner"
 import {
   DownloadIcon,
+  HistoryIcon,
+  Link2Icon,
   MessageSquarePlusIcon,
   RotateCcwIcon,
+  ShieldCheckIcon,
   SquareArrowOutUpRightIcon,
   StarIcon,
   TagIcon,
@@ -26,14 +30,18 @@ import {
 } from "lucide-react"
 
 import { ArtifactPreview } from "@/components/artifacts/artifact-preview"
+import { PanelVersionHistory } from "@/components/artifacts/panel-version-history"
+import { VersionHistoryPanel } from "@/components/canvas/version-history-panel"
 import { FilePartPreview } from "@/components/chat/message-parts/file-part-preview"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetTrigger } from "@/components/ui/sheet"
 import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { useFilesOps } from "@/hooks/files-library/files-backend"
 import { displayTitle, type FilesActions } from "@/hooks/files-library/use-files-actions"
 import { FILES_TRASH_RETENTION_MS } from "@/lib/db/files-library-types"
 import { getSessionsByIds } from "@/lib/db/sessions"
+import { EMPTY_FILES_ENTRY_ACCESS, type FilesEntryAccess } from "@/lib/files-library/access"
 import { goToSession } from "@/lib/files-library/open"
 import { getProviderDisplayName } from "@/lib/ai/icons"
 import type { FilesOps } from "@/lib/files-library/ops"
@@ -209,6 +217,14 @@ export function FilesPreviewPane({
               <p className="text-xs text-muted-foreground">{t("preview.noTags")}</p>
             )}
           </section>
+        ) : null}
+
+        {entry.trashedAt === undefined && (entry.kind === "artifact" || entry.kind === "canvas") ? (
+          <DocumentVersionSection entry={entry} readOnly={readOnly} />
+        ) : null}
+
+        {entry.trashedAt === undefined ? (
+          <AccessSection entry={entry} ops={ops} readOnly={readOnly} />
         ) : null}
 
         {sessions && sessions.length > 0 ? (
@@ -565,5 +581,239 @@ function Unavailable() {
     <p className="text-sm text-muted-foreground" data-testid="files-preview-unavailable">
       {t("unavailable")}
     </p>
+  )
+}
+
+function DocumentVersionSection({ entry, readOnly }: { entry: FilesEntry; readOnly: boolean }) {
+  const t = useTranslations("files.preview")
+  const artifact = useArtifactStore((s) =>
+    entry.kind === "artifact" ? s.artifacts[entry.sourceId] : undefined
+  )
+  const artifactVersionCount = useArtifactStore((s) =>
+    entry.kind === "artifact" ? (s.artifactVersions[entry.sourceId]?.length ?? 0) : 0
+  )
+  const canvasVersionCount = useArtifactStore((s) =>
+    entry.kind === "canvas" ? (s.canvasDocuments[entry.sourceId]?.versions?.length ?? 0) : 0
+  )
+  const [artifactSheetOpen, setArtifactSheetOpen] = useState(false)
+  const count = entry.kind === "artifact" ? artifactVersionCount : canvasVersionCount
+
+  return (
+    <section className="mx-4 mb-4" data-testid="files-preview-versions-section">
+      <div className="mb-1.5 flex items-center justify-between gap-2">
+        <h3 className="text-xs font-medium text-muted-foreground">{t("versionHistory.title")}</h3>
+        {count > 0 ? (
+          <Badge variant="secondary" className="text-[10px]">
+            {t("versionHistory.savedCount", { count })}
+          </Badge>
+        ) : null}
+      </div>
+      {readOnly ? (
+        <p
+          className="text-xs text-muted-foreground"
+          data-testid="files-preview-versions-desktop-hint"
+        >
+          {t("versionHistory.onDesktop")}
+        </p>
+      ) : entry.kind === "canvas" ? (
+        <VersionHistoryPanel
+          documentId={entry.sourceId}
+          trigger={
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              data-testid="files-preview-version-trigger"
+            >
+              <HistoryIcon className="size-3.5" aria-hidden />
+              {t("versionHistory.open")}
+            </Button>
+          }
+        />
+      ) : artifact ? (
+        <Sheet open={artifactSheetOpen} onOpenChange={setArtifactSheetOpen}>
+          <SheetTrigger asChild>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-7 text-xs"
+              data-testid="files-preview-version-trigger"
+            >
+              <HistoryIcon className="size-3.5" aria-hidden />
+              {t("versionHistory.open")}
+            </Button>
+          </SheetTrigger>
+          <SheetContent className="flex w-full flex-col sm:max-w-md">
+            <SheetHeader>
+              <SheetTitle>{t("versionHistory.title")}</SheetTitle>
+            </SheetHeader>
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto">
+              <PanelVersionHistory
+                artifact={artifact}
+                onVersionRestored={() => setArtifactSheetOpen(false)}
+              />
+            </div>
+          </SheetContent>
+        </Sheet>
+      ) : (
+        <p className="text-xs text-muted-foreground">{t("unavailable")}</p>
+      )}
+    </section>
+  )
+}
+
+function AccessSection({
+  entry,
+  ops,
+  readOnly,
+}: {
+  entry: FilesEntry
+  ops: FilesOps
+  readOnly: boolean
+}) {
+  const t = useTranslations("files.preview")
+  const format = useFormatter()
+  const [refreshSeq, setRefreshSeq] = useState(0)
+  const [revokingCode, setRevokingCode] = useState<string | null>(null)
+  const [accessState, setAccessState] = useState<{
+    forKey: string
+    data: FilesEntryAccess
+  } | null>(null)
+
+  const stateKey = `${entry.key}:${entry.sharedLinks ?? 0}:${refreshSeq}`
+
+  useEffect(() => {
+    if (!ops.accessFor) return
+    let cancelled = false
+    ops
+      .accessFor(entry)
+      .then((data) => {
+        if (!cancelled) setAccessState({ forKey: stateKey, data })
+      })
+      .catch(() => {
+        if (!cancelled) setAccessState({ forKey: stateKey, data: EMPTY_FILES_ENTRY_ACCESS })
+      })
+    return () => {
+      cancelled = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [stateKey, ops])
+
+  const handleRevoke = useCallback(
+    async (code: string) => {
+      if (!ops.revokeSharedLink) return
+      setRevokingCode(code)
+      try {
+        await ops.revokeSharedLink(code)
+        toast.success(t("access.revokedToast"))
+        setRefreshSeq((n) => n + 1)
+      } catch {
+        toast.error(t("access.revokeFailedToast"))
+      } finally {
+        setRevokingCode(null)
+      }
+    },
+    [ops, t]
+  )
+
+  const data = !ops.accessFor
+    ? EMPTY_FILES_ENTRY_ACCESS
+    : accessState?.forKey === stateKey
+      ? accessState.data
+      : null
+  const hasShares = data !== null && (data.sharedLinks.length > 0 || data.liveGrants.length > 0)
+
+  return (
+    <section className="mx-4 mb-4" data-testid="files-preview-access-section">
+      <div className="mb-1.5 flex items-center gap-1.5">
+        <ShieldCheckIcon className="size-3.5 text-muted-foreground" aria-hidden />
+        <h3 className="text-xs font-medium text-muted-foreground">{t("access.title")}</h3>
+      </div>
+
+      {data === null ? (
+        <p className="text-xs text-muted-foreground">{t("access.loading")}</p>
+      ) : !hasShares ? (
+        <p className="text-xs text-muted-foreground" data-testid="files-preview-access-private">
+          {t("access.private")}
+        </p>
+      ) : (
+        <div className="flex flex-col gap-2">
+          {data.sharedLinks.map((link) => (
+            <div
+              key={link.code}
+              className="flex items-start justify-between gap-2 rounded-md border px-2.5 py-2 text-xs"
+              data-testid={`files-preview-share-link-${link.code}`}
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-center gap-1.5 font-medium">
+                  <Link2Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
+                  <span className="truncate">{link.title || link.code}</span>
+                </div>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {t("access.expiresAt", {
+                    date: format.dateTime(link.expiresAt, {
+                      dateStyle: "medium",
+                      timeStyle: "short",
+                    }),
+                  })}
+                </p>
+              </div>
+              {ops.revokeSharedLink && !readOnly ? (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="h-6 shrink-0 px-2 text-xs text-destructive hover:text-destructive"
+                  disabled={revokingCode === link.code}
+                  onClick={() => void handleRevoke(link.code)}
+                  data-testid={`files-preview-revoke-share-${link.code}`}
+                >
+                  {t("access.revoke")}
+                </Button>
+              ) : null}
+            </div>
+          ))}
+
+          {data.liveGrants.map((grant) => (
+            <div
+              key={grant.id}
+              className="rounded-md border px-2.5 py-2 text-xs"
+              data-testid={`files-preview-live-grant-${grant.id}`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="truncate font-medium">
+                  {grant.label || t("access.liveGrantDefault")}
+                </span>
+                <Badge variant="outline" className="text-[10px]">
+                  {t(`access.grantStatus.${grant.status}`)}
+                </Badge>
+              </div>
+              <p className="mt-0.5 font-mono text-[11px] text-muted-foreground">
+                {grant.matchedPaths.join(", ")}
+              </p>
+              <p className="mt-0.5 text-[11px] text-muted-foreground">
+                {t("access.liveGrantMeta", {
+                  protocols:
+                    grant.protocols.length > 0
+                      ? grant.protocols.map((p) => p.toUpperCase()).join("/")
+                      : t("access.collabAudience"),
+                  permissions: grant.permissions.join(", "),
+                  date: format.dateTime(grant.expiresAt, {
+                    dateStyle: "medium",
+                    timeStyle: "short",
+                  }),
+                })}
+              </p>
+            </div>
+          ))}
+
+          {readOnly ? (
+            <p className="text-[11px] text-muted-foreground">{t("access.manageOnDesktop")}</p>
+          ) : null}
+        </div>
+      )}
+    </section>
   )
 }

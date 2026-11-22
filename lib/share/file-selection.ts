@@ -36,6 +36,9 @@ import {
   SHARE_MAX_TOTAL_BLOB_BYTES,
   shareBlobStoredBytes,
 } from "./blob-crypto"
+import type { LibraryItemSource } from "@/lib/db/files-library-types"
+import { isImageMediaType, originalMediaKey } from "@/lib/files-library/aggregate"
+import { workspaceFileSourceId } from "@/lib/files-library/workspace-files"
 import type { ShareBlobSource } from "./blobs"
 import { blobShareSource, textShareSource, workspaceShareSource } from "./file-sources"
 
@@ -47,6 +50,8 @@ export interface ShareFileCandidate {
   size: number
   /** Refused by the sensitive floor; shared only after an explicit opt-in. */
   sensitive: boolean
+  /** Files library identity when this candidate maps to a Files item (G08). */
+  librarySource?: LibraryItemSource
   /** Open the bytes. Rejects when they are gone. */
   open: () => Promise<ShareBlobSource>
 }
@@ -187,23 +192,52 @@ export async function expandShareSelection(
     if (!files.has(candidate.path)) files.set(candidate.path, candidate)
   }
 
-  const dexieCandidate = (entry: FileSpaceDexieEntry): ShareFileCandidate => ({
-    path: entry.path,
-    name: entry.name,
-    mime: entry.mediaType || mimeForFileName(entry.name),
-    size: entry.size,
-    sensitive: isSensitivePath(entry.path),
-    open: async () => {
-      if (entry.mountId === "uploads") {
-        const asset = await deps.getSessionAsset(space.sessionId, entry.sourceId)
-        if (!asset) throw new ShareFileSourceUnavailableError(entry.path)
-        return blobShareSource(asset.blob)
+  const dexieLibrarySource = (entry: FileSpaceDexieEntry): LibraryItemSource | undefined => {
+    if (entry.mountId === "artifacts") {
+      return {
+        kind: "artifact",
+        sourceId: entry.sourceId,
+        originSessionId: space.sessionId,
       }
-      const content = await deps.getArtifactContent(entry.sourceId)
-      if (content === undefined) throw new ShareFileSourceUnavailableError(entry.path)
-      return textShareSource(content)
-    },
-  })
+    }
+    if (!entry.contentHash) return undefined
+    if (isImageMediaType(entry.mediaType)) {
+      return {
+        kind: "image",
+        sourceId: entry.contentHash,
+        originSessionId: space.sessionId,
+        mediaHash: entry.contentHash,
+      }
+    }
+    return {
+      kind: "session-upload",
+      sourceId: entry.contentHash,
+      originSessionId: space.sessionId,
+      mediaHash: originalMediaKey(entry.contentHash),
+    }
+  }
+
+  const dexieCandidate = (entry: FileSpaceDexieEntry): ShareFileCandidate => {
+    const librarySource = dexieLibrarySource(entry)
+    return {
+      path: entry.path,
+      name: entry.name,
+      mime: entry.mediaType || mimeForFileName(entry.name),
+      size: entry.size,
+      sensitive: isSensitivePath(entry.path),
+      ...(librarySource ? { librarySource } : {}),
+      open: async () => {
+        if (entry.mountId === "uploads") {
+          const asset = await deps.getSessionAsset(space.sessionId, entry.sourceId)
+          if (!asset) throw new ShareFileSourceUnavailableError(entry.path)
+          return blobShareSource(asset.blob)
+        }
+        const content = await deps.getArtifactContent(entry.sourceId)
+        if (content === undefined) throw new ShareFileSourceUnavailableError(entry.path)
+        return textShareSource(content)
+      },
+    }
+  }
 
   for (const path of paths) {
     if (truncated) break
@@ -250,6 +284,12 @@ export async function expandShareSelection(
         mime: mimeForFileName(baseName(rel)),
         size,
         sensitive: isSensitivePath(rel),
+        librarySource: {
+          kind: "workspace-file",
+          sourceId: workspaceFileSourceId(space.sessionId, root, rel),
+          originSessionId: space.sessionId,
+          workspace: { workspaceRoot: root, relPath: rel },
+        },
         open: async () => workspaceShareSource(root, rel, size, candidatePath),
       }
     }

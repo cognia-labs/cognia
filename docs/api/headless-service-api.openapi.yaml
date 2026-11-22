@@ -71875,6 +71875,282 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
       x-cognia-response-schema-source: contract
+  /internal/_rpc/files_library_access_get:
+    post:
+      operationId: internalRpcFilesLibraryAccessGet
+      tags:
+        - headless-rpc
+      summary: files_library_access_get (client.read)
+      description: "Loopback service-token command. Target: execution; risk: low."
+      x-cognia-request-schema-source: contract
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              description: Read-only summary of active snapshot share links (without secret decryption fragments) and live FileSpace
+                grants covering one Files item.
+              required:
+                - key
+              properties:
+                key:
+                  type: string
+                  minLength: 1
+                  maxLength: 300
+                imageLimit:
+                  type: integer
+                  minimum: 1
+                  maximum: 100000
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - type: object
+                    required:
+                      - ok
+                      - sharedLinks
+                      - liveGrants
+                    properties:
+                      ok:
+                        const: true
+                      sharedLinks:
+                        type: array
+                        items:
+                          type: object
+                          required:
+                            - code
+                            - title
+                            - kind
+                            - createdAt
+                            - expiresAt
+                            - url
+                          properties:
+                            code:
+                              type: string
+                            title:
+                              type: string
+                            kind:
+                              type: string
+                            createdAt:
+                              type: integer
+                            expiresAt:
+                              type: integer
+                            url:
+                              type: string
+                          additionalProperties: false
+                      liveGrants:
+                        type: array
+                        items:
+                          type: object
+                          required:
+                            - id
+                            - sessionId
+                            - label
+                            - audienceKind
+                            - protocols
+                            - permissions
+                            - status
+                            - expiresAt
+                            - matchedPaths
+                          properties:
+                            id:
+                              type: string
+                            sessionId:
+                              type: string
+                            label:
+                              type:
+                                - string
+                                - "null"
+                            audienceKind:
+                              type: string
+                              enum:
+                                - credentials
+                                - collab
+                            protocols:
+                              type: array
+                              items:
+                                type: string
+                                enum:
+                                  - webdav
+                                  - sftp
+                            permissions:
+                              type: array
+                              items:
+                                type: string
+                                enum:
+                                  - read
+                                  - download
+                                  - write
+                            status:
+                              type: string
+                              enum:
+                                - active
+                                - suspended
+                                - stale
+                            expiresAt:
+                              type: integer
+                            matchedPaths:
+                              type: array
+                              items:
+                                type: string
+                          additionalProperties: false
+                    additionalProperties: false
+                  - type: object
+                    description: "A refused `files_library_*` call: a `files.errors.*` code, or `headless_host` from a brain that has no
+                      library."
+                    required:
+                      - ok
+                      - code
+                    properties:
+                      ok:
+                        const: false
+                      code:
+                        type: string
+                    additionalProperties: false
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
   /internal/_rpc/files_library_attach:
     post:
       operationId: internalRpcFilesLibraryAttach
@@ -82328,6 +82604,189 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
       x-cognia-response-schema-source: contract
+  /internal/_rpc/fs_restore_workspace_trash:
+    post:
+      operationId: internalRpcFsRestoreWorkspaceTrash
+      tags:
+        - headless-rpc
+      summary: fs_restore_workspace_trash (workspace.write)
+      description: "Loopback service-token command. Target: execution; risk: high."
+      x-cognia-request-schema-source: contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - root
+                - trashId
+              properties:
+                root:
+                  type: string
+                trashId:
+                  type: string
+                  minLength: 8
+                  maxLength: 96
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                x-cognia-wire-source: crates/cognia-files/src/files.rs WorkspaceTrashRestoreResult
+                required:
+                  - relPath
+                  - isDir
+                properties:
+                  relPath:
+                    type: string
+                  isDir:
+                    type: boolean
+                additionalProperties: false
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
   /internal/_rpc/fs_search_content_workspace:
     post:
       operationId: internalRpcFsSearchContentWorkspace
@@ -82740,6 +83199,199 @@ paths:
                 x-cognia-opaque-reason: The command serializes an existing domain record whose stable root is an object; property-level
                   compatibility remains owned by that domain.
                 x-cognia-schema-owner: workspace-files
+        "202":
+          description: Command is still running under the durable operation ledger. The body is the Operation document.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Operation"
+        "400":
+          description: The request or command arguments are invalid.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "401":
+          description: Authentication failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "403":
+          description: Capability, transport, or policy authorization failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "404":
+          description: The command is not registered.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "409":
+          description: The idempotency key conflicts with an existing operation.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "410":
+          description: The command was renamed. details.replacement names the command to call instead.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "415":
+          description: The request body is not JSON.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "422":
+          description: The JSON request body does not match the endpoint shape.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "428":
+          description: A valid signed policy is required.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "429":
+          description: The principal exceeded its command rate limit.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "500":
+          description: The canonical dispatch failed.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "503":
+          description: The durable security store is unavailable.
+          headers:
+            x-request-id:
+              description: Mirrors requestId in the problem document.
+              schema:
+                type: string
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+      x-cognia-response-schema-source: contract
+  /internal/_rpc/fs_trash_workspace_entry:
+    post:
+      operationId: internalRpcFsTrashWorkspaceEntry
+      tags:
+        - headless-rpc
+      summary: fs_trash_workspace_entry (workspace.write)
+      description: "Loopback service-token command. Target: execution; risk: high."
+      x-cognia-request-schema-source: contract
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - root
+                - relPath
+              properties:
+                root:
+                  type: string
+                relPath:
+                  type: string
+              additionalProperties: false
+      responses:
+        "200":
+          description: Command completed.
+          content:
+            application/json:
+              schema:
+                type: object
+                x-cognia-wire-source: crates/cognia-files/src/files.rs WorkspaceTrashReceipt
+                required:
+                  - trashId
+                  - root
+                  - relPath
+                  - isDir
+                  - trashedAtMs
+                properties:
+                  trashId:
+                    type: string
+                    minLength: 8
+                    maxLength: 96
+                  root:
+                    type: string
+                  relPath:
+                    type: string
+                  isDir:
+                    type: boolean
+                  trashedAtMs:
+                    type: integer
+                    minimum: 0
+                additionalProperties: false
         "202":
           description: Command is still running under the durable operation ledger. The body is the Operation document.
           content:
@@ -230108,6 +230760,7 @@ components:
           - file_share_sftpgo_set
           - file_share_status
           - file_space_sync
+          - files_library_access_get
           - files_library_attach
           - files_library_collection_delete
           - files_library_collection_list
@@ -230159,9 +230812,11 @@ components:
           - fs_read_workspace_file_chunk
           - fs_read_workspace_file_versioned
           - fs_rename_workspace_entry
+          - fs_restore_workspace_trash
           - fs_search_content_workspace
           - fs_search_workspace
           - fs_stat_workspace_file
+          - fs_trash_workspace_entry
           - fs_workspace_roots
           - fs_write_workspace_file
           - gateway_list_models
@@ -231066,10 +231721,10 @@ x-cognia-generated:
     - protocol/companion-response-schemas.json
     - protocol/headless-command-dispositions.json
     - scripts/build/companion-request-schema-contracts.mjs
-  internalCommandCount: 1002
-  generatedRequestSchemaCount: 1002
+  internalCommandCount: 1005
+  generatedRequestSchemaCount: 1005
   runtimeInferredRequestSchemaCount: 0
-  contractRequestSchemaCount: 1002
+  contractRequestSchemaCount: 1005
   genericRequestSchemaCount: 0
-  generatedResponseSchemaCount: 1002
+  generatedResponseSchemaCount: 1005
   loopbackOnly: true

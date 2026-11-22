@@ -109,6 +109,8 @@ export interface FileSpaceDexieEntry {
   updatedAt: number
   /** The row it projects: a session asset id or an artifact id. */
   sourceId: string
+  /** Uploads only: SHA-256 content hash for matching Files library rows. */
+  contentHash?: string
   /** Uploads only: false when the metadata survived but the bytes did not. */
   sourceAvailable: boolean
 }

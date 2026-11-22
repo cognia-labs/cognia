@@ -82,13 +82,17 @@ import { isTauri } from "@/lib/platform/detect"
 import { onTransportChange } from "@/lib/tauri/transport-instance"
 import { isRemoteHostActive, subscribeActiveRemoteTransport } from "@/lib/tauri/transport-routing"
 import type { GitFileStatus } from "@/types/git"
+import { toast } from "sonner"
 import type {
   listWorkspaceDir,
   createWorkspaceDir,
   readWorkspaceFile,
   writeWorkspaceFile,
   deleteWorkspaceEntry,
+  trashWorkspaceEntry,
+  restoreWorkspaceTrash,
   renameWorkspaceEntry,
+  WorkspaceTrashReceipt,
 } from "@/lib/files/workspace-fs"
 import { FILE_TEMPLATES, templateById, type FileTemplate } from "./file-templates"
 import { isImeComposing } from "@/lib/ui/ime"
@@ -99,6 +103,8 @@ export interface ProjectFileTreeDeps {
   createDir: typeof createWorkspaceDir
   writeFile: typeof writeWorkspaceFile
   deleteEntry: typeof deleteWorkspaceEntry
+  trashEntry?: typeof trashWorkspaceEntry
+  restoreTrash?: typeof restoreWorkspaceTrash
   renameEntry: typeof renameWorkspaceEntry
   /**
    * Backs the copy side of cut/copy/paste. Optional so lightweight hosts
@@ -279,6 +285,7 @@ export function ProjectFileTree({
   const [renameTarget, setRenameTarget] = useState<string | null>(null)
   const [renameValue, setRenameValue] = useState("")
   const [deleteTarget, setDeleteTarget] = useState<WorkspaceEntry | null>(null)
+  const [forcePermanentDelete, setForcePermanentDelete] = useState(false)
   /**
    * Kept per directory, not globally. Expanding a folder you may not read must
    * not blank out the siblings you can, and the reason belongs on the row that
@@ -627,22 +634,68 @@ export function ProjectFileTree({
     setRenameTarget(null)
   }, [renameTarget, renameValue, deps, rootPath, loadDir, onRenamed, report])
 
+  const undoTrash = useCallback(
+    async (receipt: WorkspaceTrashReceipt) => {
+      if (!deps.restoreTrash) return
+      const listing = listingRef.current
+      try {
+        const restored = await deps.restoreTrash(rootPath, receipt.trashId)
+        await loadDir(parentOf(restored.relPath), true)
+        if (!listing.active) return
+        toast.success(t("trashRestoredToast", { name: restored.relPath }))
+      } catch (error) {
+        if (!listing.active) return
+        report(error, "create", receipt.relPath)
+      }
+    },
+    [deps, rootPath, loadDir, report, t]
+  )
+
   const confirmDelete = useCallback(async () => {
     const listing = listingRef.current
     if (!deleteTarget) return
+    const target = deleteTarget
+    if (deps.trashEntry && !forcePermanentDelete) {
+      try {
+        const receipt = await deps.trashEntry(rootPath, target.relPath)
+        onDeleted?.(target.relPath, target.isDir)
+        await loadDir(parentOf(target.relPath), true)
+        if (!listing.active) return
+        setDeleteTarget(null)
+        setForcePermanentDelete(false)
+        toast.success(
+          t("trashedToast", { name: target.relPath }),
+          deps.restoreTrash
+            ? {
+                action: {
+                  label: t("undo"),
+                  onClick: () => void undoTrash(receipt),
+                },
+              }
+            : undefined
+        )
+      } catch {
+        if (!listing.active) return
+        // Staging into managed trash was refused (e.g. symlink or read-only data dir):
+        // ask for explicit confirmation before permanently deleting from disk.
+        setForcePermanentDelete(true)
+      }
+      return
+    }
     try {
-      await deps.deleteEntry(rootPath, deleteTarget.relPath, deleteTarget.isDir)
+      await deps.deleteEntry(rootPath, target.relPath, target.isDir)
       // Reconcile open tabs before the listing refresh so a dirty buffer's
       // "deleted on disk" state lands with the row's disappearance.
-      onDeleted?.(deleteTarget.relPath, deleteTarget.isDir)
-      await loadDir(parentOf(deleteTarget.relPath), true)
+      onDeleted?.(target.relPath, target.isDir)
+      await loadDir(parentOf(target.relPath), true)
       if (!listing.active) return
     } catch (error) {
       if (!listing.active) return
-      report(error, "delete", deleteTarget.relPath)
+      report(error, "delete", target.relPath)
     }
     setDeleteTarget(null)
-  }, [deleteTarget, deps, rootPath, loadDir, onDeleted, report])
+    setForcePermanentDelete(false)
+  }, [deleteTarget, forcePermanentDelete, deps, rootPath, loadDir, onDeleted, report, t, undoTrash])
 
   /**
    * Move `fromRel` into directory `dirRel` (`""` = root). Renames through the
@@ -1301,19 +1354,34 @@ export function ProjectFileTree({
 
       <AlertDialog
         open={active && !!deleteTarget}
-        onOpenChange={(o) => !o && setDeleteTarget(null)}
+        onOpenChange={(o) => {
+          if (!o) {
+            setDeleteTarget(null)
+            setForcePermanentDelete(false)
+          }
+        }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>{t("delete")}</AlertDialogTitle>
+            <AlertDialogTitle>
+              {deps.trashEntry && !forcePermanentDelete ? t("moveToTrash") : t("delete")}
+            </AlertDialogTitle>
             <AlertDialogDescription>
-              {t("deleteConfirm", { name: deleteTarget?.relPath ?? "" })}
+              {forcePermanentDelete
+                ? t("deletePermanentFallback", { name: deleteTarget?.relPath ?? "" })
+                : deps.trashEntry
+                  ? t("trashConfirm", { name: deleteTarget?.relPath ?? "" })
+                  : t("deleteConfirm", { name: deleteTarget?.relPath ?? "" })}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>{t("cancel")}</AlertDialogCancel>
             <AlertDialogAction onClick={() => void confirmDelete()}>
-              {t("delete")}
+              {forcePermanentDelete
+                ? t("deletePermanently")
+                : deps.trashEntry
+                  ? t("moveToTrash")
+                  : t("delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

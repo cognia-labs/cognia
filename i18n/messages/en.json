@@ -21127,6 +21127,24 @@
       "workspaceHeldBackHint": "Files agents write to disk are listed by the desktop app, which can read the workspace they are in."
     },
     "preview": {
+      "access": {
+        "collabAudience": "Shared members",
+        "expiresAt": "Expires {date}",
+        "grantStatus": {
+          "active": "Active",
+          "stale": "Stale",
+          "suspended": "Suspended"
+        },
+        "liveGrantDefault": "Live FileSpace grant",
+        "liveGrantMeta": "{protocols} · {permissions} · expires {date}",
+        "loading": "Checking sharing & access…",
+        "manageOnDesktop": "Manage or revoke shares from the desktop app.",
+        "private": "Private — no active share links or live FileSpace grants.",
+        "revoke": "Revoke",
+        "revokeFailedToast": "Couldn’t revoke the share link. Try again.",
+        "revokedToast": "Share link revoked.",
+        "title": "Access & Sharing"
+      },
       "close": "Close preview",
       "conversations": "Conversations",
       "details": {
@@ -21154,6 +21172,12 @@
       "tags": "Tags",
       "trashedNotice": "Moved to the Trash on {date}. It will be deleted for good on {purge}.",
       "unavailable": "The content is no longer stored on this device.",
+      "versionHistory": {
+        "onDesktop": "Version history and restore are available on the desktop app.",
+        "open": "Version history",
+        "savedCount": "{count, plural, one {# saved} other {# saved}}",
+        "title": "Version History"
+      },
       "workspaceAdoption": {
         "applied": "Applied to the workspace",
         "pending": "Not applied yet: the agent's version, not in your workspace"
@@ -38721,6 +38745,8 @@
     "confirmTitle": "Confirm",
     "delete": "Delete",
     "deleteConfirm": "Delete \"{name}\"? This cannot be undone.",
+    "deletePermanentFallback": "\"{name}\" couldn't be moved to Cognia's workspace trash. Delete it permanently instead? This cannot be undone.",
+    "deletePermanently": "Delete Permanently",
     "deletedOnDisk": "Deleted on disk",
     "deletedTab": "{name} — deleted on disk",
     "editorTab": "Editor",
@@ -38739,6 +38765,7 @@
     "mobileNav": {
       "aria": "Editor navigation"
     },
+    "moveToTrash": "Move to Trash",
     "newFile": "New File",
     "newFolder": "New Folder",
     "newFromTemplate": "New File from Template",
@@ -39056,6 +39083,9 @@
       "test": "Test File",
       "typescript": "TypeScript"
     },
+    "trashConfirm": "Move \"{name}\" to Cognia's workspace trash? You can undo this or restore it within 30 days.",
+    "trashRestoredToast": "Restored \"{name}\"",
+    "trashedToast": "Moved \"{name}\" to workspace trash",
     "treeAria": "Project files",
     "treeEmpty": "No files",
     "treeFailure": {
@@ -39078,6 +39108,7 @@
     },
     "unavailableDesc": "The project editor needs a desktop app or a paired device to reach the project files.",
     "unavailableTitle": "Editor unavailable",
+    "undo": "Undo",
     "workbench": {
       "ai": "AI",
       "comments": "Comments",

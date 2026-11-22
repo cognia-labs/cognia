@@ -316,6 +316,7 @@ mod tests {
         ("files_library_collection_list", OutputShape::Declared(RootType::Object)),
         ("files_library_search", OutputShape::Declared(RootType::Object)),
         ("files_library_get", OutputShape::Declared(RootType::Object)),
+        ("files_library_access_get", OutputShape::Declared(RootType::Object)),
         ("files_library_read_chunk", OutputShape::Declared(RootType::Object)),
         ("files_library_favorite", OutputShape::Declared(RootType::Object)),
         ("files_library_tags_set", OutputShape::Declared(RootType::Object)),
@@ -838,6 +839,8 @@ mod tests {
         ("fs_stat_workspace_file", OutputShape::Opaque(RootType::Object)),
         ("fs_create_workspace_dir", OutputShape::Scalar(ScalarShape::Null)),
         ("fs_delete_workspace_entry", OutputShape::Scalar(ScalarShape::Null)),
+        ("fs_trash_workspace_entry", OutputShape::Declared(RootType::Object)),
+        ("fs_restore_workspace_trash", OutputShape::Declared(RootType::Object)),
         ("fs_rename_workspace_entry", OutputShape::Scalar(ScalarShape::Null)),
         ("fs_copy_workspace_entry", OutputShape::Declared(RootType::Object)),
 

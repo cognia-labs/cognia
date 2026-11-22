@@ -24,6 +24,14 @@ jest.mock("@/lib/tauri/transport-routing", () => ({
   },
 }))
 
+const mockToastSuccess = jest.fn()
+jest.mock("sonner", () => ({
+  toast: {
+    success: (...args: unknown[]) => mockToastSuccess(...args),
+    error: jest.fn(),
+  },
+}))
+
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string) => key,
 }))
@@ -1794,5 +1802,72 @@ describe("row context menu and clipboard", () => {
     const rootPaste = await screen.findByTestId("tree-root-paste")
     fireEvent.click(rootPaste)
     await waitFor(() => expect(deps.createDir).toHaveBeenCalledWith("/repo", "src copy"))
+  })
+
+  it("stages deletions into managed workspace trash with Undo restore, and prompts before permanent fallback (G07)", async () => {
+    mockToastSuccess.mockClear()
+    const deps = makeDeps()
+    deps.trashEntry = jest.fn(async (_root: string, relPath: string) => {
+      deps.fs[""] = deps.fs[""].filter((item) => item.relPath !== relPath)
+      return {
+        trashId: "wstrash_1000_1_1",
+        root: "/repo",
+        relPath,
+        isDir: false,
+        trashedAtMs: 1_000,
+      }
+    })
+    deps.restoreTrash = jest.fn(async (_root: string, _trashId: string) => {
+      deps.fs[""] = [...deps.fs[""], entry("readme.md", false)]
+      return { relPath: "readme.md", isDir: false }
+    })
+    const onDeleted = jest.fn()
+
+    render(
+      <ProjectFileTree
+        rootPath="/repo"
+        activePath={null}
+        onOpenFile={jest.fn()}
+        onDeleted={onDeleted}
+        deps={deps}
+      />
+    )
+    await screen.findByTestId("tree-row-readme.md")
+    fireEvent.click(menuFor("readme.md").getByText("delete"))
+    const dialog = await screen.findByRole("alertdialog")
+    expect(within(dialog).getByText("trashConfirm")).toBeInTheDocument()
+
+    fireEvent.click(within(dialog).getAllByRole("button", { name: "moveToTrash" })[0]!)
+    await waitFor(() => expect(deps.trashEntry).toHaveBeenCalledWith("/repo", "readme.md"))
+    expect(deps.deleteEntry).not.toHaveBeenCalled()
+    expect(onDeleted).toHaveBeenCalledWith("readme.md", false)
+    await waitFor(() => expect(screen.queryByTestId("tree-row-readme.md")).toBeNull())
+
+    // Trigger Undo from the toast action and verify the file reappears.
+    const toastOptions = mockToastSuccess.mock.calls[0]?.[1] as
+      { action?: { onClick: () => void } } | undefined
+    expect(toastOptions?.action).toBeDefined()
+    await act(async () => {
+      toastOptions?.action?.onClick()
+    })
+    await waitFor(() => expect(deps.restoreTrash).toHaveBeenCalledWith("/repo", "wstrash_1000_1_1"))
+    expect(await screen.findByTestId("tree-row-readme.md")).toBeInTheDocument()
+
+    // When staging into trash fails (e.g. symlink), prompt explicitly before permanent delete.
+    ;(deps.trashEntry as jest.Mock).mockRejectedValueOnce(new Error("cannot stage symlink"))
+    fireEvent.click(menuFor("readme.md").getByText("delete"))
+    const fallbackDialog = await screen.findByRole("alertdialog")
+    fireEvent.click(within(fallbackDialog).getAllByRole("button", { name: "moveToTrash" })[0]!)
+    await waitFor(() =>
+      expect(
+        within(screen.getByRole("alertdialog")).getByText("deletePermanentFallback")
+      ).toBeInTheDocument()
+    )
+    expect(deps.deleteEntry).not.toHaveBeenCalled()
+
+    fireEvent.click(
+      within(screen.getByRole("alertdialog")).getByRole("button", { name: "deletePermanently" })
+    )
+    await waitFor(() => expect(deps.deleteEntry).toHaveBeenCalledWith("/repo", "readme.md", false))
   })
 })

@@ -57,6 +57,7 @@ import { createSession, getSession } from "@/lib/db/sessions"
 import { getDb } from "@/lib/db/schema"
 import { sha256Hex } from "@/lib/share/hash"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { resolveFilesEntryAccess, type FilesEntryAccess } from "../access"
 import { aggregateFilesEntries } from "../aggregate"
 import { documentDraftOf } from "../document-draft"
 import { duplicateFilesEntry } from "../duplicate"
@@ -108,6 +109,7 @@ import {
   parseUploadId,
   parseUploadInitRequest,
   refused,
+  type FilesRemoteAccess,
   type FilesRemoteAttach,
   type FilesRemoteCollections,
   type FilesRemoteCollectionUpsert,
@@ -138,6 +140,7 @@ export interface FilesHostDispatchDeps {
   ledger?: FilesIdempotencyLedger
   /** The text of an artifact or canvas document, or null when it is gone. */
   readDocumentText?: (entry: FilesEntry) => string | null
+  resolveAccess?: (entry: FilesEntry) => Promise<FilesEntryAccess>
 }
 
 async function loadHostLibrary(imageLimit: number): Promise<FilesHostLibrary> {
@@ -177,6 +180,7 @@ interface Resolved {
   loadLibrary: (imageLimit: number) => Promise<FilesHostLibrary>
   ledger: FilesIdempotencyLedger
   readDocumentText: (entry: FilesEntry) => string | null
+  resolveAccess: (entry: FilesEntry) => Promise<FilesEntryAccess>
 }
 
 /** The entries the keys name, in the order given; keys the host lacks are dropped. */
@@ -342,6 +346,20 @@ async function get(
     entry: entryToRemote(entry),
     text: truncated ? text.slice(0, FILES_REMOTE_TEXT_MAX) : text,
     ...(truncated ? { textTruncated: true } : {}),
+  }
+}
+
+async function accessGet(
+  d: Resolved,
+  payload: Record<string, unknown>
+): Promise<FilesRemoteResult<FilesRemoteAccess>> {
+  const entry = await resolveEntry(d, payload)
+  if (!entry) return refused("files_remote_not_found")
+  const access = await d.resolveAccess(entry)
+  return {
+    ok: true,
+    sharedLinks: access.sharedLinks,
+    liveGrants: access.liveGrants,
   }
 }
 
@@ -711,6 +729,7 @@ export async function dispatchFilesHostCommand(
     loadLibrary: deps.loadLibrary ?? loadHostLibrary,
     ledger: deps.ledger ?? hostLedger(),
     readDocumentText: deps.readDocumentText ?? readHostDocumentText,
+    resolveAccess: deps.resolveAccess ?? ((entry) => resolveFilesEntryAccess(entry)),
   }
   let callerDeviceId: string
   try {
@@ -733,6 +752,8 @@ export async function dispatchFilesHostCommand(
         return await search(d, payload)
       case FILES_REMOTE_COMMANDS.get:
         return await get(d, payload)
+      case FILES_REMOTE_COMMANDS.accessGet:
+        return await accessGet(d, payload)
       case FILES_REMOTE_COMMANDS.readChunk:
         return await readChunk(d, payload)
       case FILES_REMOTE_COMMANDS.favorite:

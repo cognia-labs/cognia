@@ -263,6 +263,58 @@ describe("expandShareSelection", () => {
     expect(result.truncated).toBe(true)
     expect(result.files).toHaveLength(SHARE_MAX_BLOBS + 1)
   })
+
+  it("attaches Files librarySource identities for workspace, artifact and hashed upload candidates (G08)", async () => {
+    const d = deps({
+      listFileSpaceDexieEntries: jest.fn(async () => ({
+        uploads: [
+          upload("report.pdf", { contentHash: "h_doc" }),
+          upload("diagram.png", { mediaType: "image/png", contentHash: "h_img" }),
+        ],
+        artifacts: [
+          {
+            ...upload("chart.json", { mediaType: "application/json" }),
+            mountId: "artifacts" as const,
+            path: p("/artifacts/chart.json"),
+            sourceId: "art-1",
+          },
+        ],
+      })),
+    })
+    const result = await expandShareSelection(
+      SPACE,
+      [
+        p("/workspace/README.md"),
+        p("/uploads/report.pdf"),
+        p("/uploads/diagram.png"),
+        p("/artifacts/chart.json"),
+      ],
+      d
+    )
+    const byPath = new Map(result.files.map((f) => [f.path, f.librarySource]))
+    expect(byPath.get(p("/workspace/README.md"))).toMatchObject({
+      kind: "workspace-file",
+      originSessionId: "s1",
+      workspace: { workspaceRoot: "/repo", relPath: "README.md" },
+    })
+    expect(byPath.get(p("/uploads/report.pdf"))).toEqual({
+      kind: "session-upload",
+      sourceId: "h_doc",
+      originSessionId: "s1",
+      mediaHash: "original:h_doc",
+    })
+    expect(byPath.get(p("/uploads/diagram.png"))).toEqual({
+      kind: "image",
+      sourceId: "h_img",
+      originSessionId: "s1",
+      mediaHash: "h_img",
+    })
+    expect(byPath.get(p("/artifacts/chart.json"))).toEqual({
+      kind: "artifact",
+      sourceId: "art-1",
+      originSessionId: "s1",
+    })
+  })
 })
 
 describe("checkShareSelectionLimits", () => {

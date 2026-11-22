@@ -197,4 +197,22 @@ describe("createFileShare", () => {
     ).rejects.toMatchObject({ reason: "public-snapshots-disabled" })
     expect(d.createShareLink).not.toHaveBeenCalled()
   })
+
+  it("records shared library item sources when candidates carry librarySource (G08)", async () => {
+    const recordSharedItems = jest.fn(async () => undefined)
+    const d = deps({ recordSharedItems })
+    const file = {
+      ...candidate("/artifacts/spec.md"),
+      librarySource: { kind: "artifact" as const, sourceId: "a1", originSessionId: "s1" },
+    }
+    await createFileShare(
+      { payload: PAYLOAD, files: [file], ttlSeconds: 3600, session: { id: "s1" } },
+      undefined,
+      d
+    )
+    expect(recordSharedItems).toHaveBeenCalledWith(
+      [{ kind: "artifact", sourceId: "a1", originSessionId: "s1" }],
+      "c"
+    )
+  })
 })

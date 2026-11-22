@@ -708,6 +708,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     "files_library_collection_list",
     "files_library_search",
     "files_library_get",
+    "files_library_access_get",
     "files_library_read_chunk",
     "files_library_favorite",
     "files_library_tags_set",
@@ -1095,6 +1096,8 @@ const KNOWN_COMMANDS: &[&str] = &[
     "fs_stat_workspace_file",
     "fs_create_workspace_dir",
     "fs_delete_workspace_entry",
+    "fs_trash_workspace_entry",
+    "fs_restore_workspace_trash",
     "fs_rename_workspace_entry",
     "fs_copy_workspace_entry",
     // ── Terminal ────────────────────────────────────────────────────────────
@@ -1538,6 +1541,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     "files_library_collection_list",
     "files_library_search",
     "files_library_get",
+    "files_library_access_get",
     "files_library_read_chunk",
     // Glance (ADR-0225 §7): a lease renewal answers the newest snapshot and a
     // re-read answers on the next push, so neither may replay a cached answer.
@@ -2135,6 +2139,8 @@ const CONTROL_COMMANDS: &[&str] = &[
     // File-tree browser writes — mutate the workspace, so remote-control gated.
     "fs_create_workspace_dir",
     "fs_delete_workspace_entry",
+    "fs_trash_workspace_entry",
+    "fs_restore_workspace_trash",
     "fs_rename_workspace_entry",
     "fs_copy_workspace_entry",
     // Raw absolute-path *read* — has no sandbox/root confinement, so it can
@@ -2563,6 +2569,7 @@ const CALLER_DEVICE_ID_COMMANDS: &[&str] = &[
     "files_library_collection_list",
     "files_library_search",
     "files_library_get",
+    "files_library_access_get",
     "files_library_read_chunk",
     "files_library_favorite",
     "files_library_tags_set",

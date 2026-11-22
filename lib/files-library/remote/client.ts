@@ -42,6 +42,7 @@ import {
   FILES_REMOTE_PAGE_SIZE_DEFAULT,
   isFilesRemoteListPage,
   isRefused,
+  type FilesRemoteAccess,
   type FilesRemoteAttach,
   type FilesRemoteCollections,
   type FilesRemoteCollectionUpsert,
@@ -202,6 +203,8 @@ export interface FilesRemoteClient {
    * preview was cut at `FILES_REMOTE_TEXT_MAX`, up to `FILES_REMOTE_MAX_BYTES`.
    */
   readDocumentBytes?(entry: FilesEntry, imageLimit: number): Promise<Uint8Array<ArrayBuffer>>
+  /** Active snapshot share links and live FileSpace grants covering one entry. */
+  access?(key: string, imageLimit: number): Promise<FilesRemoteAccess>
 }
 
 /**
@@ -363,6 +366,9 @@ export function createFilesRemoteClient(
     },
     get(key, imageLimit) {
       return read<FilesRemoteDetail>(FILES_REMOTE_COMMANDS.get, { key, imageLimit })
+    },
+    access(key, imageLimit) {
+      return read<FilesRemoteAccess>(FILES_REMOTE_COMMANDS.accessGet, { key, imageLimit })
     },
     async favorite(keys, favorite, imageLimit) {
       await write(FILES_REMOTE_COMMANDS.favorite, { keys, favorite, imageLimit })

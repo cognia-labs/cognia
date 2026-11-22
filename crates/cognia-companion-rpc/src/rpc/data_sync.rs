@@ -87,6 +87,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "files_library_collection_list",
     "files_library_search",
     "files_library_get",
+    "files_library_access_get",
     "files_library_read_chunk",
     "files_library_favorite",
     "files_library_tags_set",
@@ -932,6 +933,7 @@ pub(super) async fn dispatch(
         | "files_library_collection_list"
         | "files_library_search"
         | "files_library_get"
+        | "files_library_access_get"
         | "files_library_read_chunk"
         | "files_library_favorite"
         | "files_library_tags_set"

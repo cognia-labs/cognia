@@ -13,8 +13,10 @@ import {
   readWorkspaceFileChunk,
   readWorkspaceFileVersioned,
   renameWorkspaceEntry,
+  restoreWorkspaceTrash,
   searchWorkspaceContent,
   statWorkspaceFile,
+  trashWorkspaceEntry,
   writeWorkspaceFile,
   writeWorkspaceFileChecked,
   WorkspaceFileConflictError,
@@ -437,5 +439,46 @@ describe("pinned callTransport override", () => {
     })
     expect(pinnedCall).toHaveBeenCalledTimes(2)
     expect(defaultSpy).not.toHaveBeenCalled()
+  })
+})
+
+describe("managed workspace trash wrappers and schemas (G07)", () => {
+  it("stages into workspace trash, restores by trashId, and validates published response schemas", async () => {
+    const receipt = {
+      trashId: "wstrash_1000_1_1",
+      root: "/repo",
+      relPath: "src/old.ts",
+      isDir: false,
+      trashedAtMs: 1_000,
+    }
+    const restored = { relPath: "src/old.ts", isDir: false }
+    const callSpy = jest
+      .spyOn(transport, "call")
+      .mockResolvedValueOnce(receipt)
+      .mockResolvedValueOnce(restored)
+
+    await expect(trashWorkspaceEntry("/repo", "src/old.ts")).resolves.toEqual(receipt)
+    expect(callSpy).toHaveBeenNthCalledWith(1, "fs_trash_workspace_entry", {
+      root: "/repo",
+      relPath: "src/old.ts",
+    })
+
+    await expect(restoreWorkspaceTrash("/repo", receipt.trashId)).resolves.toEqual(restored)
+    expect(callSpy).toHaveBeenNthCalledWith(2, "fs_restore_workspace_trash", {
+      root: "/repo",
+      trashId: "wstrash_1000_1_1",
+    })
+
+    const validateTrash = new Ajv({ strict: false }).compile({
+      ...responseSchemas.commands.fs_trash_workspace_entry,
+      $defs: responseSchemas.$defs,
+    })
+    const validateRestore = new Ajv({ strict: false }).compile({
+      ...responseSchemas.commands.fs_restore_workspace_trash,
+      $defs: responseSchemas.$defs,
+    })
+    expect(validateTrash(receipt)).toBe(true)
+    expect(validateTrash({ ...receipt, trashId: "short" })).toBe(false)
+    expect(validateRestore(restored)).toBe(true)
   })
 })

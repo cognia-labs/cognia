@@ -40,8 +40,10 @@ import {
   type DeleteLibraryFolderMode,
 } from "@/lib/db/files-library-folders"
 import { libraryItemKey } from "@/lib/db/files-library-types"
+import { revokeShareLink } from "@/lib/share/client"
 import type { Artifact } from "@/types/artifact/artifact"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { resolveFilesEntryAccess, type FilesEntryAccess } from "./access"
 import { downloadPayloadFor, type FilesDownloadPayload } from "./download"
 import { duplicateFilesEntry, type FilesDuplicateOptions } from "./duplicate"
 import { renameFilesEntry } from "./rename"
@@ -158,6 +160,10 @@ export interface FilesOps {
     query: LibrarySmartCollectionQuery
   }): Promise<LibrarySmartCollection>
   deleteCollection(collectionId: string): Promise<void>
+  /** Active snapshot share links and live FileSpace grants covering an entry (G08). */
+  accessFor?(entry: FilesEntry): Promise<FilesEntryAccess>
+  /** Revoke a snapshot share link on the desktop owner. */
+  revokeSharedLink?(code: string): Promise<void>
 }
 
 /** This device's own library. */
@@ -219,6 +225,8 @@ export function createLocalFilesOps(): FilesOps {
     deleteFolder: (folderId, mode) => deleteLibraryFolder(folderId, mode),
     saveCollection: (draft) => saveLibraryCollection(draft),
     deleteCollection: (collectionId) => deleteLibraryCollection(collectionId),
+    accessFor: (entry) => resolveFilesEntryAccess(entry),
+    revokeSharedLink: (code) => revokeShareLink(code),
   }
 }
 

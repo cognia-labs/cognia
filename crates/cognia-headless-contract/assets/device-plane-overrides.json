@@ -4290,6 +4290,56 @@
         "additionalProperties": false
       }
     },
+    "fs_restore_workspace_trash": {
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "root",
+          "trashId",
+          "adminLease"
+        ],
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "trashId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 96
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "fs_trash_workspace_entry": {
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "root",
+          "relPath",
+          "adminLease"
+        ],
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "relPath": {
+            "type": "string"
+          },
+          "adminLease": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "additionalProperties": false
+      }
+    },
     "fs_write_workspace_file": {
       "inputSchemaSource": "zod-contract",
       "inputSchema": {

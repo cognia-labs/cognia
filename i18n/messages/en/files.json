@@ -376,6 +376,24 @@
     "workspaceHeldBackHint": "Files agents write to disk are listed by the desktop app, which can read the workspace they are in."
   },
   "preview": {
+    "access": {
+      "collabAudience": "Shared members",
+      "expiresAt": "Expires {date}",
+      "grantStatus": {
+        "active": "Active",
+        "stale": "Stale",
+        "suspended": "Suspended"
+      },
+      "liveGrantDefault": "Live FileSpace grant",
+      "liveGrantMeta": "{protocols} · {permissions} · expires {date}",
+      "loading": "Checking sharing & access…",
+      "manageOnDesktop": "Manage or revoke shares from the desktop app.",
+      "private": "Private — no active share links or live FileSpace grants.",
+      "revoke": "Revoke",
+      "revokeFailedToast": "Couldn’t revoke the share link. Try again.",
+      "revokedToast": "Share link revoked.",
+      "title": "Access & Sharing"
+    },
     "close": "Close preview",
     "conversations": "Conversations",
     "details": {
@@ -403,6 +421,12 @@
     "tags": "Tags",
     "trashedNotice": "Moved to the Trash on {date}. It will be deleted for good on {purge}.",
     "unavailable": "The content is no longer stored on this device.",
+    "versionHistory": {
+      "onDesktop": "Version history and restore are available on the desktop app.",
+      "open": "Version history",
+      "savedCount": "{count, plural, one {# saved} other {# saved}}",
+      "title": "Version History"
+    },
     "workspaceAdoption": {
       "applied": "Applied to the workspace",
       "pending": "Not applied yet: the agent's version, not in your workspace"

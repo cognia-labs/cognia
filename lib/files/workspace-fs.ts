@@ -364,6 +364,43 @@ export async function deleteWorkspaceEntry(
   await transport.call<null>("fs_delete_workspace_entry", { root, relPath, recursive })
 }
 
+export interface WorkspaceTrashReceipt {
+  trashId: string
+  root: string
+  relPath: string
+  isDir: boolean
+  trashedAtMs: number
+}
+
+export interface WorkspaceTrashRestoreResult {
+  relPath: string
+  isDir: boolean
+}
+
+/**
+ * Stage a file or directory into Cognia's managed workspace trash
+ * (`<data_root>/workspace-trash/`) outside the Git working tree so deletion
+ * can be undone cleanly. Rejects when staging is unsupported or unsafe (e.g.
+ * symlinks), allowing callers to fall back to permanent deletion.
+ */
+export async function trashWorkspaceEntry(
+  root: string,
+  relPath: string
+): Promise<WorkspaceTrashReceipt> {
+  return transport.call<WorkspaceTrashReceipt>("fs_trash_workspace_entry", { root, relPath })
+}
+
+/** Restore a previously trashed workspace entry back to its original path. */
+export async function restoreWorkspaceTrash(
+  root: string,
+  trashId: string
+): Promise<WorkspaceTrashRestoreResult> {
+  return transport.call<WorkspaceTrashRestoreResult>("fs_restore_workspace_trash", {
+    root,
+    trashId,
+  })
+}
+
 /** Rename/move an entry within `root`. Refuses to clobber an existing dest. */
 export async function renameWorkspaceEntry(
   root: string,

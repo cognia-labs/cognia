@@ -34347,6 +34347,189 @@
       "outputTyped": true
     },
     {
+      "name": "files_library_access_get",
+      "category": "sessions",
+      "resource": "files-library",
+      "target": "execution",
+      "operation": "read",
+      "capability": "client.read",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "files_library_access_get (client.read)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "description": "Read-only summary of active snapshot share links (without secret decryption fragments) and live FileSpace grants covering one Files item.",
+        "required": [
+          "key"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "imageLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "ok",
+              "sharedLinks",
+              "liveGrants"
+            ],
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "sharedLinks": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "code",
+                    "title",
+                    "kind",
+                    "createdAt",
+                    "expiresAt",
+                    "url"
+                  ],
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "kind": {
+                      "type": "string"
+                    },
+                    "createdAt": {
+                      "type": "integer"
+                    },
+                    "expiresAt": {
+                      "type": "integer"
+                    },
+                    "url": {
+                      "type": "string"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "liveGrants": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "sessionId",
+                    "label",
+                    "audienceKind",
+                    "protocols",
+                    "permissions",
+                    "status",
+                    "expiresAt",
+                    "matchedPaths"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "sessionId": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    },
+                    "audienceKind": {
+                      "type": "string",
+                      "enum": [
+                        "credentials",
+                        "collab"
+                      ]
+                    },
+                    "protocols": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "webdav",
+                          "sftp"
+                        ]
+                      }
+                    },
+                    "permissions": {
+                      "type": "array",
+                      "items": {
+                        "type": "string",
+                        "enum": [
+                          "read",
+                          "download",
+                          "write"
+                        ]
+                      }
+                    },
+                    "status": {
+                      "type": "string",
+                      "enum": [
+                        "active",
+                        "suspended",
+                        "stale"
+                      ]
+                    },
+                    "expiresAt": {
+                      "type": "integer"
+                    },
+                    "matchedPaths": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A refused `files_library_*` call: a `files.errors.*` code, or `headless_host` from a brain that has no library.",
+            "required": [
+              "ok",
+              "code"
+            ],
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "outputTyped": true
+    },
+    {
       "name": "files_library_attach",
       "category": "sessions",
       "resource": "files-library",
@@ -38503,6 +38686,57 @@
       "outputTyped": true
     },
     {
+      "name": "fs_restore_workspace_trash",
+      "category": "development",
+      "resource": "workspace-files",
+      "target": "execution",
+      "operation": "write",
+      "capability": "workspace.write",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "fs_restore_workspace_trash (workspace.write)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "root",
+          "trashId"
+        ],
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "trashId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 96
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "crates/cognia-files/src/files.rs WorkspaceTrashRestoreResult",
+        "required": [
+          "relPath",
+          "isDir"
+        ],
+        "properties": {
+          "relPath": {
+            "type": "string"
+          },
+          "isDir": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
       "name": "fs_search_content_workspace",
       "category": "development",
       "resource": "workspace-files",
@@ -38658,6 +38892,70 @@
         "additionalProperties": true,
         "x-cognia-opaque-reason": "The command serializes an existing domain record whose stable root is an object; property-level compatibility remains owned by that domain.",
         "x-cognia-schema-owner": "workspace-files"
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "fs_trash_workspace_entry",
+      "category": "development",
+      "resource": "workspace-files",
+      "target": "execution",
+      "operation": "write",
+      "capability": "workspace.write",
+      "risk": "high",
+      "approval": "interactive",
+      "idempotency": "required",
+      "summary": "fs_trash_workspace_entry (workspace.write)",
+      "description": "Loopback service-token command. Target: execution; risk: high.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "root",
+          "relPath"
+        ],
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "relPath": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "crates/cognia-files/src/files.rs WorkspaceTrashReceipt",
+        "required": [
+          "trashId",
+          "root",
+          "relPath",
+          "isDir",
+          "trashedAtMs"
+        ],
+        "properties": {
+          "trashId": {
+            "type": "string",
+            "minLength": 8,
+            "maxLength": 96
+          },
+          "root": {
+            "type": "string"
+          },
+          "relPath": {
+            "type": "string"
+          },
+          "isDir": {
+            "type": "boolean"
+          },
+          "trashedAtMs": {
+            "type": "integer",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "outputTyped": true
     },
@@ -115144,5 +115442,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "4579d7838cc935709c8d90405a2f4e72c0d1be4cd00a311a7593e5c62ed65297"
+  "catalogHash": "3d0cb284925b2d07bd0fe8f82daa61762b546b630cd30d91b4e4c36259cf95e3"
 }

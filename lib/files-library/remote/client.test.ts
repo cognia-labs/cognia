@@ -402,6 +402,22 @@ describe("readWorkspaceFile (ADR-0223 §8)", () => {
       ],
       files_library_collection_upsert: [{ ok: true, collection: saved }],
       files_library_collection_delete: [{ ok: true }],
+      files_library_access_get: [
+        {
+          ok: true,
+          sharedLinks: [
+            {
+              code: "c1",
+              title: "Link",
+              kind: "file-bundle",
+              createdAt: 1,
+              expiresAt: 9,
+              url: "https://s/c1",
+            },
+          ],
+          liveGrants: [],
+        },
+      ],
     })
     const client = createFilesRemoteClient({ call: t.call as never }, { newKey: () => "k-1" })
     await client.setTags!(["artifact:a"], ["spec"], 500)
@@ -411,12 +427,17 @@ describe("readWorkspaceFile (ADR-0223 §8)", () => {
       client.saveCollection!({ name: "Specs", query: { tags: ["spec"] } })
     ).resolves.toEqual(saved)
     await client.deleteCollection!("lbc_1")
+    await expect(client.access!("artifact:a", 500)).resolves.toMatchObject({
+      sharedLinks: [expect.objectContaining({ code: "c1" })],
+      liveGrants: [],
+    })
     expect(t.calls.map((c) => c.name)).toEqual([
       "files_library_tags_set",
       "files_library_collection_list",
       "files_library_collection_list",
       "files_library_collection_upsert",
       "files_library_collection_delete",
+      "files_library_access_get",
     ])
   })
 })

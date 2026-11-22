@@ -1133,6 +1133,8 @@ pub fn run() {
             files::fs_stat_workspace_file,
             files::fs_create_workspace_dir,
             files::fs_delete_workspace_entry,
+            files::fs_trash_workspace_entry,
+            files::fs_restore_workspace_trash,
             files::fs_rename_workspace_entry,
             files::fs_copy_workspace_entry,
             files::slash_commands_scan,

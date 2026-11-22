@@ -628,7 +628,8 @@
         "workspace_dir": {},
         "workspace_entry": {},
         "workspace_file": {},
-        "workspace_root": {}
+        "workspace_root": {},
+        "workspace_trash": {}
       }
     },
     "gateway": {
@@ -1438,6 +1439,7 @@
       "children": {
         "library": {
           "children": {
+            "access": {},
             "collection": {},
             "favorite": {},
             "folder": {},

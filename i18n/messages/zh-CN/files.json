@@ -376,6 +376,24 @@
     "workspaceHeldBackHint": "Agent 写到磁盘上的文件由桌面端列出，它能读取这些文件所在的工作区。"
   },
   "preview": {
+    "access": {
+      "collabAudience": "协作成员",
+      "expiresAt": "到期时间：{date}",
+      "grantStatus": {
+        "active": "生效中",
+        "stale": "需重新绑定",
+        "suspended": "已暂停"
+      },
+      "liveGrantDefault": "实时文件空间授权",
+      "liveGrantMeta": "{protocols} · {permissions} · {date} 到期",
+      "loading": "正在检查共享与访问权限…",
+      "manageOnDesktop": "请在桌面端管理或撤销共享。",
+      "private": "仅自己可见——当前没有生效中的分享链接或实时文件空间授权。",
+      "revoke": "撤销",
+      "revokeFailedToast": "无法撤销分享链接，请重试。",
+      "revokedToast": "已撤销分享链接。",
+      "title": "访问权限与共享"
+    },
     "close": "关闭预览",
     "conversations": "所在对话",
     "details": {
@@ -403,6 +421,12 @@
     "tags": "标签",
     "trashedNotice": "于 {date} 移到回收站，将在 {purge} 永久删除。",
     "unavailable": "内容已不在本设备上。",
+    "versionHistory": {
+      "onDesktop": "版本历史与恢复功能需在桌面端使用。",
+      "open": "版本历史",
+      "savedCount": "已保存 {count} 个版本",
+      "title": "版本历史"
+    },
     "workspaceAdoption": {
       "applied": "已应用到工作区",
       "pending": "尚未应用：这是 Agent 的版本，不在你的工作区中"

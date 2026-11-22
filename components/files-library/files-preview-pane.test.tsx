@@ -9,6 +9,23 @@ jest.mock("@/components/artifacts/artifact-preview", () => ({
     <div data-testid={`artifact-preview-${artifact.id}`} />
   ),
 }))
+jest.mock("@/components/artifacts/panel-version-history", () => ({
+  PanelVersionHistory: ({ artifact }: { artifact: { id: string } }) => (
+    <div data-testid={`artifact-version-history-${artifact.id}`} />
+  ),
+}))
+jest.mock("@/components/canvas/version-history-panel", () => ({
+  VersionHistoryPanel: ({
+    documentId,
+    trigger,
+  }: {
+    documentId: string
+    trigger?: React.ReactNode
+  }) => <div data-testid={`canvas-version-history-${documentId}`}>{trigger}</div>,
+}))
+jest.mock("sonner", () => ({
+  toast: { success: jest.fn(), error: jest.fn() },
+}))
 jest.mock("@/components/chat/message-parts/file-part-preview", () => ({
   FilePartPreview: ({ url, filename }: { url: string; filename: string }) => (
     <div data-testid="file-part-preview" data-url={url} data-filename={filename} />
@@ -171,7 +188,7 @@ it("renders images full size and artifacts through the artifact preview", () => 
       onClose={jest.fn()}
     />
   )
-  expect(screen.getByTestId("files-preview-unavailable")).toBeInTheDocument()
+  expect(screen.getAllByTestId("files-preview-unavailable").length).toBeGreaterThanOrEqual(1)
 })
 
 it("previews a canvas document from its content", async () => {
@@ -514,5 +531,152 @@ it("says when a workspace file is not applied yet, and when it is", async () => 
   rerender(<FilesPreviewPane entry={e("applied")} actions={actions()} onClose={jest.fn()} />)
   expect(screen.getByTestId("files-preview-workspace-adoption")).toHaveTextContent(
     "Applied to the workspace"
+  )
+})
+
+it("surfaces Version History for local artifacts and canvas documents, and a desktop hint on paired devices (G07)", async () => {
+  const user = userEvent.setup()
+  useArtifactStore.setState({
+    artifacts: {
+      a1: {
+        id: "a1",
+        sessionId: "s1",
+        messageId: "m1",
+        type: "code",
+        title: "Spec",
+        content: "v2",
+        version: 2,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    } as never,
+    artifactVersions: {
+      a1: [{ id: "ver-1", version: 1, content: "v1", createdAt: new Date() }],
+    } as never,
+    canvasDocuments: {
+      c1: {
+        id: "c1",
+        sessionId: "standalone",
+        title: "Canvas Doc",
+        content: "# Doc",
+        language: "markdown",
+        type: "text",
+        versions: [{ id: "cv-1" }, { id: "cv-2" }],
+        createdAt: new Date(),
+        updatedAt: new Date(),
+      },
+    } as never,
+  })
+  payload.mockResolvedValue({ blob: new Blob(["# Doc"]), filename: "Canvas Doc.md" })
+
+  const { rerender } = render(
+    <FilesPreviewPane
+      entry={entry({ key: "artifact:a1", kind: "artifact", sourceId: "a1", title: "Spec" })}
+      actions={actions()}
+      onClose={jest.fn()}
+    />
+  )
+  expect(screen.getByTestId("files-preview-versions-section")).toHaveTextContent("1 saved")
+  await user.click(screen.getByTestId("files-preview-version-trigger"))
+  expect(await screen.findByTestId("artifact-version-history-a1")).toBeInTheDocument()
+
+  rerender(
+    <FilesPreviewPane
+      entry={entry({ key: "canvas:c1", kind: "canvas", sourceId: "c1", title: "Canvas Doc" })}
+      actions={actions()}
+      onClose={jest.fn()}
+    />
+  )
+  expect(screen.getByTestId("canvas-version-history-c1")).toBeInTheDocument()
+  expect(screen.getByTestId("files-preview-versions-section")).toHaveTextContent("2 saved")
+
+  const pairedBackend: FilesBackend = {
+    source: { entries: [], imagesTruncated: false, loadMoreImages: jest.fn(), folders: [] },
+    ops: {
+      mode: "remote",
+      capabilities: PAIRED_FILES_CAPABILITIES,
+      artifactFor: async () => null,
+      payloadFor: async () => ({ blob: new Blob(["# Doc"]), filename: "Canvas Doc.md" }),
+    } as unknown as FilesOps,
+  }
+  rerender(
+    <FilesBackendProvider backend={pairedBackend}>
+      <FilesPreviewPane
+        entry={entry({ key: "canvas:c1", kind: "canvas", sourceId: "c1", title: "Canvas Doc" })}
+        actions={actions()}
+        onClose={jest.fn()}
+      />
+    </FilesBackendProvider>
+  )
+  expect(screen.getByTestId("files-preview-versions-desktop-hint")).toHaveTextContent(
+    "Version history and restore are available on the desktop app."
+  )
+})
+
+it("lists active snapshot shares and live FileSpace grants and revokes shares on desktop (G08)", async () => {
+  const user = userEvent.setup()
+  payload.mockResolvedValue({ blob: new Blob(["body"]), filename: "notes.md" })
+  const revokeSharedLink = jest.fn(async () => undefined)
+  let revoked = false
+  const accessFor = jest.fn(async () => ({
+    sharedLinks: revoked
+      ? []
+      : [
+          {
+            code: "sh_live",
+            title: "Shared Notes",
+            kind: "file-bundle",
+            createdAt: 1_000,
+            expiresAt: 99_000,
+            url: "https://share.example/share/view?c=sh_live",
+          },
+        ],
+    liveGrants: [
+      {
+        id: "lg_sftp",
+        sessionId: "s1",
+        label: "Partner SFTP",
+        audienceKind: "credentials" as const,
+        protocols: ["sftp" as const],
+        permissions: ["read" as const, "download" as const],
+        status: "active" as const,
+        expiresAt: 88_000,
+        matchedPaths: ["/uploads/notes.md"],
+      },
+    ],
+  }))
+  revokeSharedLink.mockImplementation(async () => {
+    revoked = true
+  })
+
+  const backend: FilesBackend = {
+    source: { entries: [], imagesTruncated: false, loadMoreImages: jest.fn(), folders: [] },
+    ops: {
+      mode: "local",
+      capabilities: { createDocuments: true, share: true, open: "navigate", workspaceFiles: true },
+      payloadFor: payload,
+      accessFor,
+      revokeSharedLink,
+    } as unknown as FilesOps,
+  }
+
+  render(
+    <FilesBackendProvider backend={backend}>
+      <FilesPreviewPane entry={entry({})} actions={actions()} onClose={jest.fn()} />
+    </FilesBackendProvider>
+  )
+
+  expect(await screen.findByTestId("files-preview-share-link-sh_live")).toHaveTextContent(
+    "Shared Notes"
+  )
+  expect(screen.getByTestId("files-preview-live-grant-lg_sftp")).toHaveTextContent("Partner SFTP")
+  expect(screen.getByTestId("files-preview-live-grant-lg_sftp")).toHaveTextContent(
+    "/uploads/notes.md"
+  )
+
+  await user.click(screen.getByTestId("files-preview-revoke-share-sh_live"))
+  expect(revokeSharedLink).toHaveBeenCalledWith("sh_live")
+  await waitFor(() =>
+    expect(screen.queryByTestId("files-preview-share-link-sh_live")).not.toBeInTheDocument()
   )
 })

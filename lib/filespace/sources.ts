@@ -151,6 +151,7 @@ export function projectUploadEntries(assets: readonly ListedSessionAsset[]): Fil
         createdAt: row.asset.createdAt,
         updatedAt: row.asset.updatedAt,
         sourceId: row.asset.assetId,
+        ...(row.asset.contentHash ? { contentHash: row.asset.contentHash } : {}),
         sourceAvailable: row.asset.sourceAvailable,
       },
     ]
