@@ -12141,6 +12141,23 @@
       "outputSchema": "#/components/schemas/RpcResult"
     },
     {
+      "name": "fs_list_workspace_dir_page",
+      "resource": "fs.workspace_dir",
+      "verb": "list_page",
+      "arm": "fs_list_workspace_dir_page",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.observe",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "transports": ["http", "websocket", "webrtc"],
+      "pagination": "page-token",
+      "longRunning": false,
+      "inputSchema": "#/components/schemas/RpcArgs",
+      "outputSchema": "#/components/schemas/RpcResult"
+    },
+    {
       "name": "fs_read_workspace_file",
       "resource": "fs.workspace_file",
       "verb": "read",

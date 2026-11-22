@@ -46,6 +46,7 @@ import { FilesUseInChatError } from "@/lib/files-library/use-in-chat"
 import { FilesWorkspaceFileError } from "@/lib/files-library/workspace-files-io"
 import { useArtifactStore } from "@/stores/artifact/artifact-store"
 import { useFilesLibraryStore } from "@/stores/files-library"
+import { isAbortError, useFilesTransferStore } from "@/stores/files-library/files-transfer-store"
 import { useProjectStore } from "@/stores/project/project-store"
 import { useUIStore } from "@/stores/ui"
 
@@ -383,23 +384,53 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
           return
         }
       }
-      const toastId = toast.loading(t("toasts.exporting", { count: entries.length }))
-      try {
-        const result = await buildFilesZip(entries, folders, { payloadFor: ops.payloadFor })
-        downloadBlob(result.blob, t("exportFilename"))
-        toast.success(
-          t("toasts.exported", { count: result.written }),
-          result.missing.length > 0
-            ? { description: t("toasts.exportMissing", { count: result.missing.length }) }
-            : undefined
-        )
-      } catch (error) {
-        fail("export", error)
-      } finally {
-        toast.dismiss(toastId)
+      const exportFilename = t("exportFilename")
+      const totalEstimate = entries.reduce((sum, entry) => sum + (entry.byteSize ?? 0), 0)
+      const runExport = async (existingTaskId?: string) => {
+        const controller = new AbortController()
+        const taskId =
+          existingTaskId ??
+          useFilesTransferStore.getState().enqueueTask({
+            kind: "export-zip",
+            name: exportFilename,
+            totalBytes: totalEstimate,
+            status: "running",
+            abortController: controller,
+            retryFn: () => runExport(taskId),
+          })
+        if (existingTaskId) {
+          useFilesTransferStore.getState().markRunning(existingTaskId, controller)
+        }
+        const toastId = toast.loading(t("toasts.exporting", { count: entries.length }))
+        try {
+          const result = await buildFilesZip(entries, folders, {
+            payloadFor: ops.payloadFor,
+            signal: controller.signal,
+            onProgress: ({ loadedBytes, totalBytes }) =>
+              useFilesTransferStore.getState().updateProgress(taskId, loadedBytes, totalBytes),
+          })
+          downloadBlob(result.blob, exportFilename)
+          useFilesTransferStore.getState().markCompleted(taskId)
+          toast.success(
+            t("toasts.exported", { count: result.written }),
+            result.missing.length > 0
+              ? { description: t("toasts.exportMissing", { count: result.missing.length }) }
+              : undefined
+          )
+        } catch (error) {
+          if (isAbortError(error) || controller.signal.aborted) {
+            useFilesTransferStore.getState().cancelTask(taskId)
+            return
+          }
+          useFilesTransferStore.getState().markFailed(taskId, message(error))
+          fail("export", error)
+        } finally {
+          toast.dismiss(toastId)
+        }
       }
+      await runExport()
     },
-    [ops, maxBytes, t, fail]
+    [ops, maxBytes, t, fail, message]
   )
 
   const useInChat = useCallback(
@@ -440,6 +471,59 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
     [router, fail]
   )
 
+  const runTrackedUpload = useCallback(
+    async (file: File, params: { projectId?: string; folderId?: string }): Promise<boolean> => {
+      async function attempt(existingTaskId?: string): Promise<boolean> {
+        const controller = new AbortController()
+        const taskId =
+          existingTaskId ??
+          useFilesTransferStore.getState().enqueueTask({
+            kind: "upload",
+            name: file.name || "file",
+            totalBytes: file.size,
+            status: "running",
+            abortController: controller,
+            retryFn: async () => {
+              const ok = await attempt(taskId)
+              if (ok) toast.success(t("toasts.uploaded", { count: 1 }))
+            },
+          })
+        if (existingTaskId) {
+          useFilesTransferStore.getState().markRunning(existingTaskId, controller)
+        }
+        if (maxBytes !== undefined && file.size > maxBytes) {
+          const reason = t("errors.files_remote_too_large")
+          useFilesTransferStore.getState().markFailed(taskId, reason)
+          toast.error(t("toasts.uploadFailed", { name: file.name, reason }))
+          return false
+        }
+        try {
+          await ops.upload(file, {
+            ...(params.projectId ? { projectId: params.projectId } : {}),
+            ...(params.folderId ? { folderId: params.folderId } : {}),
+            signal: controller.signal,
+            onProgress: ({ uploadedBytes, totalBytes }) =>
+              useFilesTransferStore.getState().updateProgress(taskId, uploadedBytes, totalBytes),
+          })
+          useFilesTransferStore.getState().markCompleted(taskId)
+          return true
+        } catch (error) {
+          if (isAbortError(error) || controller.signal.aborted) {
+            useFilesTransferStore.getState().cancelTask(taskId)
+            return false
+          }
+          const reason = message(error)
+          useFilesTransferStore.getState().markFailed(taskId, reason)
+          log.warn("files upload failed", { name: file.name, error: String(error) })
+          toast.error(t("toasts.uploadFailed", { name: file.name, reason }))
+          return false
+        }
+      }
+      return attempt()
+    },
+    [ops, maxBytes, t, message]
+  )
+
   const upload = useCallback(
     async (files: readonly File[], folderId?: string) => {
       if (files.length === 0) return
@@ -447,30 +531,14 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
       const toastId = toast.loading(t("toasts.uploading", { count: files.length }))
       let stored = 0
       for (const file of files) {
-        if (maxBytes !== undefined && file.size > maxBytes) {
-          toast.error(
-            t("toasts.uploadFailed", {
-              name: file.name,
-              reason: t("errors.files_remote_too_large"),
-            })
-          )
-          continue
-        }
-        try {
-          await ops.upload(file, {
-            ...(projectId ? { projectId } : {}),
-            ...(folderId ? { folderId } : {}),
-          })
+        if (await runTrackedUpload(file, { projectId, folderId })) {
           stored += 1
-        } catch (error) {
-          log.warn("files upload failed", { name: file.name, error: String(error) })
-          toast.error(t("toasts.uploadFailed", { name: file.name, reason: message(error) }))
         }
       }
       toast.dismiss(toastId)
       if (stored > 0) toast.success(t("toasts.uploaded", { count: stored }))
     },
-    [ops, maxBytes, t, message]
+    [runTrackedUpload, t]
   )
 
   const uploadTree = useCallback(
@@ -524,25 +592,20 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
         let stored = 0
         for (const { file, folderPath } of tree.entries) {
           if (maxBytes !== undefined && file.size > maxBytes) {
-            toast.error(
-              t("toasts.uploadFailed", {
-                name: file.name,
-                reason: t("errors.files_remote_too_large"),
-              })
-            )
+            await runTrackedUpload(file, { projectId, folderId: options.folderId })
             continue
           }
+          let targetFolderId: string | undefined
           try {
-            const targetFolderId =
+            targetFolderId =
               folderPath.length > 0 ? await ensureFolderChain(folderPath) : options.folderId
-            await ops.upload(file, {
-              ...(projectId ? { projectId } : {}),
-              ...(targetFolderId ? { folderId: targetFolderId } : {}),
-            })
-            stored += 1
           } catch (error) {
             log.warn("files upload failed", { name: file.name, error: String(error) })
             toast.error(t("toasts.uploadFailed", { name: file.name, reason: message(error) }))
+            continue
+          }
+          if (await runTrackedUpload(file, { projectId, folderId: targetFolderId })) {
+            stored += 1
           }
         }
         if (stored > 0) toast.success(t("toasts.uploaded", { count: stored }))
@@ -553,7 +616,7 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
         if (toastId !== undefined) toast.dismiss(toastId)
       }
     },
-    [ops, maxBytes, t, message, fail]
+    [ops, maxBytes, t, message, fail, runTrackedUpload]
   )
 
   const openOnCanvas = useCallback(

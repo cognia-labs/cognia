@@ -85,6 +85,7 @@ import type { GitFileStatus } from "@/types/git"
 import { toast } from "sonner"
 import type {
   listWorkspaceDir,
+  listWorkspaceDirPage,
   createWorkspaceDir,
   readWorkspaceFile,
   writeWorkspaceFile,
@@ -100,6 +101,7 @@ import { EDITOR_SUBTITLE_ROW_CLASS } from "./editor-chrome"
 
 export interface ProjectFileTreeDeps {
   listDir: typeof listWorkspaceDir
+  listDirPage?: typeof listWorkspaceDirPage
   createDir: typeof createWorkspaceDir
   writeFile: typeof writeWorkspaceFile
   deleteEntry: typeof deleteWorkspaceEntry
@@ -268,6 +270,9 @@ export function ProjectFileTree({
   const t = useTranslations("projectEditor")
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set([""]))
   const [childrenByDir, setChildrenByDir] = useState<Record<string, WorkspaceEntry[]>>({})
+  const [pageMetaByDir, setPageMetaByDir] = useState<
+    Record<string, { total: number; nextPageToken: string; loadingMore?: boolean }>
+  >({})
   // Keyboard navigation cursor — separate from `activePath` (which file is
   // open) the way VS Code's tree focus is separate from the active editor.
   const [focusedPath, setFocusedPath] = useState<string | null>(null)
@@ -342,11 +347,30 @@ export function ProjectFileTree({
         do {
           request.dirty = false
           try {
-            const entries = await latest.current.deps.listDir(listing.rootPath, dirRel || undefined)
+            let entries: WorkspaceEntry[]
+            let pageMeta: { total: number; nextPageToken: string } | null = null
+            if (latest.current.deps.listDirPage) {
+              const page = await latest.current.deps.listDirPage(listing.rootPath, {
+                relPath: dirRel || undefined,
+              })
+              entries = page.items
+              if (page.truncated && page.nextPageToken) {
+                pageMeta = { total: page.total, nextPageToken: page.nextPageToken }
+              }
+            } else {
+              entries = await latest.current.deps.listDir(listing.rootPath, dirRel || undefined)
+            }
             if (!current()) return
             if (request.dirty) continue
             listing.failures.delete(dirRel)
             setChildrenByDir((prev) => ({ ...prev, [dirRel]: entries }))
+            setPageMetaByDir((prev) => {
+              if (pageMeta) return { ...prev, [dirRel]: pageMeta }
+              if (!(dirRel in prev)) return prev
+              const next = { ...prev }
+              delete next[dirRel]
+              return next
+            })
             setFailureByDir((prev) => {
               if (!(dirRel in prev)) return prev
               const next = { ...prev }
@@ -394,6 +418,7 @@ export function ProjectFileTree({
     setExpanded(new Set([""]))
     latest.current.expanded = new Set([""])
     setChildrenByDir({})
+    setPageMetaByDir({})
     setFailureByDir({})
     setPendingCreate(null)
     setRenameTarget(null)
@@ -1047,7 +1072,56 @@ export function ProjectFileTree({
     ]
   )
 
-  const renderChildren = (dirRel: string, depth: number) => {
+  const loadMoreDir = useCallback(
+    async (dirRel: string) => {
+      const meta = pageMetaByDir[dirRel]
+      const listDirPage = latest.current.deps.listDirPage
+      const listing = listingRef.current
+      if (!meta || meta.loadingMore || !listDirPage) return
+      setPageMetaByDir((prev) =>
+        prev[dirRel] ? { ...prev, [dirRel]: { ...prev[dirRel]!, loadingMore: true } } : prev
+      )
+      try {
+        const nextPage = await listDirPage(rootPath, {
+          relPath: dirRel || undefined,
+          pageToken: meta.nextPageToken,
+        })
+        if (
+          !listing.active ||
+          !latest.current.active ||
+          listing.rootPath !== rootPath ||
+          listing.transportVersion !== transportVersion
+        )
+          return
+        setChildrenByDir((prev) => {
+          const existing = prev[dirRel] ?? []
+          const seen = new Set(existing.map((e) => e.relPath))
+          return {
+            ...prev,
+            [dirRel]: [...existing, ...nextPage.items.filter((e) => !seen.has(e.relPath))],
+          }
+        })
+        setPageMetaByDir((prev) => {
+          const next = { ...prev }
+          if (nextPage.truncated && nextPage.nextPageToken) {
+            next[dirRel] = { total: nextPage.total, nextPageToken: nextPage.nextPageToken }
+          } else {
+            delete next[dirRel]
+          }
+          return next
+        })
+      } catch (error) {
+        if (!listing.active) return
+        setPageMetaByDir((prev) =>
+          prev[dirRel] ? { ...prev, [dirRel]: { ...prev[dirRel]!, loadingMore: false } } : prev
+        )
+        report(error, "list", dirRel)
+      }
+    },
+    [pageMetaByDir, rootPath, transportVersion, report]
+  )
+
+  const renderChildren = (dirRel: string, depth: number): React.ReactNode => {
     const failure = failureByDir[dirRel]
     if (failure) {
       return (
@@ -1064,96 +1138,127 @@ export function ProjectFileTree({
     }
     const entries = childrenByDir[dirRel]
     if (!entries) return null
-    return entries.map((entry) => (
-      <TreeRow
-        key={entry.relPath}
-        entry={entry}
-        depth={depth}
-        expanded={expanded.has(entry.relPath)}
-        isActive={activePath === entry.relPath}
-        isFocused={focusedPath === entry.relPath}
-        flatIndex={indexByRel.get(entry.relPath)}
-        isRenaming={renameTarget === entry.relPath}
-        renameValue={renameValue}
-        onRenameChange={setRenameValue}
-        onRenameSubmit={submitRename}
-        onRenameCancel={() => setRenameTarget(null)}
-        gitStatus={gitDecorations?.get(entry.relPath)}
-        dirGitStatus={entry.isDir ? aggregateDirStatus(entry.relPath, gitDecorations) : undefined}
-        isDropTarget={dropDir === entry.relPath}
-        labels={{
-          newFile: t("newFile"),
-          newFolder: t("newFolder"),
-          rename: t("rename"),
-          delete: t("delete"),
-          copyPath: t("action.copyPath"),
-          copyRelativePath: t("action.copyRelativePath"),
-          copyLink: t("action.copyConversationLink"),
-          newFromTemplate: t("newFromTemplate"),
-          open: t("action.open"),
-          openToSide: t("action.openToSide"),
-          revealInSystem: t("action.revealInFileExplorer"),
-          addToChat: t("action.addToChat"),
-          findInFolder: t("action.findInFolder"),
-          cut: t("action.cut"),
-          copy: t("action.copy"),
-          paste: t("action.paste"),
-          templateLabel: (id: string) => t(`templates.${id}`),
-        }}
-        onToggle={() => toggle(entry.relPath)}
-        onOpen={(mode) => onOpenFile(entry.relPath, { mode })}
-        onNewFile={() => startCreate(entry.relPath, "file")}
-        onNewFromTemplate={(template: FileTemplate) =>
-          startCreate(entry.relPath, "file", template.id)
-        }
-        onNewFolder={() => startCreate(entry.relPath, "folder")}
-        onRename={() => {
-          setRenameValue(entry.relPath.split("/").pop() ?? "")
-          setRenameTarget(entry.relPath)
-        }}
-        onCopyPath={onCopyPath ? (absolute) => onCopyPath(entry.relPath, absolute) : undefined}
-        onCopyLink={onCopyLink ? () => onCopyLink(entry.relPath) : undefined}
-        onOpenToSide={!entry.isDir && onOpenToSide ? () => onOpenToSide(entry.relPath) : undefined}
-        onRevealInSystem={onRevealInSystem ? () => onRevealInSystem(entry.relPath) : undefined}
-        onAddToChat={onAddToChat ? () => onAddToChat(entry.relPath, entry.isDir) : undefined}
-        onFindInFolder={
-          entry.isDir && onFindInFolder ? () => onFindInFolder(entry.relPath) : undefined
-        }
-        onCut={() => copyEntry(entry, true)}
-        onCopy={canCopy ? () => copyEntry(entry, false) : undefined}
-        onPaste={clipboard ? () => void pasteInto(pasteTargetOf(entry)) : undefined}
-        isCut={clipboard?.cut === true && clipboard.relPath === entry.relPath}
-        onDelete={() => setDeleteTarget(entry)}
-        dragProps={dragHandlers(entry)}
-        // A file row is a drop target for its *parent* directory — without
-        // handlers of its own the drop bubbles to the scroll container and
-        // lands at the workspace root instead of next to the sibling.
-        dropProps={dropHandlers(entry.isDir ? entry.relPath : parentOf(entry.relPath))}
-        density={density}
-      >
-        {entry.isDir && expanded.has(entry.relPath) ? (
-          <>
-            {pendingCreate?.parent === entry.relPath ? (
-              <CreateInput
-                depth={depth + 1}
-                value={createName}
-                placeholder={
-                  pendingCreate.kind === "folder"
-                    ? t("newFolder")
-                    : pendingCreate.templateId
-                      ? t(`templates.${pendingCreate.templateId}`)
-                      : t("newFile")
-                }
-                onChange={setCreateName}
-                onSubmit={submitCreate}
-                onCancel={() => setPendingCreate(null)}
-              />
+    const pageMeta = pageMetaByDir[dirRel]
+    return (
+      <>
+        {entries.map((entry) => (
+          <TreeRow
+            key={entry.relPath}
+            entry={entry}
+            depth={depth}
+            expanded={expanded.has(entry.relPath)}
+            isActive={activePath === entry.relPath}
+            isFocused={focusedPath === entry.relPath}
+            flatIndex={indexByRel.get(entry.relPath)}
+            isRenaming={renameTarget === entry.relPath}
+            renameValue={renameValue}
+            onRenameChange={setRenameValue}
+            onRenameSubmit={submitRename}
+            onRenameCancel={() => setRenameTarget(null)}
+            gitStatus={gitDecorations?.get(entry.relPath)}
+            dirGitStatus={
+              entry.isDir ? aggregateDirStatus(entry.relPath, gitDecorations) : undefined
+            }
+            isDropTarget={dropDir === entry.relPath}
+            labels={{
+              newFile: t("newFile"),
+              newFolder: t("newFolder"),
+              rename: t("rename"),
+              delete: t("delete"),
+              copyPath: t("action.copyPath"),
+              copyRelativePath: t("action.copyRelativePath"),
+              copyLink: t("action.copyConversationLink"),
+              newFromTemplate: t("newFromTemplate"),
+              open: t("action.open"),
+              openToSide: t("action.openToSide"),
+              revealInSystem: t("action.revealInFileExplorer"),
+              addToChat: t("action.addToChat"),
+              findInFolder: t("action.findInFolder"),
+              cut: t("action.cut"),
+              copy: t("action.copy"),
+              paste: t("action.paste"),
+              templateLabel: (id: string) => t(`templates.${id}`),
+            }}
+            onToggle={() => toggle(entry.relPath)}
+            onOpen={(mode) => onOpenFile(entry.relPath, { mode })}
+            onNewFile={() => startCreate(entry.relPath, "file")}
+            onNewFromTemplate={(template: FileTemplate) =>
+              startCreate(entry.relPath, "file", template.id)
+            }
+            onNewFolder={() => startCreate(entry.relPath, "folder")}
+            onRename={() => {
+              setRenameValue(entry.relPath.split("/").pop() ?? "")
+              setRenameTarget(entry.relPath)
+            }}
+            onCopyPath={onCopyPath ? (absolute) => onCopyPath(entry.relPath, absolute) : undefined}
+            onCopyLink={onCopyLink ? () => onCopyLink(entry.relPath) : undefined}
+            onOpenToSide={
+              !entry.isDir && onOpenToSide ? () => onOpenToSide(entry.relPath) : undefined
+            }
+            onRevealInSystem={onRevealInSystem ? () => onRevealInSystem(entry.relPath) : undefined}
+            onAddToChat={onAddToChat ? () => onAddToChat(entry.relPath, entry.isDir) : undefined}
+            onFindInFolder={
+              entry.isDir && onFindInFolder ? () => onFindInFolder(entry.relPath) : undefined
+            }
+            onCut={() => copyEntry(entry, true)}
+            onCopy={canCopy ? () => copyEntry(entry, false) : undefined}
+            onPaste={clipboard ? () => void pasteInto(pasteTargetOf(entry)) : undefined}
+            isCut={clipboard?.cut === true && clipboard.relPath === entry.relPath}
+            onDelete={() => setDeleteTarget(entry)}
+            dragProps={dragHandlers(entry)}
+            // A file row is a drop target for its *parent* directory — without
+            // handlers of its own the drop bubbles to the scroll container and
+            // lands at the workspace root instead of next to the sibling.
+            dropProps={dropHandlers(entry.isDir ? entry.relPath : parentOf(entry.relPath))}
+            density={density}
+          >
+            {entry.isDir && expanded.has(entry.relPath) ? (
+              <>
+                {pendingCreate?.parent === entry.relPath ? (
+                  <CreateInput
+                    depth={depth + 1}
+                    value={createName}
+                    placeholder={
+                      pendingCreate.kind === "folder"
+                        ? t("newFolder")
+                        : pendingCreate.templateId
+                          ? t(`templates.${pendingCreate.templateId}`)
+                          : t("newFile")
+                    }
+                    onChange={setCreateName}
+                    onSubmit={submitCreate}
+                    onCancel={() => setPendingCreate(null)}
+                  />
+                ) : null}
+                {renderChildren(entry.relPath, depth + 1)}
+              </>
             ) : null}
-            {renderChildren(entry.relPath, depth + 1)}
-          </>
+          </TreeRow>
+        ))}
+        {pageMeta ? (
+          <div
+            className="flex items-center justify-between gap-2 px-2 py-1 text-xs text-muted-foreground"
+            style={{ paddingLeft: `${depth * 12 + 20}px` }}
+            data-testid={`file-tree-load-more-${dirRel || "root"}`}
+          >
+            <span className="truncate">
+              {t("dirTruncated", { shown: entries.length, total: pageMeta.total })}
+            </span>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="h-6 shrink-0 px-2 text-xs"
+              disabled={pageMeta.loadingMore}
+              onClick={() => void loadMoreDir(dirRel)}
+              data-testid={`file-tree-load-more-btn-${dirRel || "root"}`}
+            >
+              {t("loadMore")}
+            </Button>
+          </div>
         ) : null}
-      </TreeRow>
-    ))
+      </>
+    )
   }
 
   return (

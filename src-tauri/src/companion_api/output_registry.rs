@@ -836,6 +836,7 @@ mod tests {
         ("task_workspace_prune", OutputShape::Derived(DerivedOutput { rust_type: "cognia_task_workspace::PruneOutcome", schema: schema_of::<cognia_task_workspace::PruneOutcome> })),
         ("fs_workspace_roots", OutputShape::Declared(RootType::Object)),
         ("fs_list_workspace_dir", OutputShape::Declared(RootType::Array)),
+        ("fs_list_workspace_dir_page", OutputShape::Declared(RootType::Object)),
         ("fs_stat_workspace_file", OutputShape::Opaque(RootType::Object)),
         ("fs_create_workspace_dir", OutputShape::Scalar(ScalarShape::Null)),
         ("fs_delete_workspace_entry", OutputShape::Scalar(ScalarShape::Null)),

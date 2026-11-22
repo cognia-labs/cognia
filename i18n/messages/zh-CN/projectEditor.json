@@ -44,6 +44,8 @@
   "deletePermanently": "永久删除",
   "deletedOnDisk": "已在磁盘删除",
   "deletedTab": "{name} —— 已在磁盘删除",
+  "dirTruncated": "已显示 {shown} / {total} 项",
+  "loadMore": "加载更多",
   "moveToTrash": "移入回收站",
   "trashConfirm": "将“{name}”移入 Cognia 工作区回收站？你可立即撤销，或在 30 天内恢复。",
   "trashRestoredToast": "已恢复“{name}”",

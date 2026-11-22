@@ -127,6 +127,7 @@ pub(super) const COMMANDS: &[&str] = &[
     "task_workspace_prune",
     "fs_workspace_roots",
     "fs_list_workspace_dir",
+    "fs_list_workspace_dir_page",
     "fs_stat_workspace_file",
     "fs_create_workspace_dir",
     "fs_delete_workspace_entry",
@@ -1665,6 +1666,26 @@ pub(super) async fn dispatch(
             let include_ignored: Option<bool> = optional(&args, "includeIgnored")?;
             tokio::task::spawn_blocking(move || {
                 cognia_files::files::fs_list_workspace_dir(root, rel_path, include_ignored)
+            })
+            .await
+            .map_err(|e| RpcError::internal(e.to_string()))?
+            .map_err(RpcError::internal)
+            .and_then(to_json)
+        }
+        "fs_list_workspace_dir_page" => {
+            let root = authorize_workspace_root(host, required(&args, "root")?)?;
+            let rel_path: Option<String> = optional(&args, "relPath")?;
+            let include_ignored: Option<bool> = optional(&args, "includeIgnored")?;
+            let page_size: Option<usize> = optional(&args, "pageSize")?;
+            let page_token: Option<String> = optional(&args, "pageToken")?;
+            tokio::task::spawn_blocking(move || {
+                cognia_files::files::fs_list_workspace_dir_page(
+                    root,
+                    rel_path,
+                    include_ignored,
+                    page_size,
+                    page_token,
+                )
             })
             .await
             .map_err(|e| RpcError::internal(e.to_string()))?

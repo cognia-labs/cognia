@@ -1093,6 +1093,7 @@ const KNOWN_COMMANDS: &[&str] = &[
     // entry point that tells a client which roots those paths may sit under.
     "fs_workspace_roots",
     "fs_list_workspace_dir",
+    "fs_list_workspace_dir_page",
     "fs_stat_workspace_file",
     "fs_create_workspace_dir",
     "fs_delete_workspace_entry",
@@ -1772,6 +1773,7 @@ const READ_ONLY_COMMANDS: &[&str] = &[
     // and the roots report is a pure read of the Host's own confinement.
     "fs_workspace_roots",
     "fs_list_workspace_dir",
+    "fs_list_workspace_dir_page",
     "fs_stat_workspace_file",
     // Terminal session listings.
     "terminal_list_all",

@@ -187,6 +187,7 @@ export interface FilesRemoteClient {
     opts: {
       folderId?: string
       projectId?: string
+      signal?: AbortSignal
       onProgress?: (p: FilesRemoteUploadProgress) => void
     }
   ): Promise<string>
@@ -456,9 +457,17 @@ export function createFilesRemoteClient(
       await write(FILES_REMOTE_COMMANDS.collectionDelete, { collectionId })
     },
     async upload(file, opts) {
+      const throwIfAborted = () => {
+        if (opts.signal?.aborted) {
+          throw new DOMException("Upload cancelled", "AbortError")
+        }
+      }
+      throwIfAborted()
       if (file.size > FILES_REMOTE_MAX_BYTES) throw new FilesRemoteError("files_remote_too_large")
       const bytes = new Uint8Array(await file.arrayBuffer())
+      throwIfAborted()
       const hash = await sha256Bytes(bytes)
+      throwIfAborted()
       const total = bytes.byteLength
       const init = await write<FilesRemoteUploadInit>(FILES_REMOTE_COMMANDS.uploadInit, {
         name: file.name || "file",
@@ -467,10 +476,12 @@ export function createFilesRemoteClient(
         hash,
       })
       try {
+        throwIfAborted()
         const chunkSize = init.chunkSize > 0 ? init.chunkSize : 32 * 1024
         let offset = init.complete ? total : Math.min(Math.max(init.resumeOffset, 0), total)
         opts.onProgress?.({ uploadedBytes: offset, totalBytes: total })
         while (offset < total) {
+          throwIfAborted()
           const end = Math.min(offset + chunkSize, total)
           const chunk = await write<FilesRemoteUploadChunk>(FILES_REMOTE_COMMANDS.uploadChunk, {
             uploadId: init.uploadId,
@@ -482,6 +493,7 @@ export function createFilesRemoteClient(
           offset = Math.min(Math.max(confirmed, end), total)
           opts.onProgress?.({ uploadedBytes: offset, totalBytes: total })
         }
+        throwIfAborted()
         const committed = await write<FilesRemoteUploadCommit>(
           FILES_REMOTE_COMMANDS.uploadCommit,
           {
@@ -493,10 +505,18 @@ export function createFilesRemoteClient(
         )
         return committed.key
       } catch (error) {
-        // Free the staging slot; the collector would take it anyway.
-        await write(FILES_REMOTE_COMMANDS.uploadAbort, { uploadId: init.uploadId }).catch(
-          () => undefined
-        )
+        // Preserve staged chunks on transient transport/busy failures so Retry
+        // resumes from `init.resumeOffset` instead of byte 0 (G03); abort on
+        // explicit user cancellation or deterministic host step refusals.
+        const deterministicRefusal =
+          error instanceof FilesRemoteError &&
+          error.code !== "files_remote_unreachable" &&
+          error.code !== "files_remote_busy"
+        if (opts.signal?.aborted || deterministicRefusal) {
+          await write(FILES_REMOTE_COMMANDS.uploadAbort, { uploadId: init.uploadId }).catch(
+            () => undefined
+          )
+        }
         throw error
       }
     },

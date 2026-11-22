@@ -52,6 +52,7 @@ import { FilesBreadcrumb, useFilesPlaceTitle } from "./files-breadcrumb"
 import { FilesBulkBar } from "./files-bulk-bar"
 import { FilesCard } from "./files-card"
 import { FilesDialogs } from "./files-dialogs"
+import { FilesTransferTray } from "./files-transfer-tray"
 import { FilesDndProvider } from "./files-dnd"
 import { FilesDropZone } from "./files-drop-zone"
 import { FilesEmpty } from "./files-empty"
@@ -415,6 +416,7 @@ function FilesLibraryBody() {
         actions={actions}
         onDeleted={selection.clear}
       />
+      <FilesTransferTray />
     </FilesDndProvider>
   )
 }

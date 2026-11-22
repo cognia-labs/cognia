@@ -1870,4 +1870,35 @@ describe("row context menu and clipboard", () => {
     )
     await waitFor(() => expect(deps.deleteEntry).toHaveBeenCalledWith("/repo", "readme.md", false))
   })
+
+  it("renders bounded directory pages with a Load more row and appends subsequent pages (G09)", async () => {
+    const deps = makeDeps()
+    deps.listDirPage = jest
+      .fn()
+      .mockResolvedValueOnce({
+        items: [entry("f1.ts", false), entry("f2.ts", false)],
+        total: 3,
+        truncated: true,
+        nextPageToken: "o2",
+      })
+      .mockResolvedValueOnce({
+        items: [entry("f3.ts", false)],
+        total: 3,
+        truncated: false,
+      })
+
+    render(
+      <ProjectFileTree rootPath="/repo" activePath={null} onOpenFile={jest.fn()} deps={deps} />
+    )
+    expect(await screen.findByTestId("tree-row-f1.ts")).toBeInTheDocument()
+    expect(screen.getByTestId("file-tree-load-more-root")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("file-tree-load-more-btn-root"))
+    expect(await screen.findByTestId("tree-row-f3.ts")).toBeInTheDocument()
+    expect(screen.queryByTestId("file-tree-load-more-root")).toBeNull()
+    expect(deps.listDirPage).toHaveBeenNthCalledWith(2, "/repo", {
+      relPath: undefined,
+      pageToken: "o2",
+    })
+  })
 })

@@ -21298,6 +21298,25 @@
       "uploaded": "已上传 {count} 个文件。",
       "uploading": "正在上传 {count} 个文件…"
     },
+    "transfers": {
+      "aria": "文件传输任务",
+      "cancelItem": "取消 {name}",
+      "clearFinished": "清除已完成",
+      "collapse": "收起传输面板",
+      "dismissItem": "移除 {name}",
+      "expand": "展开传输面板",
+      "retryItem": "重试 {name}",
+      "status": {
+        "cancelled": "已取消",
+        "completed": "已完成",
+        "failed": "失败",
+        "queued": "排队中",
+        "running": "进行中"
+      },
+      "summaryActive": "{count} 个传输任务进行中",
+      "summaryDone": "已完成 {count} 个传输任务",
+      "summaryFailed": "{count} 个传输任务失败"
+    },
     "trash": {
       "empty": "清空回收站"
     },
@@ -38749,6 +38768,7 @@
     "deletePermanently": "永久删除",
     "deletedOnDisk": "已在磁盘删除",
     "deletedTab": "{name} —— 已在磁盘删除",
+    "dirTruncated": "已显示 {shown} / {total} 项",
     "editorTab": "编辑器",
     "emptyBrowseFiles": "浏览文件",
     "emptyEditor": "从文件树打开一个文件开始编辑。",
@@ -38761,6 +38781,7 @@
       "tooLarge": "文件过大（{size}），无法在编辑器中显示。"
     },
     "filesTab": "文件",
+    "loadMore": "加载更多",
     "loadingFile": "正在加载 {name}…",
     "mobileNav": {
       "aria": "编辑器导航"

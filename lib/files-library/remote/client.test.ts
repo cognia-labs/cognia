@@ -440,4 +440,36 @@ describe("readWorkspaceFile (ADR-0223 §8)", () => {
       "files_library_access_get",
     ])
   })
+
+  it("preserves staged remote uploads on transient failure for resume retry, and calls uploadAbort only on explicit cancel (G03)", async () => {
+    const bytes = new Uint8Array([1, 2, 3, 4])
+    const transient = transport({
+      files_library_upload_init: [
+        { ok: true, uploadId: "up_1", chunkSize: 2, resumeOffset: 0, complete: false },
+      ],
+      files_library_upload_chunk: () => {
+        throw new Error("socket reset")
+      },
+    })
+    const client1 = createFilesRemoteClient({ call: transient.call as never })
+    await expect(client1.upload(fileOf(bytes, "doc.bin"), {})).rejects.toThrow("socket reset")
+    expect(transient.calls.map((c) => c.name)).not.toContain("files_library_upload_abort")
+
+    const controller = new AbortController()
+    const aborted = transport({
+      files_library_upload_init: [
+        { ok: true, uploadId: "up_2", chunkSize: 2, resumeOffset: 0, complete: false },
+      ],
+      files_library_upload_chunk: () => {
+        controller.abort()
+        return { ok: true, receivedBytes: 2, complete: false }
+      },
+      files_library_upload_abort: [{ ok: true }],
+    })
+    const client2 = createFilesRemoteClient({ call: aborted.call as never })
+    await expect(
+      client2.upload(fileOf(bytes, "doc.bin"), { signal: controller.signal })
+    ).rejects.toMatchObject({ name: "AbortError" })
+    expect(aborted.calls.map((c) => c.name)).toContain("files_library_upload_abort")
+  })
 })

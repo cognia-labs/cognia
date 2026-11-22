@@ -646,3 +646,43 @@ it("returns sanitized snapshot shares and live FileSpace grants over files_libra
     code: "files_remote_not_found",
   })
 })
+
+it("reuses one sorted snapshot across 10,000-item multi-page sweeps and invalidates on writes (G09)", async () => {
+  const tenThousand = Array.from({ length: 10_000 }, (_, i) =>
+    entry(`artifact:item_${String(i).padStart(5, "0")}`, { updatedAt: i + 1 })
+  )
+  let loadCalls = 0
+  const d = deps({
+    loadLibrary: async () => {
+      loadCalls += 1
+      return { entries: tenThousand, imagesTruncated: false }
+    },
+  })
+
+  const collected: string[] = []
+  let pageToken: string | undefined
+  let expectedRevision: string | undefined
+  do {
+    const page = (await call(
+      "files_library_list",
+      { pageSize: 500, ...(pageToken ? { pageToken } : {}) },
+      d
+    )) as FilesRemoteListPage & { ok: true }
+    expect(page.ok).toBe(true)
+    expectedRevision ??= page.revision
+    expect(page.revision).toBe(expectedRevision)
+    collected.push(...page.items.map((item) => item.key))
+    pageToken = page.nextPageToken
+  } while (pageToken)
+
+  expect(collected).toHaveLength(10_000)
+  expect(loadCalls).toBe(1)
+
+  // Any write command invalidates the snapshot cache so the next list reloads fresh state.
+  await call("files_library_favorite", { keys: ["artifact:item_00000"], favorite: true }, d)
+  const callsAfterWrite = loadCalls
+  await call("files_library_list", { pageSize: 500 }, d)
+  expect(loadCalls).toBe(callsAfterWrite + 1)
+  await call("files_library_list", { pageSize: 500, pageToken: "o500" }, d)
+  expect(loadCalls).toBe(callsAfterWrite + 1)
+})

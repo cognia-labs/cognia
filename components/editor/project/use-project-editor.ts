@@ -9,6 +9,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   listWorkspaceDir,
+  listWorkspaceDirPage,
   readWorkspaceFile,
   readWorkspaceFileVersioned,
   isWorkspaceFileConflict,
@@ -286,6 +287,7 @@ export type ProjectEditorConfirmVerdict = "confirm" | "save" | "cancel"
 
 export interface ProjectEditorDeps {
   listDir: typeof listWorkspaceDir
+  listDirPage?: typeof listWorkspaceDirPage
   readFile: typeof readWorkspaceFile
   readFileVersioned: typeof readWorkspaceFileVersioned
   readFileBase64: typeof readWorkspaceFileBase64
@@ -305,6 +307,7 @@ export interface ProjectEditorDeps {
 
 const defaultDeps: ProjectEditorDeps = {
   listDir: listWorkspaceDir,
+  listDirPage: listWorkspaceDirPage,
   readFile: readWorkspaceFile,
   readFileVersioned: readWorkspaceFileVersioned,
   readFileBase64: readWorkspaceFileBase64,

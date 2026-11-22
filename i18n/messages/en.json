@@ -21298,6 +21298,25 @@
       "uploaded": "Uploaded {count, plural, one {# file} other {# files}}.",
       "uploading": "Uploading {count, plural, one {# file} other {# files}}…"
     },
+    "transfers": {
+      "aria": "File transfers",
+      "cancelItem": "Cancel {name}",
+      "clearFinished": "Clear finished",
+      "collapse": "Collapse transfers",
+      "dismissItem": "Dismiss {name}",
+      "expand": "Expand transfers",
+      "retryItem": "Retry {name}",
+      "status": {
+        "cancelled": "Cancelled",
+        "completed": "Done",
+        "failed": "Failed",
+        "queued": "Queued",
+        "running": "In progress"
+      },
+      "summaryActive": "{count, plural, one {# transfer in progress} other {# transfers in progress}}",
+      "summaryDone": "{count, plural, one {# transfer complete} other {# transfers complete}}",
+      "summaryFailed": "{count, plural, one {# transfer failed} other {# transfers failed}}"
+    },
     "trash": {
       "empty": "Empty Trash"
     },
@@ -38749,6 +38768,7 @@
     "deletePermanently": "Delete Permanently",
     "deletedOnDisk": "Deleted on disk",
     "deletedTab": "{name} — deleted on disk",
+    "dirTruncated": "Showing {shown} of {total} items",
     "editorTab": "Editor",
     "emptyBrowseFiles": "Browse files",
     "emptyEditor": "Open a file from the tree to start editing.",
@@ -38761,6 +38781,7 @@
       "tooLarge": "The file is too large ({size}) to display in the editor."
     },
     "filesTab": "Files",
+    "loadMore": "Load more",
     "loadingFile": "Loading {name}…",
     "mobileNav": {
       "aria": "Editor navigation"

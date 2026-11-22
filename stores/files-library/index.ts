@@ -8,3 +8,10 @@ export {
   type FilesViewFilters,
   type FilesViewMode,
 } from "./files-library-store"
+export {
+  isAbortError,
+  useFilesTransferStore,
+  type FilesTransferKind,
+  type FilesTransferStatus,
+  type FilesTransferTask,
+} from "./files-transfer-store"

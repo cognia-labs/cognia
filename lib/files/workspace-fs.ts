@@ -97,6 +97,49 @@ export async function listWorkspaceDir(
   return raw.map(fromRawWorkspaceEntry)
 }
 
+export const WORKSPACE_DIR_PAGE_SIZE = 5_000
+
+export interface WorkspaceDirPageResult {
+  items: WorkspaceEntry[]
+  total: number
+  truncated: boolean
+  nextPageToken?: string
+}
+
+/**
+ * Bounded/paginated sibling of {@link listWorkspaceDir} (default/max `5_000`
+ * entries per page), used by `ProjectFileTree` so large directories do not
+ * serialize or mount unbounded DOM rows at once (G09).
+ */
+export async function listWorkspaceDirPage(
+  root: string,
+  options: {
+    relPath?: string
+    includeIgnored?: boolean
+    pageSize?: number
+    pageToken?: string
+  } = {}
+): Promise<WorkspaceDirPageResult> {
+  const raw = await transport.call<{
+    items: RawWorkspaceEntry[]
+    total: number
+    truncated: boolean
+    nextPageToken?: string
+  }>("fs_list_workspace_dir_page", {
+    root,
+    relPath: options.relPath,
+    includeIgnored: options.includeIgnored,
+    pageSize: options.pageSize,
+    pageToken: options.pageToken,
+  })
+  return {
+    items: raw.items.map(fromRawWorkspaceEntry),
+    total: raw.total,
+    truncated: Boolean(raw.truncated),
+    ...(raw.nextPageToken ? { nextPageToken: raw.nextPageToken } : {}),
+  }
+}
+
 /**
  * Recursively enumerate a workspace, honouring `.gitignore`.
  *

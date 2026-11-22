@@ -494,9 +494,15 @@ describe("download / exportZip", () => {
   it("shows progress, downloads the zip and dismisses the progress toast", async () => {
     await hook().exportZip([entry(), canvas()], folders)
     expect(toast.loading).toHaveBeenCalledWith("Preparing 2 items…")
-    expect(buildFilesZip).toHaveBeenCalledWith([expect.anything(), expect.anything()], folders, {
-      payloadFor: expect.any(Function),
-    })
+    expect(buildFilesZip).toHaveBeenCalledWith(
+      [expect.anything(), expect.anything()],
+      folders,
+      expect.objectContaining({
+        payloadFor: expect.any(Function),
+        signal: expect.any(AbortSignal),
+        onProgress: expect.any(Function),
+      })
+    )
     expect(downloadBlob).toHaveBeenCalledWith(expect.any(Blob), "Files.zip")
     expect(success).toHaveBeenLastCalledWith("Downloaded 2 items as a zip.", undefined)
     expect(toast.dismiss).toHaveBeenCalledWith("t1")
@@ -845,7 +851,9 @@ describe("on a paired device's library (ADR-0223 §9)", () => {
   it("zips through the library's own payloads", async () => {
     const ops = remoteOps()
     await remoteHook(ops).exportZip([entry()], [])
-    expect((buildFilesZip as jest.Mock).mock.calls[0][2]).toEqual({ payloadFor: ops.payloadFor })
+    expect((buildFilesZip as jest.Mock).mock.calls[0][2]).toEqual(
+      expect.objectContaining({ payloadFor: ops.payloadFor })
+    )
   })
 
   it("says a file was bound on the host", async () => {

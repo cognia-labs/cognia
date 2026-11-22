@@ -538,6 +538,7 @@ commands.allow = [
   "fs_create_workspace_dir",
   "fs_delete_workspace_entry",
   "fs_list_workspace_dir",
+  "fs_list_workspace_dir_page",
   "fs_read_workspace_file",
   "fs_read_workspace_file_base64",
   "fs_read_workspace_file_chunk",

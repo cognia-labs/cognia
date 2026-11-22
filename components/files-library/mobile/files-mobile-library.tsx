@@ -47,6 +47,7 @@ import { useFilesLibraryStore } from "@/stores/files-library"
 
 import { FilesBreadcrumb, useFilesPlaceTitle } from "../files-breadcrumb"
 import { FilesDialogs } from "../files-dialogs"
+import { FilesTransferTray } from "../files-transfer-tray"
 import { FilesEmpty } from "../files-empty"
 import { FilesFilterPopover } from "../files-filter-popover"
 import { FilesLensTabs } from "../files-lens-tabs"
@@ -379,6 +380,7 @@ export function FilesMobileLibrary() {
         actions={actions}
         onDeleted={stopSelecting}
       />
+      <FilesTransferTray touch />
     </div>
   )
 }

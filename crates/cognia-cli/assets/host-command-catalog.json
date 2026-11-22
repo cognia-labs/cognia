@@ -38414,6 +38414,106 @@
       "outputTyped": true
     },
     {
+      "name": "fs_list_workspace_dir_page",
+      "category": "development",
+      "resource": "workspace-files",
+      "target": "execution",
+      "operation": "read",
+      "capability": "host.observe",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "fs_list_workspace_dir_page (host.observe)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "root"
+        ],
+        "properties": {
+          "root": {
+            "type": "string"
+          },
+          "relPath": {
+            "type": "string"
+          },
+          "includeIgnored": {
+            "type": "boolean"
+          },
+          "pageSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          },
+          "pageToken": {
+            "type": "string",
+            "maxLength": 32
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "type": "object",
+        "x-cognia-wire-source": "crates/cognia-files/src/files.rs WorkspaceDirPage",
+        "required": [
+          "items",
+          "total",
+          "truncated"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "x-cognia-wire-source": "lib/files/types.ts RawWorkspaceEntry",
+              "description": "snake_case on the wire — the Rust side does not rename these; the client maps them via fromRawWorkspaceEntry.",
+              "required": [
+                "rel_path",
+                "absolute_path",
+                "is_dir",
+                "size"
+              ],
+              "properties": {
+                "rel_path": {
+                  "type": "string"
+                },
+                "absolute_path": {
+                  "type": "string"
+                },
+                "is_dir": {
+                  "type": "boolean"
+                },
+                "size": {
+                  "type": "integer"
+                },
+                "mtime_ms": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "additionalProperties": false
+            }
+          },
+          "total": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "nextPageToken": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputTyped": true
+    },
+    {
       "name": "fs_read_workspace_file",
       "category": "development",
       "resource": "workspace-files",
@@ -115442,5 +115542,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "3d0cb284925b2d07bd0fe8f82daa61762b546b630cd30d91b4e4c36259cf95e3"
+  "catalogHash": "c04b550878d66872e73290db10ff6e88c5dfc0a187b8ab4f23e170839a6e9f98"
 }

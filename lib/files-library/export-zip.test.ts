@@ -202,4 +202,28 @@ describe("buildFilesZip", () => {
     expect(payloadMock).toHaveBeenCalledWith(e)
     expect(await unzip(result.blob)).toEqual({ "hi.txt": "hi" })
   })
+
+  it("reports byte progress and aborts mid-export when signal is cancelled (G03)", async () => {
+    const progress: Array<{ loadedBytes: number; totalBytes: number }> = []
+    const controller = new AbortController()
+    let calls = 0
+    await expect(
+      buildFilesZip([entry({ key: "a", byteSize: 2 }), entry({ key: "b", byteSize: 3 })], [], {
+        signal: controller.signal,
+        onProgress: (p) => progress.push(p),
+        payloadFor: async () => {
+          calls += 1
+          if (calls === 1) {
+            return { blob: new Blob(["ab"]), filename: "a.txt" }
+          }
+          controller.abort()
+          return { blob: new Blob(["cde"]), filename: "b.txt" }
+        },
+      })
+    ).rejects.toMatchObject({ name: "AbortError" })
+    expect(progress).toEqual([
+      { loadedBytes: 0, totalBytes: 5 },
+      { loadedBytes: 2, totalBytes: 5 },
+    ])
+  })
 })

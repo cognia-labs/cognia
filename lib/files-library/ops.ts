@@ -139,7 +139,15 @@ export interface FilesOps {
   touch(entry: FilesEntry): Promise<void>
   rename(entry: FilesEntry, name: string): Promise<void>
   duplicate(entry: FilesEntry, options: FilesDuplicateOptions): Promise<FilesDuplicateOutcome>
-  upload(file: File, options: { projectId?: string; folderId?: string }): Promise<void>
+  upload(
+    file: File,
+    options: {
+      projectId?: string
+      folderId?: string
+      signal?: AbortSignal
+      onProgress?: (progress: { uploadedBytes: number; totalBytes: number }) => void
+    }
+  ): Promise<void>
   /** The bytes "Download", the zip and the preview hand over; null when the source is gone. */
   payloadFor(entry: FilesEntry): Promise<FilesDownloadPayload | null>
   /** An artifact to preview, or null when it is gone. */
@@ -202,7 +210,17 @@ export function createLocalFilesOps(): FilesOps {
         ? { kind: "canvas", key: libraryItemKey("canvas", result.id) }
         : { kind: "upload", key: result.key }
     },
-    upload: (file, options) => uploadFileToLibrary(file, options).then(() => undefined),
+    upload: async (file, options) => {
+      if (options.signal?.aborted) {
+        throw new DOMException("Upload cancelled", "AbortError")
+      }
+      options.onProgress?.({ uploadedBytes: 0, totalBytes: file.size })
+      await uploadFileToLibrary(file, {
+        ...(options.projectId ? { projectId: options.projectId } : {}),
+        ...(options.folderId ? { folderId: options.folderId } : {}),
+      })
+      options.onProgress?.({ uploadedBytes: file.size, totalBytes: file.size })
+    },
     payloadFor: downloadPayloadFor,
     artifactFor: async (entry) =>
       entry.kind === "artifact"

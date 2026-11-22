@@ -120,6 +120,8 @@ export function createRemoteFilesOps({
         client.upload(file, {
           ...(options.folderId ? { folderId: options.folderId } : {}),
           ...(options.projectId ? { projectId: options.projectId } : {}),
+          ...(options.signal ? { signal: options.signal } : {}),
+          ...(options.onProgress ? { onProgress: options.onProgress } : {}),
         })
       )
     },

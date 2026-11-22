@@ -75,6 +75,14 @@ export function zipFolderPath(
 
 export interface FilesZipDependencies {
   payloadFor: (entry: FilesEntry) => Promise<FilesDownloadPayload | null>
+  signal?: AbortSignal
+  onProgress?: (progress: { loadedBytes: number; totalBytes: number }) => void
+}
+
+function throwIfZipAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new DOMException("Export cancelled", "AbortError")
+  }
 }
 
 export async function buildFilesZip(
@@ -82,6 +90,7 @@ export async function buildFilesZip(
   folders: readonly LibraryFolder[],
   dependencies: Partial<FilesZipDependencies> = {}
 ): Promise<FilesZipResult> {
+  throwIfZipAborted(dependencies.signal)
   if (entries.length === 0) throw new FilesExportError("files_export_empty")
   const known = entries.reduce((sum, entry) => sum + (entry.byteSize ?? 0), 0)
   if (known > FILES_ZIP_MAX_BYTES) throw new FilesExportError("files_export_too_large")
@@ -91,8 +100,11 @@ export async function buildFilesZip(
   const taken = new Set<string>()
   const missing: FilesEntry[] = []
   let total = 0
+  dependencies.onProgress?.({ loadedBytes: 0, totalBytes: known })
   for (const entry of entries) {
+    throwIfZipAborted(dependencies.signal)
     const payload = await payloadFor(entry)
+    throwIfZipAborted(dependencies.signal)
     if (!payload) {
       missing.push(entry)
       continue
@@ -107,12 +119,18 @@ export async function buildFilesZip(
     taken.add(path.toLowerCase())
     const bytes = new Uint8Array(await payload.blob.arrayBuffer())
     files[path] = [bytes, { level: isCompressed(payload.blob.type) ? 0 : 6 }]
+    dependencies.onProgress?.({
+      loadedBytes: total,
+      totalBytes: Math.max(known, total),
+    })
   }
   const written = entries.length - missing.length
   if (written === 0) throw new FilesExportError("files_export_empty")
+  throwIfZipAborted(dependencies.signal)
   const archive = await new Promise<Uint8Array>((resolve, reject) => {
     zip(files, (error, data) => (error ? reject(error) : resolve(data)))
   })
+  throwIfZipAborted(dependencies.signal)
   return {
     blob: new Blob([archive as BlobPart], { type: "application/zip" }),
     missing,

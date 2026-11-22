@@ -9822,6 +9822,33 @@
       },
       "additionalProperties": false
     },
+    "fs_list_workspace_dir_page": {
+      "type": "object",
+      "required": [
+        "root"
+      ],
+      "properties": {
+        "root": {
+          "type": "string"
+        },
+        "relPath": {
+          "type": "string"
+        },
+        "includeIgnored": {
+          "type": "boolean"
+        },
+        "pageSize": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5000
+        },
+        "pageToken": {
+          "type": "string",
+          "maxLength": 32
+        }
+      },
+      "additionalProperties": false
+    },
     "fs_read_workspace_file": {
       "type": "object",
       "required": [

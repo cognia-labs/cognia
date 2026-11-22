@@ -1762,6 +1762,62 @@ pub fn fs_list_workspace_dir(
     Ok(out)
 }
 
+pub const WORKSPACE_DIR_PAGE_DEFAULT: usize = 5_000;
+pub const WORKSPACE_DIR_PAGE_MAX: usize = 5_000;
+
+/// Bounded single-page directory listing (`fs_list_workspace_dir_page`), keeping
+/// `fs_list_workspace_dir` untouched for legacy callers while protecting the
+/// Explorer tree from rendering > 5,000 immediate children at once.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkspaceDirPage {
+    pub items: Vec<WorkspaceEntry>,
+    pub total: usize,
+    pub truncated: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_page_token: Option<String>,
+}
+
+fn parse_workspace_dir_page_token(raw: Option<&str>) -> Result<usize, String> {
+    let Some(token) = raw.map(str::trim).filter(|t| !t.is_empty()) else {
+        return Ok(0);
+    };
+    let digits = token.strip_prefix('o').unwrap_or(token);
+    digits
+        .parse::<usize>()
+        .map_err(|_| format!("invalid workspace dir pageToken: {}", token))
+}
+
+#[cfg_attr(feature = "tauri-host", tauri::command)]
+pub fn fs_list_workspace_dir_page(
+    root: String,
+    rel_path: Option<String>,
+    include_ignored: Option<bool>,
+    page_size: Option<usize>,
+    page_token: Option<String>,
+) -> Result<WorkspaceDirPage, String> {
+    let offset = parse_workspace_dir_page_token(page_token.as_deref())?;
+    let limit = page_size
+        .unwrap_or(WORKSPACE_DIR_PAGE_DEFAULT)
+        .clamp(1, WORKSPACE_DIR_PAGE_MAX);
+    let all = fs_list_workspace_dir(root, rel_path, include_ignored)?;
+    let total = all.len();
+    let start = offset.min(total);
+    let end = start.saturating_add(limit).min(total);
+    let truncated = end < total;
+    let next_page_token = if truncated {
+        Some(format!("o{}", end))
+    } else {
+        None
+    };
+    Ok(WorkspaceDirPage {
+        items: all.into_iter().skip(start).take(end - start).collect(),
+        total,
+        truncated,
+        next_page_token,
+    })
+}
+
 /// Result of a recursive workspace walk.
 ///
 /// Carries what was *withheld* alongside what was found: a caller that cannot
@@ -5784,5 +5840,58 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&other_root);
         let _ = std::fs::remove_dir_all(&trash);
+    }
+
+    #[test]
+    fn list_workspace_dir_page_bounds_large_directories_and_pages_deterministically() {
+        let root = make_sandbox("list-dir-page");
+        for idx in 0..7 {
+            std::fs::write(root.join(format!("f{:02}.txt", idx)), "x").unwrap();
+        }
+        let root_str = root.to_string_lossy().to_string();
+
+        let p1 = fs_list_workspace_dir_page(root_str.clone(), None, None, Some(3), None).unwrap();
+        assert_eq!(p1.total, 7);
+        assert!(p1.truncated);
+        assert_eq!(p1.next_page_token.as_deref(), Some("o3"));
+        assert_eq!(
+            p1.items.iter().map(|e| e.rel_path.as_str()).collect::<Vec<_>>(),
+            vec!["f00.txt", "f01.txt", "f02.txt"]
+        );
+
+        let p2 = fs_list_workspace_dir_page(
+            root_str.clone(),
+            None,
+            None,
+            Some(3),
+            p1.next_page_token,
+        )
+        .unwrap();
+        assert_eq!(p2.next_page_token.as_deref(), Some("o6"));
+        assert_eq!(
+            p2.items.iter().map(|e| e.rel_path.as_str()).collect::<Vec<_>>(),
+            vec!["f03.txt", "f04.txt", "f05.txt"]
+        );
+
+        let p3 = fs_list_workspace_dir_page(
+            root_str.clone(),
+            None,
+            None,
+            Some(3),
+            p2.next_page_token,
+        )
+        .unwrap();
+        assert!(!p3.truncated);
+        assert_eq!(p3.next_page_token, None);
+        assert_eq!(
+            p3.items.iter().map(|e| e.rel_path.as_str()).collect::<Vec<_>>(),
+            vec!["f06.txt"]
+        );
+
+        assert!(
+            fs_list_workspace_dir_page(root_str, None, None, Some(3), Some("bad-token".into()))
+                .is_err()
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

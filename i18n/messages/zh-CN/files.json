@@ -547,6 +547,25 @@
     "uploaded": "已上传 {count} 个文件。",
     "uploading": "正在上传 {count} 个文件…"
   },
+  "transfers": {
+    "aria": "文件传输任务",
+    "cancelItem": "取消 {name}",
+    "clearFinished": "清除已完成",
+    "collapse": "收起传输面板",
+    "dismissItem": "移除 {name}",
+    "expand": "展开传输面板",
+    "retryItem": "重试 {name}",
+    "status": {
+      "cancelled": "已取消",
+      "completed": "已完成",
+      "failed": "失败",
+      "queued": "排队中",
+      "running": "进行中"
+    },
+    "summaryActive": "{count} 个传输任务进行中",
+    "summaryDone": "已完成 {count} 个传输任务",
+    "summaryFailed": "{count} 个传输任务失败"
+  },
   "trash": {
     "empty": "清空回收站"
   },

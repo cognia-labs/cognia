@@ -44,6 +44,8 @@
   "deletePermanently": "Delete Permanently",
   "deletedOnDisk": "Deleted on disk",
   "deletedTab": "{name} — deleted on disk",
+  "dirTruncated": "Showing {shown} of {total} items",
+  "loadMore": "Load more",
   "moveToTrash": "Move to Trash",
   "trashConfirm": "Move \"{name}\" to Cognia's workspace trash? You can undo this or restore it within 30 days.",
   "trashRestoredToast": "Restored \"{name}\"",

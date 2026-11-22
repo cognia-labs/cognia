@@ -74,7 +74,7 @@ import { purgeTrashedItems } from "../trash"
 import { entrySource, type FilesEntry } from "../types"
 import { uploadFileToLibrary } from "../upload"
 import { bindEntryToSession } from "../use-in-chat"
-import { FILES_REMOTE_COMMANDS, isFilesRemoteCommand } from "./commands"
+import { FILES_REMOTE_COMMANDS, FILES_REMOTE_READ_COMMANDS, isFilesRemoteCommand } from "./commands"
 import { createFilesIdempotencyLedger, type FilesIdempotencyLedger } from "./idempotency"
 import {
   bytesToBase64,
@@ -166,14 +166,44 @@ function readHostDocumentText(entry: FilesEntry): string | null {
 
 let sharedLedger: FilesIdempotencyLedger | null = null
 
+/**
+ * Short-TTL snapshot cache for `files_library_list` (G09): multi-page sweeps of
+ * a 10,000-item library reuse one sorted snapshot + revision in `O(pageSize)`
+ * instead of re-reading Dexie, re-sorting and re-hashing on every page. Any
+ * `files_library_*` write bumps `listSnapshotGeneration` to invalidate immediately.
+ */
+const HOST_LIST_SNAPSHOT_TTL_MS = 10_000
+
+interface HostListSnapshot {
+  ordered: FilesEntry[]
+  imagesTruncated: boolean
+  revision: string
+  generation: number
+  createdAt: number
+  artifactsRef: unknown
+  canvasesRef: unknown
+}
+
+let listSnapshotGeneration = 0
+let listSnapshots = new WeakMap<
+  (imageLimit: number) => Promise<FilesHostLibrary>,
+  Map<number, HostListSnapshot>
+>()
+
+function invalidateHostListSnapshots(): void {
+  listSnapshotGeneration += 1
+}
+
 function hostLedger(): FilesIdempotencyLedger {
   if (!sharedLedger) sharedLedger = createFilesIdempotencyLedger()
   return sharedLedger
 }
 
-/** Test helper: drop the process-wide ledger. */
+/** Test helper: drop the process-wide ledger and list snapshot cache. */
 export function __resetFilesHostLedgerForTesting(): void {
   sharedLedger = null
+  listSnapshotGeneration += 1
+  listSnapshots = new WeakMap()
 }
 
 interface Resolved {
@@ -232,17 +262,49 @@ async function list(
   payload: Record<string, unknown>
 ): Promise<FilesRemoteResult<FilesRemoteListPage>> {
   const request = parseListRequest(payload, FILES_IMAGE_PAGE_SIZE)
-  const library = await d.loadLibrary(request.imageLimit)
-  // Key order is stable across calls; the device sorts for display itself.
-  const ordered = [...library.entries].sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
-  const page = ordered.slice(request.offset, request.offset + request.pageSize)
+  const now = Date.now()
+  const storeState = useArtifactStore.getState()
+  let byLimit = listSnapshots.get(d.loadLibrary)
+  if (!byLimit) {
+    byLimit = new Map()
+    listSnapshots.set(d.loadLibrary, byLimit)
+  }
+  let snapshot = byLimit.get(request.imageLimit)
+  const isFresh =
+    snapshot !== undefined &&
+    snapshot.generation === listSnapshotGeneration &&
+    now - snapshot.createdAt <= HOST_LIST_SNAPSHOT_TTL_MS &&
+    (d.loadLibrary !== loadHostLibrary ||
+      (snapshot.artifactsRef === storeState.artifacts &&
+        snapshot.canvasesRef === storeState.canvasDocuments))
+
+  if (!isFresh || !snapshot) {
+    const library = await d.loadLibrary(request.imageLimit)
+    // Key order is stable across calls; the device sorts for display itself.
+    const ordered = [...library.entries].sort((a, b) =>
+      a.key < b.key ? -1 : a.key > b.key ? 1 : 0
+    )
+    const revision = await revisionOf(ordered)
+    snapshot = {
+      ordered,
+      imagesTruncated: library.imagesTruncated,
+      revision,
+      generation: listSnapshotGeneration,
+      createdAt: Date.now(),
+      artifactsRef: storeState.artifacts,
+      canvasesRef: storeState.canvasDocuments,
+    }
+    byLimit.set(request.imageLimit, snapshot)
+  }
+
+  const page = snapshot.ordered.slice(request.offset, request.offset + request.pageSize)
   const next = request.offset + page.length
   return {
     ok: true,
     items: page.map(entryToRemote),
-    imagesTruncated: library.imagesTruncated,
-    revision: await revisionOf(ordered),
-    ...(next < ordered.length ? { nextPageToken: encodePageToken(next) } : {}),
+    imagesTruncated: snapshot.imagesTruncated,
+    revision: snapshot.revision,
+    ...(next < snapshot.ordered.length ? { nextPageToken: encodePageToken(next) } : {}),
   }
 }
 
@@ -739,6 +801,10 @@ export async function dispatchFilesHostCommand(
   }
   const keyed = <T>(run: () => Promise<T>): Promise<T> =>
     d.ledger.run(callerDeviceId, `${command}:${parseIdempotencyKey(payload)}`, run)
+
+  if (!FILES_REMOTE_READ_COMMANDS.includes(command)) {
+    invalidateHostListSnapshots()
+  }
 
   try {
     switch (command) {

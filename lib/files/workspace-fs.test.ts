@@ -6,6 +6,7 @@ import {
   createWorkspaceDir,
   deleteWorkspaceEntry,
   listWorkspaceDir,
+  listWorkspaceDirPage,
   listWorkspaceRoots,
   isWorkspaceFileConflict,
   readWorkspaceFile,
@@ -480,5 +481,49 @@ describe("managed workspace trash wrappers and schemas (G07)", () => {
     expect(validateTrash(receipt)).toBe(true)
     expect(validateTrash({ ...receipt, trashId: "short" })).toBe(false)
     expect(validateRestore(restored)).toBe(true)
+  })
+})
+
+describe("listWorkspaceDirPage (G09)", () => {
+  it("pages bounded workspace directory listings and validates WorkspaceDirPage schema", async () => {
+    const rawPage = {
+      items: [
+        {
+          rel_path: "a.ts",
+          absolute_path: "/repo/a.ts",
+          is_dir: false,
+          size: 10,
+          mtime_ms: 5,
+        },
+      ],
+      total: 5_200,
+      truncated: true,
+      nextPageToken: "o5000",
+    }
+    const callSpy = jest.spyOn(transport, "call").mockResolvedValueOnce(rawPage)
+    const page = await listWorkspaceDirPage("/repo", {
+      relPath: "pkg",
+      pageSize: 5_000,
+      pageToken: "o0",
+    })
+    expect(callSpy).toHaveBeenCalledWith("fs_list_workspace_dir_page", {
+      root: "/repo",
+      relPath: "pkg",
+      includeIgnored: undefined,
+      pageSize: 5_000,
+      pageToken: "o0",
+    })
+    expect(page).toEqual({
+      items: [{ relPath: "a.ts", absolutePath: "/repo/a.ts", isDir: false, size: 10, mtimeMs: 5 }],
+      total: 5_200,
+      truncated: true,
+      nextPageToken: "o5000",
+    })
+
+    const validate = new Ajv({ strict: false }).compile({
+      ...responseSchemas.commands.fs_list_workspace_dir_page,
+      $defs: responseSchemas.$defs,
+    })
+    expect(validate(rawPage)).toBe(true)
   })
 })
