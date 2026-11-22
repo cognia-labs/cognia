@@ -139,6 +139,25 @@ export function createDeviceWrappedSecretStore(): KeyringStore {
   }
 }
 
+const ACCOUNT_DB_PREFIX = "cognia-account-"
+
+function matchesVaultAccount(name: string, vaultAccountId: string | undefined): boolean {
+  if (!vaultAccountId || !name.startsWith(ACCOUNT_DB_PREFIX)) return true
+  const prefix = `${ACCOUNT_DB_PREFIX}${vaultAccountId}`
+  if (name === prefix) return true
+  return (
+    name.startsWith(`${prefix}-encrypted-v1`) ||
+    name.startsWith(`${prefix}-target-`) ||
+    name.startsWith(`${prefix}-fusion`)
+  )
+}
+
+function resolveVaultForSecret(name: string) {
+  const vault = getActiveBrowserVault()
+  if (!vault) return null
+  return matchesVaultAccount(name, vault.localAccountId) ? vault : null
+}
+
 /** Vault while unlocked, device-wrapped otherwise (see the file comment). */
 export function createWebProviderSecretStore(
   device: KeyringStore = createDeviceWrappedSecretStore()
@@ -146,7 +165,7 @@ export function createWebProviderSecretStore(
   const vaultName = (name: string) => `${VAULT_SECRET_PREFIX}${name}`
   return {
     async save(name, value) {
-      const vault = getActiveBrowserVault()
+      const vault = resolveVaultForSecret(name)
       if (!vault) {
         await device.save(name, value)
         return
@@ -155,7 +174,7 @@ export function createWebProviderSecretStore(
       await device.delete(name)
     },
     async load(name) {
-      const vault = getActiveBrowserVault()
+      const vault = resolveVaultForSecret(name)
       if (vault) {
         const persisted = await vault.loadSecret(vaultName(name))
         if (persisted !== null) return persisted
@@ -168,7 +187,7 @@ export function createWebProviderSecretStore(
       return local
     },
     async delete(name) {
-      const vault = getActiveBrowserVault()
+      const vault = resolveVaultForSecret(name)
       if (vault) await vault.deleteSecret(vaultName(name))
       await device.delete(name)
     },

@@ -20,7 +20,7 @@
     "errorThrottled": "Too many attempts. Wait for the cooldown to end.",
     "errorUnknown": "Unlocking failed. Copy the details below if it keeps happening.",
     "errorVaultIncompatible": "This account's vault was written by a newer version of the app.",
-    "errorVaultNotProvisioned": "This account has no vault in this browser. It was created on the desktop app — unlock it there.",
+    "errorVaultNotProvisioned": "This profile's local encryption vault is missing on this device. Restore from a backup before continuing, or reset local data if you want to start fresh.",
     "firstRunForm": "Create local account",
     "firstRunTitle": "Create local account",
     "hidePassword": "Hide password",
@@ -35,7 +35,7 @@
     "recoveryCopied": "Copied",
     "recoveryCopy": "Copy recovery key",
     "recoveryContinue": "Continue",
-    "recoveryDescription": "Save this one-time recovery key before continuing. It can unlock your browser Vault if you forget the account password.",
+    "recoveryDescription": "Save this recovery key before continuing. It can unlock this profile's encrypted local data on this device if you forget the password.",
     "recoveryDownload": "Download .txt",
     "recoveryForm": "Save recovery key",
     "recoveryKeyLabel": "Recovery key",
@@ -175,7 +175,14 @@
     "rememberOnDevicePasswordLabel": "Confirm with this profile’s password",
     "rememberOnDevicePasswordRequired": "Enter the password to turn this on.",
     "rememberOnDeviceConfirm": "Turn on",
-    "sessionSecurityRememberedHelp": "This profile opens without a prompt on this device, so it is never locked when idle and there is nothing to lock. Turn off automatic unlock to use these controls."
+    "sessionSecurityRememberedHelp": "This profile opens without a prompt on this device, so it is never locked when idle and there is nothing to lock. Turn off automatic unlock to use these controls.",
+    "unlockProfileToManageSecurity": "Switch to and unlock this profile to change its password or quick-unlock methods on desktop.",
+    "replaceRecoveryKeyHeading": "Recovery key",
+    "replaceRecoveryKeyHelp": "Generate a new recovery key for this profile's local encrypted data. Any previous recovery key for this profile stops working immediately.",
+    "replaceRecoveryKeyPasswordLabel": "Confirm with current password",
+    "replaceRecoveryKeyPasswordRequired": "Enter your current password to generate a new recovery key.",
+    "replaceRecoveryKeyAction": "Replace recovery key",
+    "replaceRecoveryKeySuccess": "New recovery key generated. Save it before continuing."
   },
   "passwordStrength": {
     "aria": "Password strength",
@@ -311,15 +318,10 @@
   },
   "switcher": {
     "active": "Active account: {name}",
-    "activeBadge": "Active",
-    "confirmSwitch": "Switch",
-    "heading": "Accounts",
     "lock": "Lock",
     "manage": "Manage accounts",
     "noActive": "No active account",
-    "operationFailed": "Local account operation failed.",
-    "switchPasswordLabel": "Password",
-    "switchPasswordPlaceholder": "Password"
+    "operationFailed": "Local account operation failed."
   },
   "cloud": {
     "title": "Sign in to {deployment}",

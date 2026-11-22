@@ -11,11 +11,14 @@ import {
   __resetBrowserVaultForTesting,
   __setBrowserVaultArgon2ParametersForTesting,
   changeBrowserVaultPassword,
+  clearPendingVaultRecoveryKey,
   deleteBrowserVault,
   getActiveBrowserVault,
   lockBrowserVault,
   provisionBrowserVault,
+  readPendingVaultRecoveryKey,
   resetBrowserVaultPasswordWithRecoveryKey,
+  rotateBrowserVaultRecoveryKey,
   unlockBrowserVault,
   verifyBrowserVaultPassword,
 } from "./browser-vault"
@@ -449,3 +452,46 @@ it.each(["change", "recovery"] as const)(
     }
   }
 )
+
+it("changing an inactive profile's password never replaces the active profile's unlocked Vault session (F13)", async () => {
+  await provisionBrowserVault("acct_active", "alpha-password")
+  await provisionBrowserVault("acct_inactive", "beta-old-password", false)
+  const activeBefore = getActiveBrowserVault()
+  expect(activeBefore?.localAccountId).toBe("acct_active")
+
+  await changeBrowserVaultPassword("acct_inactive", "beta-old-password", "beta-new-password")
+
+  expect(getActiveBrowserVault()).toBe(activeBefore)
+  expect(getActiveBrowserVault()?.localAccountId).toBe("acct_active")
+  expect(getActiveBrowserVault()?.isUnlocked()).toBe(true)
+
+  lockBrowserVault()
+  await expect(unlockBrowserVault("acct_inactive", "beta-old-password")).rejects.toThrow()
+  await expect(unlockBrowserVault("acct_inactive", "beta-new-password")).resolves.toBeUndefined()
+})
+
+it("persists unacknowledged pending recovery keys across reload and rotates recovery keys without breaking the active session (F15)", async () => {
+  const originalRecovery = await provisionBrowserVault(ACCOUNT_ID, "correct horse")
+  await expect(readPendingVaultRecoveryKey(ACCOUNT_ID)).resolves.toBe(originalRecovery)
+
+  // Simulate crash/reload before acknowledging the handover screen.
+  lockBrowserVault()
+  await unlockBrowserVault(ACCOUNT_ID, "correct horse")
+  await expect(readPendingVaultRecoveryKey(ACCOUNT_ID)).resolves.toBe(originalRecovery)
+
+  await clearPendingVaultRecoveryKey(ACCOUNT_ID)
+  await expect(readPendingVaultRecoveryKey(ACCOUNT_ID)).resolves.toBeNull()
+
+  // Rotate recovery key: invalidates the old key and persists the replacement until acknowledged.
+  const replacementRecovery = await rotateBrowserVaultRecoveryKey(ACCOUNT_ID, "correct horse", 500)
+  expect(replacementRecovery).not.toBe(originalRecovery)
+  await expect(readPendingVaultRecoveryKey(ACCOUNT_ID)).resolves.toBe(replacementRecovery)
+
+  lockBrowserVault()
+  await expect(
+    resetBrowserVaultPasswordWithRecoveryKey(ACCOUNT_ID, originalRecovery, "after-old-key")
+  ).rejects.toThrow()
+  await expect(
+    resetBrowserVaultPasswordWithRecoveryKey(ACCOUNT_ID, replacementRecovery, "after-new-key")
+  ).resolves.toBeUndefined()
+})

@@ -13,7 +13,7 @@
 
 import { useState, type FormEvent } from "react"
 import { useTranslations } from "next-intl"
-import { LockKeyholeIcon } from "lucide-react"
+import { KeyRoundIcon, LockKeyholeIcon } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -27,6 +27,7 @@ import {
 } from "@/lib/accounts/desktop-local-account"
 import { PASSWORD_MIN_LENGTH } from "@/lib/accounts/password-policy"
 import type { LocalAccountRecord } from "@/lib/accounts/account-types"
+import { isTauri } from "@/lib/platform/detect"
 import { useAccountStore } from "@/stores/account/account-store"
 
 import { PasswordStrengthMeter } from "../password-strength-meter"
@@ -40,13 +41,20 @@ export interface AccountSecurityTabProps {
 export function AccountSecurityTab({ account }: AccountSecurityTabProps) {
   const t = useTranslations("account.manage")
   const deviceManaged = isDeviceManagedAccount(account)
-  const opensWithoutPrompt = unlocksWithoutPrompt(account)
   const changePassword = useAccountStore((state) => state.changePassword)
+  const rotateRecoveryKey = useAccountStore((state) => state.rotateRecoveryKey)
   const lock = useAccountStore((state) => state.lock)
+  const activeAccountId = useAccountStore((state) => state.activeAccountId)
   const unlockedAccountId = useAccountStore((state) => state.unlockedAccountId)
   const enrollQuickUnlockMethod = useAccountStore((state) => state.enrollQuickUnlockMethod)
   const removeQuickUnlockMethod = useAccountStore((state) => state.removeQuickUnlockMethod)
   const clearQuickUnlockLockout = useAccountStore((state) => state.clearQuickUnlockLockout)
+
+  const desktopShell = isTauri()
+  const requiresDesktopProfileUnlock = desktopShell && unlockedAccountId !== account.id
+  const isActiveProfile = !activeAccountId || activeAccountId === account.id
+  const opensWithoutPrompt = unlocksWithoutPrompt(account)
+
   const [current, setCurrent] = useState("")
   const [next, setNext] = useState("")
   const [confirm, setConfirm] = useState("")
@@ -54,8 +62,14 @@ export function AccountSecurityTab({ account }: AccountSecurityTabProps) {
   const [error, setError] = useState<string | null>(null)
   const [submitting, setSubmitting] = useState(false)
 
+  const [recoveryPassword, setRecoveryPassword] = useState("")
+  const [recoverySubmitting, setRecoverySubmitting] = useState(false)
+  const [recoveryRotated, setRecoveryRotated] = useState(false)
+  const [recoveryError, setRecoveryError] = useState<string | null>(null)
+
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault()
+    if (requiresDesktopProfileUnlock) return
     setChanged(false)
     if (next.length < PASSWORD_MIN_LENGTH) {
       setError(t("passwordTooShort", { min: PASSWORD_MIN_LENGTH }))
@@ -80,67 +94,155 @@ export function AccountSecurityTab({ account }: AccountSecurityTabProps) {
     }
   }
 
+  const submitRotateRecoveryKey = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    if (typeof rotateRecoveryKey !== "function") return
+    setRecoveryRotated(false)
+    if (!recoveryPassword.trim()) {
+      setRecoveryError(t("replaceRecoveryKeyPasswordRequired"))
+      return
+    }
+    setRecoverySubmitting(true)
+    setRecoveryError(null)
+    try {
+      await rotateRecoveryKey(account.id, recoveryPassword)
+      setRecoveryPassword("")
+      setRecoveryRotated(true)
+    } catch (err) {
+      setRecoveryError(toErrorMessage(err, t("operationFailed")))
+    } finally {
+      setRecoverySubmitting(false)
+    }
+  }
+
   return (
     <div className="flex flex-col gap-4" data-testid="account-security-tab">
-      <form
-        className="flex flex-col gap-2"
-        aria-label={t(deviceManaged ? "setPasswordHeading" : "changePasswordHeading")}
-        onSubmit={(event) => void submit(event)}
-      >
-        <p className="text-sm font-medium">
-          {t(deviceManaged ? "setPasswordHeading" : "changePasswordHeading")}
-        </p>
-        {deviceManaged ? (
-          <p className="text-sm text-muted-foreground">{t("deviceProtectionHelp")}</p>
-        ) : (
+      {requiresDesktopProfileUnlock ? (
+        <div className="flex flex-col gap-1.5">
+          <p className="text-sm font-medium">
+            {t(deviceManaged ? "setPasswordHeading" : "changePasswordHeading")}
+          </p>
+          <p
+            className="text-sm text-muted-foreground"
+            data-testid="account-security-locked-profile-notice"
+          >
+            {t("unlockProfileToManageSecurity")}
+          </p>
+        </div>
+      ) : (
+        <form
+          className="flex flex-col gap-2"
+          aria-label={t(deviceManaged ? "setPasswordHeading" : "changePasswordHeading")}
+          onSubmit={(event) => void submit(event)}
+        >
+          <p className="text-sm font-medium">
+            {t(deviceManaged ? "setPasswordHeading" : "changePasswordHeading")}
+          </p>
+          {deviceManaged ? (
+            <p className="text-sm text-muted-foreground">{t("deviceProtectionHelp")}</p>
+          ) : (
+            <>
+              <Label htmlFor="account-current-password">{t("currentPasswordLabel")}</Label>
+              <Input
+                id="account-current-password"
+                type="password"
+                autoComplete="current-password"
+                value={current}
+                placeholder={t("currentPasswordPlaceholder")}
+                onChange={(event) => setCurrent(event.target.value)}
+              />
+            </>
+          )}
+          <Label htmlFor="account-change-new-password">{t("changeNewPasswordLabel")}</Label>
+          <Input
+            id="account-change-new-password"
+            type="password"
+            autoComplete="new-password"
+            value={next}
+            placeholder={t("changeNewPasswordPlaceholder")}
+            onChange={(event) => setNext(event.target.value)}
+          />
+          <PasswordStrengthMeter password={next} />
+          <Label htmlFor="account-confirm-new-password">{t("confirmNewPasswordLabel")}</Label>
+          <Input
+            id="account-confirm-new-password"
+            type="password"
+            autoComplete="new-password"
+            value={confirm}
+            placeholder={t("confirmNewPasswordPlaceholder")}
+            onChange={(event) => setConfirm(event.target.value)}
+          />
+          {changed && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {t("passwordChanged")}
+            </p>
+          )}
+          {error && (
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive"
+            >
+              {error}
+            </p>
+          )}
+          <Button type="submit" size="sm" variant="outline" disabled={submitting}>
+            {t(deviceManaged ? "setPassword" : "changePassword")}
+          </Button>
+        </form>
+      )}
+
+      {!deviceManaged &&
+        !requiresDesktopProfileUnlock &&
+        typeof rotateRecoveryKey === "function" &&
+        unlockedAccountId === account.id && (
           <>
-            <Label htmlFor="account-current-password">{t("currentPasswordLabel")}</Label>
-            <Input
-              id="account-current-password"
-              type="password"
-              autoComplete="current-password"
-              value={current}
-              placeholder={t("currentPasswordPlaceholder")}
-              onChange={(event) => setCurrent(event.target.value)}
-            />
+            <Separator />
+            <form
+              className="flex flex-col gap-2"
+              aria-label={t("replaceRecoveryKeyHeading")}
+              data-testid="account-security-recovery-key-form"
+              onSubmit={(event) => void submitRotateRecoveryKey(event)}
+            >
+              <p className="text-sm font-medium">{t("replaceRecoveryKeyHeading")}</p>
+              <p className="text-xs text-muted-foreground">{t("replaceRecoveryKeyHelp")}</p>
+              <Label htmlFor="account-recovery-password">
+                {t("replaceRecoveryKeyPasswordLabel")}
+              </Label>
+              <Input
+                id="account-recovery-password"
+                type="password"
+                autoComplete="current-password"
+                value={recoveryPassword}
+                placeholder={t("currentPasswordPlaceholder")}
+                onChange={(event) => setRecoveryPassword(event.target.value)}
+              />
+              {recoveryRotated && (
+                <p role="status" className="text-sm text-muted-foreground">
+                  {t("replaceRecoveryKeySuccess")}
+                </p>
+              )}
+              {recoveryError && (
+                <p
+                  role="alert"
+                  className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive"
+                >
+                  {recoveryError}
+                </p>
+              )}
+              <Button
+                type="submit"
+                size="sm"
+                variant="outline"
+                className="gap-1.5"
+                disabled={recoverySubmitting}
+                data-testid="account-security-rotate-recovery-key"
+              >
+                <KeyRoundIcon className="size-3.5" />
+                {t("replaceRecoveryKeyAction")}
+              </Button>
+            </form>
           </>
         )}
-        <Label htmlFor="account-change-new-password">{t("changeNewPasswordLabel")}</Label>
-        <Input
-          id="account-change-new-password"
-          type="password"
-          autoComplete="new-password"
-          value={next}
-          placeholder={t("changeNewPasswordPlaceholder")}
-          onChange={(event) => setNext(event.target.value)}
-        />
-        <PasswordStrengthMeter password={next} />
-        <Label htmlFor="account-confirm-new-password">{t("confirmNewPasswordLabel")}</Label>
-        <Input
-          id="account-confirm-new-password"
-          type="password"
-          autoComplete="new-password"
-          value={confirm}
-          placeholder={t("confirmNewPasswordPlaceholder")}
-          onChange={(event) => setConfirm(event.target.value)}
-        />
-        {changed && (
-          <p role="status" className="text-sm text-muted-foreground">
-            {t("passwordChanged")}
-          </p>
-        )}
-        {error && (
-          <p
-            role="alert"
-            className="rounded-md border border-destructive/30 bg-destructive/10 p-2 text-sm text-destructive"
-          >
-            {error}
-          </p>
-        )}
-        <Button type="submit" size="sm" variant="outline" disabled={submitting}>
-          {t(deviceManaged ? "setPassword" : "changePassword")}
-        </Button>
-      </form>
 
       {!deviceManaged && (
         <>
@@ -148,54 +250,60 @@ export function AccountSecurityTab({ account }: AccountSecurityTabProps) {
 
           {isDeviceUnlockSupported() && <RememberOnDeviceControl account={account} />}
 
-          {/* Quick unlock sits between the password and the session controls,
-          because it is a way IN rather than a way to end a session. */}
-          <QuickUnlockSettings
-            account={account}
-            onEnroll={enrollQuickUnlockMethod}
-            onRemove={removeQuickUnlockMethod}
-            onClearLockout={clearQuickUnlockLockout}
-          />
+          {!requiresDesktopProfileUnlock && (
+            /* Quick unlock sits between the password and the session controls,
+            because it is a way IN rather than a way to end a session. */
+            <QuickUnlockSettings
+              account={account}
+              onEnroll={enrollQuickUnlockMethod}
+              onRemove={removeQuickUnlockMethod}
+              onClearLockout={clearQuickUnlockLockout}
+            />
+          )}
 
-          <Separator />
+          {isActiveProfile && (
+            <>
+              <Separator />
 
-          <div className="flex flex-col gap-2">
-            <p className="text-sm font-medium">{t("sessionSecurityHeading")}</p>
-            {opensWithoutPrompt ? (
-              <p
-                className="text-[11px] text-muted-foreground"
-                data-testid="account-security-remembered-help"
-              >
-                {t("sessionSecurityRememberedHelp")}
-              </p>
-            ) : (
-              <>
-                <AutoLockControl />
-                <div className="flex items-center justify-between gap-2 rounded-lg border border-transparent bg-muted/50 p-2.5">
-                  <div className="min-w-0">
-                    <p className="text-xs font-medium">{t("lockNowLabel")}</p>
-                    <p className="text-[11px] text-muted-foreground">{t("lockNowHelp")}</p>
-                  </div>
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-                    className="shrink-0 gap-1.5"
-                    disabled={!unlockedAccountId}
-                    onClick={() =>
-                      void Promise.resolve(lock()).catch((cause) =>
-                        setError(toErrorMessage(cause, t("operationFailed")))
-                      )
-                    }
-                    data-testid="account-security-lock-now"
+              <div className="flex flex-col gap-2">
+                <p className="text-sm font-medium">{t("sessionSecurityHeading")}</p>
+                {opensWithoutPrompt ? (
+                  <p
+                    className="text-[11px] text-muted-foreground"
+                    data-testid="account-security-remembered-help"
                   >
-                    <LockKeyholeIcon className="size-3.5" />
-                    {t("lockNow")}
-                  </Button>
-                </div>
-              </>
-            )}
-          </div>
+                    {t("sessionSecurityRememberedHelp")}
+                  </p>
+                ) : (
+                  <>
+                    <AutoLockControl />
+                    <div className="flex items-center justify-between gap-2 rounded-lg border border-transparent bg-muted/50 p-2.5">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium">{t("lockNowLabel")}</p>
+                        <p className="text-[11px] text-muted-foreground">{t("lockNowHelp")}</p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        className="shrink-0 gap-1.5"
+                        disabled={!unlockedAccountId}
+                        onClick={() =>
+                          void Promise.resolve(lock()).catch((cause) =>
+                            setError(toErrorMessage(cause, t("operationFailed")))
+                          )
+                        }
+                        data-testid="account-security-lock-now"
+                      >
+                        <LockKeyholeIcon className="size-3.5" />
+                        {t("lockNow")}
+                      </Button>
+                    </div>
+                  </>
+                )}
+              </div>
+            </>
+          )}
         </>
       )}
     </div>

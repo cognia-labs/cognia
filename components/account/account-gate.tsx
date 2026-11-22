@@ -428,7 +428,8 @@ export function AccountGate({ children, guestView }: AccountGateProps) {
         <AccountLockScreen
           accounts={accounts}
           activeAccountId={targetAccount?.id ?? activeAccountId}
-          supportsRecoveryKey={usesBrowserVault()}
+          supportsRecoveryKey={true}
+          usesBrowserVault={usesBrowserVault()}
           supportsRememberOnDevice={isDeviceUnlockSupported()}
           autoUnlockFailure={autoUnlockFailure}
           onUnlock={unlockAccount}

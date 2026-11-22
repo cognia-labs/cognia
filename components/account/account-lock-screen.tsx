@@ -143,11 +143,15 @@ export interface AccountLockScreenProps {
     newPassword: string
   ) => Promise<void>
   /**
-   * True on Browser Vault runtimes. Gates the recovery entry point and the
-   * stage ladder, which has one more step there. Not dormancy: the desktop
-   * host stores no recovery wrap, so there is genuinely nothing to redeem.
+   * True when the lock screen may redeem a Vault recovery key.
    */
   supportsRecoveryKey: boolean
+  /**
+   * True when the Browser Vault is the primary credential store (as opposed to
+   * the desktop keychain or mobile secure storage). Defaults to
+   * `supportsRecoveryKey` so standalone callers preserve stage ladders & badges.
+   */
+  usesBrowserVault?: boolean
   /**
    * Delete the local database that boot refused, then reload.
    *
@@ -191,6 +195,7 @@ export function AccountLockScreen({
   onUnlock,
   onRecoveryUnlock,
   supportsRecoveryKey,
+  usesBrowserVault = supportsRecoveryKey,
   supportsRememberOnDevice = false,
   autoUnlockFailure = null,
   onQuickUnlock,
@@ -309,12 +314,12 @@ export function AccountLockScreen({
     [localAccountId, throttle, now]
   )
 
-  const stages = useMemo(() => unlockStagesFor(supportsRecoveryKey), [supportsRecoveryKey])
+  const stages = useMemo(() => unlockStagesFor(usesBrowserVault), [usesBrowserVault])
   // Which store holds the credential, named for the shell it runs in: the
   // Browser Vault on the web, the OS keychain on the desktop, the platform's
   // secure storage in the mobile app (which has no desktop keychain at all).
   const platform = usePlatform()
-  const runtimeBadgeKey = supportsRecoveryKey
+  const runtimeBadgeKey = usesBrowserVault
     ? "runtimeBadgeBrowser"
     : platform === "mobile"
       ? "runtimeBadgeMobile"
@@ -415,7 +420,7 @@ export function AccountLockScreen({
       [
         `stage=${stage ?? "unknown"}`,
         `elapsedMs=${Math.round(elapsedMs)}`,
-        `runtime=${supportsRecoveryKey ? "browser-vault" : "desktop-host"}`,
+        `runtime=${usesBrowserVault ? "browser-vault" : "desktop-host"}`,
         `mode=${mode}`,
         `errorCode=${errorCode ?? "none"}`,
       ].join(" ")
@@ -895,7 +900,7 @@ export function AccountLockScreen({
         </Button>
       )}
 
-      {supportsRecoveryKey && !submitting && (
+      {supportsRecoveryKey && !submitting && !deviceManaged && (
         <Button
           type="button"
           variant="ghost"

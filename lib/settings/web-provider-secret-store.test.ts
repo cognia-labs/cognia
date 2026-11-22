@@ -17,9 +17,10 @@ import {
 
 const SECRET = "sk-synthetic-web-secret"
 
-function fakeVault() {
+function fakeVault(localAccountId = "acct_a") {
   const values = new Map<string, string>()
   return {
+    localAccountId,
     values,
     storeSecret: jest.fn(async (name: string, value: string) => void values.set(name, value)),
     loadSecret: jest.fn(async (name: string) => values.get(name) ?? null),
@@ -121,5 +122,25 @@ describe("web provider secret store", () => {
     mockGetActiveBrowserVault.mockReturnValue(vault)
     await createWebProviderSecretStore(device).delete("db-a")
     expect(device.values.size + vault.values.size).toBe(0)
+  })
+
+  it("refuses to write or promote acct_a provider secrets into acct_b's Vault (F13)", async () => {
+    const device = memoryDevice()
+    const vaultB = fakeVault("acct_b")
+    mockGetActiveBrowserVault.mockReturnValue(vaultB)
+    const store = createWebProviderSecretStore(device)
+
+    await store.save("cognia-account-acct_a-encrypted-v1", SECRET)
+    expect(vaultB.storeSecret).not.toHaveBeenCalled()
+    expect(device.values.get("cognia-account-acct_a-encrypted-v1")).toBe(SECRET)
+
+    expect(await store.load("cognia-account-acct_a-encrypted-v1")).toBe(SECRET)
+    expect(vaultB.storeSecret).not.toHaveBeenCalled()
+
+    const vaultA = fakeVault("acct_a")
+    mockGetActiveBrowserVault.mockReturnValue(vaultA)
+    expect(await store.load("cognia-account-acct_a-encrypted-v1")).toBe(SECRET)
+    expect(vaultA.values.get("provider-secrets:cognia-account-acct_a-encrypted-v1")).toBe(SECRET)
+    expect(device.values.has("cognia-account-acct_a-encrypted-v1")).toBe(false)
   })
 })

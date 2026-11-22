@@ -6,6 +6,7 @@ import {
   ACCOUNT_PASSWORD_VERIFY_COMMAND,
   ACCOUNT_UNBIND_LOCAL_COMMAND,
   createPasswordVerifier,
+  recoverNativePassword,
   rotateNativePassword,
   unbindLocalAccount,
   verifyPassword,
@@ -192,5 +193,30 @@ describe("password-client", () => {
     await expect(verifyPassword("correct horse", browserVerifier)).resolves.toBe(true)
     await expect(verifyPassword("wrong horse", browserVerifier)).resolves.toBe(false)
     expect(invokeMock).not.toHaveBeenCalled()
+  })
+
+  it("redeems a recovery key on Tauri via account_password_rotate with unlockSession", async () => {
+    invokeMock.mockResolvedValueOnce(verifier)
+
+    await expect(
+      recoverNativePassword("acct_alpha", " key-abc ", verifier, "brand new phrase")
+    ).resolves.toEqual(verifier)
+
+    expect(invokeMock).toHaveBeenCalledWith(ACCOUNT_PASSWORD_ROTATE_COMMAND, {
+      accountId: "acct_alpha",
+      currentPassword: "",
+      currentVerifier: verifier,
+      newPassword: "brand new phrase",
+      newVerifier: null,
+      recoveryKey: "key-abc",
+      unlockSession: true,
+    })
+
+    await expect(
+      recoverNativePassword("acct_alpha", "  ", verifier, "brand new phrase")
+    ).rejects.toThrow(/recovery key/i)
+    await expect(recoverNativePassword("acct_alpha", "key-abc", verifier, "short")).rejects.toThrow(
+      /at least 8/
+    )
   })
 })

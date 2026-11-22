@@ -45,6 +45,8 @@ pub enum HostIdentityError {
     Unbound,
     #[error("the local account does not match this host's recorded binding")]
     BindingMismatch,
+    #[error("the recovery key does not match this host's recorded binding")]
+    InvalidRecoveryKey,
     #[error("{0}")]
     MalformedId(String),
     #[error("security database error: {0}")]
@@ -98,6 +100,14 @@ pub fn verifier_digest(algorithm: &str, salt: &str, hash: &str) -> String {
     hex::encode(hasher.finalize())
 }
 
+/// Domain-separated SHA-256 digest of a 32-byte Vault recovery key.
+pub fn recovery_digest(raw_key: &[u8]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(b"cognia-recovery-v1\0");
+    hasher.update(raw_key);
+    hex::encode(hasher.finalize())
+}
+
 /// Bind this host to a local account after a **verified** password unlock.
 ///
 /// Callers must only reach this on a successful verification — the digest pin
@@ -106,7 +116,20 @@ pub fn bind_local_account(
     local_account_namespace: &str,
     verifier_digest: &str,
 ) -> Result<HostTenantContext, HostIdentityError> {
-    bind_internal(local_account_namespace, Some(verifier_digest))
+    bind_internal(local_account_namespace, Some(verifier_digest), None)
+}
+
+/// Bind this host to a local account and arm its recovery-key digest pin.
+pub fn bind_local_account_with_recovery(
+    local_account_namespace: &str,
+    verifier_digest: &str,
+    recovery_digest: Option<&str>,
+) -> Result<HostTenantContext, HostIdentityError> {
+    bind_internal(
+        local_account_namespace,
+        Some(verifier_digest),
+        recovery_digest,
+    )
 }
 
 /// Bind from an operator-supplied account id (headless `cognia-server`).
@@ -117,22 +140,31 @@ pub fn bind_local_account(
 pub fn bind_local_account_from_operator(
     local_account_namespace: &str,
 ) -> Result<HostTenantContext, HostIdentityError> {
-    bind_internal(local_account_namespace, None)
+    bind_internal(local_account_namespace, None, None)
 }
 
 fn bind_internal(
     local_account_namespace: &str,
     digest: Option<&str>,
+    recovery_digest: Option<&str>,
 ) -> Result<HostTenantContext, HostIdentityError> {
     if local_account_namespace.trim().is_empty() {
         return Err(HostIdentityError::Unbound);
     }
     let store = security_store().ok_or(HostIdentityError::StoreUnavailable)?;
     let binding = store
-        .bind_host_account(local_account_namespace, digest, unix_time_secs())
+        .bind_host_account_with_recovery(
+            local_account_namespace,
+            digest,
+            recovery_digest,
+            unix_time_secs(),
+        )
         .map_err(|error| match error {
             super::security_store::SecurityStoreError::HostBindingMismatch => {
                 HostIdentityError::BindingMismatch
+            }
+            super::security_store::SecurityStoreError::InvalidRecoveryKey => {
+                HostIdentityError::InvalidRecoveryKey
             }
             other => HostIdentityError::Store(other.to_string()),
         })?;
@@ -152,10 +184,82 @@ pub fn rebind_verifier(
     local_account_namespace: &str,
     verifier_digest: &str,
 ) -> Result<(), HostIdentityError> {
+    rebind_verifier_with_recovery(local_account_namespace, verifier_digest, None)
+}
+
+/// Re-pin the binding to a new verifier and optional recovery-key digest.
+pub fn rebind_verifier_with_recovery(
+    local_account_namespace: &str,
+    verifier_digest: &str,
+    recovery_digest: Option<&str>,
+) -> Result<(), HostIdentityError> {
     let store = security_store().ok_or(HostIdentityError::StoreUnavailable)?;
     store
-        .rebind_host_verifier(local_account_namespace, verifier_digest, unix_time_secs())
-        .map_err(|error| HostIdentityError::Store(error.to_string()))
+        .rebind_host_verifier_with_recovery(
+            local_account_namespace,
+            verifier_digest,
+            recovery_digest,
+            unix_time_secs(),
+        )
+        .map_err(|error| match error {
+            super::security_store::SecurityStoreError::HostBindingMismatch => {
+                HostIdentityError::BindingMismatch
+            }
+            other => HostIdentityError::Store(other.to_string()),
+        })?;
+    ACCOUNT_BINDING_EPOCH.fetch_add(1, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Recover a locked binding using its recovery-key digest, re-pin its password
+/// verifier, and bind this process to the recovered local account.
+pub fn recover_verifier(
+    local_account_namespace: &str,
+    current_verifier_digest: &str,
+    recovery_digest: &str,
+    new_verifier_digest: &str,
+) -> Result<HostTenantContext, HostIdentityError> {
+    if local_account_namespace.trim().is_empty() {
+        return Err(HostIdentityError::Unbound);
+    }
+    let store = security_store().ok_or(HostIdentityError::StoreUnavailable)?;
+    let binding = store
+        .recover_host_verifier(
+            local_account_namespace,
+            current_verifier_digest,
+            recovery_digest,
+            new_verifier_digest,
+            unix_time_secs(),
+        )
+        .map_err(|error| match error {
+            super::security_store::SecurityStoreError::HostBindingMismatch => {
+                HostIdentityError::BindingMismatch
+            }
+            super::security_store::SecurityStoreError::InvalidRecoveryKey => {
+                HostIdentityError::InvalidRecoveryKey
+            }
+            other => HostIdentityError::Store(other.to_string()),
+        })?;
+    {
+        let mut bound = BOUND_ACCOUNT.write();
+        *bound = Some(binding.local_account_namespace.clone());
+        ACCOUNT_BINDING_EPOCH.fetch_add(1, Ordering::SeqCst);
+    }
+    Ok(HostTenantContext {
+        local_account_namespace: binding.local_account_namespace,
+        remote_tenant_id: binding.tenant_id,
+    })
+}
+
+/// Read the currently recorded password verifier digest for a bound local account.
+pub fn recorded_verifier_digest(
+    local_account_namespace: &str,
+) -> Result<Option<String>, HostIdentityError> {
+    let store = security_store().ok_or(HostIdentityError::StoreUnavailable)?;
+    let binding = store
+        .host_binding(local_account_namespace)
+        .map_err(|error| HostIdentityError::Store(error.to_string()))?;
+    Ok(binding.and_then(|row| row.verifier_digest))
 }
 
 /// Drop the in-process binding. The `host_bindings` row is left alone — locking
@@ -740,9 +844,25 @@ mod tests {
             Err(HostIdentityError::BindingMismatch)
         ));
 
-        // The deliberate rotation path still works.
+        // The deliberate rotation path still works and bumps the binding epoch.
+        let epoch_before = account_binding_epoch();
         rebind_verifier("acct_one", "digest-two").unwrap();
+        assert!(account_binding_epoch() > epoch_before);
         assert!(bind_local_account("acct_one", "digest-two").is_ok());
+
+        // Recovery re-pins the verifier and binds the host only when the recovery digest matches.
+        unbind_local_account();
+        let rec_one = recovery_digest(&[7_u8; 32]);
+        let rec_wrong = recovery_digest(&[8_u8; 32]);
+        let recovered =
+            recover_verifier("acct_one", "digest-two", &rec_one, "digest-three").unwrap();
+        assert_eq!(recovered.local_account_namespace, "acct_one");
+        assert_eq!(current().unwrap().local_account_namespace, "acct_one");
+        unbind_local_account();
+        assert!(matches!(
+            recover_verifier("acct_one", "digest-three", &rec_wrong, "digest-four"),
+            Err(HostIdentityError::InvalidRecoveryKey)
+        ));
     }
 
     #[test]

@@ -902,4 +902,30 @@ describe("unlock automatically on this device", () => {
     await waitFor(() => expect(screen.getByText("errorSecretStoreUnavailable")).toBeVisible())
     expect(screen.queryByText("keychain denied")).not.toBeInTheDocument()
   })
+
+  it("allows recovery-key redemption on desktop/mobile shells while keeping native runtime badges (F7)", async () => {
+    const { props } = renderScreen({
+      supportsRecoveryKey: true,
+      usesBrowserVault: false,
+    })
+
+    expect(screen.getByText("runtimeBadgeDesktop")).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("account-lock-screen-recovery-toggle"))
+    fireEvent.change(screen.getByLabelText("recoveryKeyLabel"), { target: { value: "rk-desktop" } })
+    fireEvent.change(screen.getByLabelText("newPasswordLabel"), {
+      target: { value: "new-desktop-pw" },
+    })
+    fireEvent.change(screen.getByLabelText("confirmPasswordLabel"), {
+      target: { value: "new-desktop-pw" },
+    })
+    fireEvent.click(screen.getByTestId("account-lock-screen-recovery-submit"))
+
+    await waitFor(() =>
+      expect(props.onRecoveryUnlock).toHaveBeenCalledWith(
+        "acct_alpha",
+        "rk-desktop",
+        "new-desktop-pw"
+      )
+    )
+  })
 })

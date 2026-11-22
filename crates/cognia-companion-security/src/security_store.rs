@@ -59,6 +59,8 @@ pub enum SecurityStoreError {
     DeviceHasActiveRuns,
     #[error("the local account does not match this host's recorded binding")]
     HostBindingMismatch,
+    #[error("the recovery key does not match this host's recorded binding")]
+    InvalidRecoveryKey,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -188,6 +190,7 @@ pub struct HostBinding {
     /// `user_id`, the console and the roster read this.
     pub canonical_user_id: Option<String>,
     pub canonical_org_id: Option<String>,
+    pub recovery_digest: Option<String>,
 }
 
 impl HostBinding {
@@ -201,6 +204,7 @@ impl HostBinding {
             org_id: row.get(5)?,
             canonical_user_id: row.get(6)?,
             canonical_org_id: row.get(7)?,
+            recovery_digest: row.get(8)?,
         })
     }
 }
@@ -1377,7 +1381,8 @@ impl SecurityStore {
         let conn = self.conn.lock();
         let mut query = conn.prepare(
             "SELECT h.local_account_namespace, h.tenant_id, h.verifier_digest, h.pair_host_id,
-                    h.user_id, h.org_id, h.canonical_user_id, h.canonical_org_id
+                    h.user_id, h.org_id, h.canonical_user_id, h.canonical_org_id,
+                    h.recovery_digest
              FROM host_bindings h JOIN devices d
                ON h.tenant_id = d.tenant_id AND h.user_id = d.user_id
              WHERE d.tenant_id = ?1 AND d.id = ?2 AND d.status = 'active'
@@ -2478,7 +2483,7 @@ impl SecurityStore {
             .lock()
             .query_row(
                 "SELECT local_account_namespace, tenant_id, verifier_digest, pair_host_id,
-                        user_id, org_id, canonical_user_id, canonical_org_id
+                        user_id, org_id, canonical_user_id, canonical_org_id, recovery_digest
                  FROM host_bindings WHERE local_account_namespace = ?1",
                 [local_account_namespace],
                 HostBinding::from_row,
@@ -2510,117 +2515,26 @@ impl SecurityStore {
         verifier_digest: Option<&str>,
         now: i64,
     ) -> Result<HostBinding, SecurityStoreError> {
+        self.bind_host_account_with_recovery(local_account_namespace, verifier_digest, None, now)
+    }
+
+    pub fn bind_host_account_with_recovery(
+        &self,
+        local_account_namespace: &str,
+        verifier_digest: Option<&str>,
+        recovery_digest: Option<&str>,
+        now: i64,
+    ) -> Result<HostBinding, SecurityStoreError> {
         let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
         let mut conn = self.conn.lock();
         let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
-
-        let existing: Option<HostBinding> = tx
-            .query_row(
-                "SELECT local_account_namespace, tenant_id, verifier_digest, pair_host_id,
-                        user_id, org_id, canonical_user_id, canonical_org_id
-                 FROM host_bindings WHERE local_account_namespace = ?1",
-                [local_account_namespace],
-                HostBinding::from_row,
-            )
-            .optional()?;
-
-        if let Some(binding) = existing {
-            match (binding.verifier_digest.as_deref(), verifier_digest) {
-                (Some(recorded), Some(presented)) if recorded != presented => {
-                    return Err(SecurityStoreError::HostBindingMismatch);
-                }
-                // First verified unlock after a legacy adoption records the
-                // digest, which is what arms the pin for every later bind.
-                (None, Some(presented)) => {
-                    tx.execute(
-                        "UPDATE host_bindings SET verifier_digest = ?1, updated_at = ?2
-                         WHERE local_account_namespace = ?3",
-                        params![presented, now, local_account_namespace],
-                    )?;
-                    tx.commit()?;
-                    invalidate_worker_authorization();
-                    return Ok(HostBinding {
-                        verifier_digest: Some(presented.to_string()),
-                        ..binding
-                    });
-                }
-                _ => {}
-            }
-            tx.commit()?;
-            invalidate_worker_authorization();
-            return Ok(binding);
-        }
-
-        // Adopt the unclaimed legacy bucket, tenant and all.
-        type Unclaimed = (
-            String,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-            Option<String>,
-        );
-        let unclaimed: Option<Unclaimed> = tx
-            .query_row(
-                "SELECT tenant_id, user_id, org_id, canonical_user_id, canonical_org_id
-                 FROM host_bindings WHERE local_account_namespace = ?1",
-                [LOCAL_NAMESPACE_UNBOUND],
-                |row| {
-                    Ok((
-                        row.get(0)?,
-                        row.get(1)?,
-                        row.get(2)?,
-                        row.get(3)?,
-                        row.get(4)?,
-                    ))
-                },
-            )
-            .optional()?;
-
-        let binding =
-            if let Some((tenant_id, user_id, org_id, canonical_user_id, canonical_org_id)) =
-                unclaimed
-            {
-                tx.execute(
-                    "UPDATE host_bindings
-                 SET local_account_namespace = ?1, verifier_digest = ?2, updated_at = ?3
-                 WHERE local_account_namespace = ?4",
-                    params![
-                        local_account_namespace,
-                        verifier_digest,
-                        now,
-                        LOCAL_NAMESPACE_UNBOUND
-                    ],
-                )?;
-                HostBinding {
-                    local_account_namespace: local_account_namespace.to_string(),
-                    tenant_id,
-                    verifier_digest: verifier_digest.map(str::to_string),
-                    pair_host_id: None,
-                    user_id,
-                    org_id,
-                    canonical_user_id,
-                    canonical_org_id,
-                }
-            } else {
-                let tenant_id = mint_tenant_id();
-                tx.execute(
-                    "INSERT INTO host_bindings
-                 (local_account_namespace, tenant_id, verifier_digest, bound_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?4)",
-                    params![local_account_namespace, tenant_id, verifier_digest, now],
-                )?;
-                HostBinding {
-                    local_account_namespace: local_account_namespace.to_string(),
-                    tenant_id,
-                    verifier_digest: verifier_digest.map(str::to_string),
-                    pair_host_id: None,
-                    // A brand-new row: nobody has signed into this profile yet.
-                    user_id: None,
-                    org_id: None,
-                    canonical_user_id: None,
-                    canonical_org_id: None,
-                }
-            };
+        let binding = bind_host_account_tx(
+            &tx,
+            local_account_namespace,
+            verifier_digest,
+            recovery_digest,
+            now,
+        )?;
         tx.commit()?;
         invalidate_worker_authorization();
         Ok(binding)
@@ -2628,22 +2542,119 @@ impl SecurityStore {
 
     /// Re-pin a binding to a new password verifier. This is the deliberate
     /// escape hatch for a password rotation, and the only way an established
-    /// digest ever changes.
+    /// digest ever changes without a recovery key.
     pub fn rebind_host_verifier(
         &self,
         local_account_namespace: &str,
         verifier_digest: &str,
         now: i64,
     ) -> Result<(), SecurityStoreError> {
-        let changed = self.conn.lock().execute(
-            "UPDATE host_bindings SET verifier_digest = ?1, updated_at = ?2
-             WHERE local_account_namespace = ?3",
-            params![verifier_digest, now, local_account_namespace],
-        )?;
+        self.rebind_host_verifier_with_recovery(local_account_namespace, verifier_digest, None, now)
+    }
+
+    pub fn rebind_host_verifier_with_recovery(
+        &self,
+        local_account_namespace: &str,
+        verifier_digest: &str,
+        recovery_digest: Option<&str>,
+        now: i64,
+    ) -> Result<(), SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let changed = match recovery_digest {
+            Some(recovery_digest) => tx.execute(
+                "UPDATE host_bindings
+                 SET verifier_digest = ?1, recovery_digest = ?2, updated_at = ?3
+                 WHERE local_account_namespace = ?4",
+                params![
+                    verifier_digest,
+                    recovery_digest,
+                    now,
+                    local_account_namespace
+                ],
+            )?,
+            None => tx.execute(
+                "UPDATE host_bindings SET verifier_digest = ?1, updated_at = ?2
+                 WHERE local_account_namespace = ?3",
+                params![verifier_digest, now, local_account_namespace],
+            )?,
+        };
         if changed == 0 {
             return Err(SecurityStoreError::HostBindingMismatch);
         }
+        tx.commit()?;
+        invalidate_worker_authorization();
         Ok(())
+    }
+
+    /// Re-pin a host binding using the profile's recovery key digest.
+    ///
+    /// Requires `current_verifier_digest` to match an armed `verifier_digest`
+    /// and `recovery_digest` to match an armed `recovery_digest` (in constant
+    /// time). Pre-migration rows whose `recovery_digest` is `None` adopt and
+    /// arm `recovery_digest` on first recovery; namespaces never yet bound on
+    /// this host mint/adopt a binding with both digests armed.
+    pub fn recover_host_verifier(
+        &self,
+        local_account_namespace: &str,
+        current_verifier_digest: &str,
+        recovery_digest: &str,
+        new_verifier_digest: &str,
+        now: i64,
+    ) -> Result<HostBinding, SecurityStoreError> {
+        let _authorization_guard = WORKER_AUTHORIZATION_GATE.write();
+        let mut conn = self.conn.lock();
+        let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let existing: Option<HostBinding> = tx
+            .query_row(
+                "SELECT local_account_namespace, tenant_id, verifier_digest, pair_host_id,
+                        user_id, org_id, canonical_user_id, canonical_org_id, recovery_digest
+                 FROM host_bindings WHERE local_account_namespace = ?1",
+                [local_account_namespace],
+                HostBinding::from_row,
+            )
+            .optional()?;
+
+        let binding = if let Some(binding) = existing {
+            if let Some(recorded_verifier) = binding.verifier_digest.as_deref() {
+                if !constant_time_str_eq(recorded_verifier, current_verifier_digest) {
+                    return Err(SecurityStoreError::HostBindingMismatch);
+                }
+            }
+            if let Some(recorded_recovery) = binding.recovery_digest.as_deref() {
+                if !constant_time_str_eq(recorded_recovery, recovery_digest) {
+                    return Err(SecurityStoreError::InvalidRecoveryKey);
+                }
+            }
+            tx.execute(
+                "UPDATE host_bindings
+                 SET verifier_digest = ?1, recovery_digest = ?2, updated_at = ?3
+                 WHERE local_account_namespace = ?4",
+                params![
+                    new_verifier_digest,
+                    recovery_digest,
+                    now,
+                    local_account_namespace
+                ],
+            )?;
+            HostBinding {
+                verifier_digest: Some(new_verifier_digest.to_string()),
+                recovery_digest: Some(recovery_digest.to_string()),
+                ..binding
+            }
+        } else {
+            bind_host_account_tx(
+                &tx,
+                local_account_namespace,
+                Some(new_verifier_digest),
+                Some(recovery_digest),
+                now,
+            )?
+        };
+        tx.commit()?;
+        invalidate_worker_authorization();
+        Ok(binding)
     }
 
     /// Record which person a bound profile belongs to — ADR-0149 §9.
@@ -3167,6 +3178,151 @@ fn hash_secret(secret: &str) -> String {
     hex::encode(Sha256::digest(secret.as_bytes()))
 }
 
+fn constant_time_str_eq(left: &str, right: &str) -> bool {
+    let left_bytes = left.as_bytes();
+    let right_bytes = right.as_bytes();
+    if left_bytes.len() != right_bytes.len() {
+        return false;
+    }
+    let mut diff = 0_u8;
+    for (a, b) in left_bytes.iter().zip(right_bytes.iter()) {
+        diff |= a ^ b;
+    }
+    diff == 0
+}
+
+fn bind_host_account_tx(
+    tx: &rusqlite::Transaction<'_>,
+    local_account_namespace: &str,
+    verifier_digest: Option<&str>,
+    recovery_digest: Option<&str>,
+    now: i64,
+) -> Result<HostBinding, SecurityStoreError> {
+    let existing: Option<HostBinding> = tx
+        .query_row(
+            "SELECT local_account_namespace, tenant_id, verifier_digest, pair_host_id,
+                    user_id, org_id, canonical_user_id, canonical_org_id, recovery_digest
+             FROM host_bindings WHERE local_account_namespace = ?1",
+            [local_account_namespace],
+            HostBinding::from_row,
+        )
+        .optional()?;
+
+    if let Some(binding) = existing {
+        if let (Some(recorded), Some(presented)) =
+            (binding.verifier_digest.as_deref(), verifier_digest)
+        {
+            if !constant_time_str_eq(recorded, presented) {
+                return Err(SecurityStoreError::HostBindingMismatch);
+            }
+        }
+        if let (Some(recorded), Some(presented)) =
+            (binding.recovery_digest.as_deref(), recovery_digest)
+        {
+            if !constant_time_str_eq(recorded, presented) {
+                return Err(SecurityStoreError::InvalidRecoveryKey);
+            }
+        }
+        let next_verifier = binding
+            .verifier_digest
+            .clone()
+            .or_else(|| verifier_digest.map(str::to_string));
+        let next_recovery = binding
+            .recovery_digest
+            .clone()
+            .or_else(|| recovery_digest.map(str::to_string));
+        if next_verifier != binding.verifier_digest || next_recovery != binding.recovery_digest {
+            tx.execute(
+                "UPDATE host_bindings
+                 SET verifier_digest = ?1, recovery_digest = ?2, updated_at = ?3
+                 WHERE local_account_namespace = ?4",
+                params![next_verifier, next_recovery, now, local_account_namespace],
+            )?;
+            return Ok(HostBinding {
+                verifier_digest: next_verifier,
+                recovery_digest: next_recovery,
+                ..binding
+            });
+        }
+        return Ok(binding);
+    }
+
+    type Unclaimed = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+        Option<String>,
+    );
+    let unclaimed: Option<Unclaimed> = tx
+        .query_row(
+            "SELECT tenant_id, user_id, org_id, canonical_user_id, canonical_org_id
+             FROM host_bindings WHERE local_account_namespace = ?1",
+            [LOCAL_NAMESPACE_UNBOUND],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            },
+        )
+        .optional()?;
+
+    if let Some((tenant_id, user_id, org_id, canonical_user_id, canonical_org_id)) = unclaimed {
+        tx.execute(
+            "UPDATE host_bindings
+             SET local_account_namespace = ?1, verifier_digest = ?2, recovery_digest = ?3, updated_at = ?4
+             WHERE local_account_namespace = ?5",
+            params![
+                local_account_namespace,
+                verifier_digest,
+                recovery_digest,
+                now,
+                LOCAL_NAMESPACE_UNBOUND
+            ],
+        )?;
+        Ok(HostBinding {
+            local_account_namespace: local_account_namespace.to_string(),
+            tenant_id,
+            verifier_digest: verifier_digest.map(str::to_string),
+            pair_host_id: None,
+            user_id,
+            org_id,
+            canonical_user_id,
+            canonical_org_id,
+            recovery_digest: recovery_digest.map(str::to_string),
+        })
+    } else {
+        let tenant_id = mint_tenant_id();
+        tx.execute(
+            "INSERT INTO host_bindings
+             (local_account_namespace, tenant_id, verifier_digest, recovery_digest, bound_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?5)",
+            params![
+                local_account_namespace,
+                tenant_id,
+                verifier_digest,
+                recovery_digest,
+                now
+            ],
+        )?;
+        Ok(HostBinding {
+            local_account_namespace: local_account_namespace.to_string(),
+            tenant_id,
+            verifier_digest: verifier_digest.map(str::to_string),
+            pair_host_id: None,
+            user_id: None,
+            org_id: None,
+            canonical_user_id: None,
+            canonical_org_id: None,
+            recovery_digest: recovery_digest.map(str::to_string),
+        })
+    }
+}
+
 fn insert_audit(
     tx: &rusqlite::Transaction<'_>,
     tenant_id: &str,
@@ -3557,6 +3713,7 @@ const MIGRATION_DEVICE_STATUS_SUSPENDED: &str = "device-status-suspended-v1";
 
 const MIGRATION_HOST_BINDING_PERSON: &str = "host-binding-person-v1";
 const MIGRATION_HOST_BINDING_CANONICAL: &str = "host-binding-canonical-v1";
+const MIGRATION_HOST_BINDING_RECOVERY: &str = "host-binding-recovery-v1";
 const MIGRATION_DEVICE_USER: &str = "device-user-v1";
 const MIGRATION_DEVICE_PERSON: &str = "device-person-binding-v1";
 const MIGRATION_DEVICE_QUARANTINE: &str = "device-quarantine-v1";
@@ -3648,6 +3805,7 @@ fn apply_schema_migrations(
     migrate_device_status_suspended(conn, now, backup_target)?;
     migrate_host_binding_person(conn, now)?;
     migrate_host_binding_canonical(conn, now)?;
+    migrate_host_binding_recovery(conn, now)?;
     migrate_device_user(conn, now)?;
     migrate_device_quarantine(conn, now, backup_target)?;
     migrate_device_person_binding(conn, now)?;
@@ -3747,6 +3905,29 @@ fn migrate_host_binding_canonical(
         }
     }
     mark_migration(&tx, MIGRATION_HOST_BINDING_CANONICAL, now)?;
+    tx.commit()?;
+    Ok(())
+}
+
+fn migrate_host_binding_recovery(conn: &mut Connection, now: i64) -> Result<(), SecurityStoreError> {
+    if migration_applied(conn, MIGRATION_HOST_BINDING_RECOVERY)? {
+        return Ok(());
+    }
+    let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let present: bool = {
+        let mut statement = tx.prepare("PRAGMA table_info('host_bindings')")?;
+        let names = statement
+            .query_map([], |row| row.get::<_, String>(1))?
+            .collect::<Result<Vec<_>, _>>()?;
+        names.iter().any(|name| name == "recovery_digest")
+    };
+    if !present {
+        tx.execute(
+            "ALTER TABLE host_bindings ADD COLUMN recovery_digest TEXT",
+            [],
+        )?;
+    }
+    mark_migration(&tx, MIGRATION_HOST_BINDING_RECOVERY, now)?;
     tx.commit()?;
     Ok(())
 }
@@ -4033,6 +4214,7 @@ CREATE TABLE IF NOT EXISTS host_bindings (
     -- supported state, not an unfinished one.
     user_id                 TEXT,
     org_id                  TEXT,
+    recovery_digest         TEXT,
     bound_at                INTEGER NOT NULL,
     updated_at              INTEGER NOT NULL
 );
@@ -4695,6 +4877,113 @@ CREATE TABLE devices (
         assert_eq!(binding.user_id, None);
         assert_eq!(binding.canonical_user_id, None);
         assert_eq!(binding.canonical_org_id, None);
+    }
+
+    #[test]
+    fn recovery_digest_migration_and_host_recovery_enforce_constant_time_pinning() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(
+            "CREATE TABLE security_migrations (key TEXT PRIMARY KEY, applied_at INTEGER NOT NULL);
+             CREATE TABLE host_bindings (
+                 local_account_namespace TEXT PRIMARY KEY,
+                 tenant_id TEXT NOT NULL UNIQUE,
+                 verifier_digest TEXT,
+                 pair_host_id TEXT,
+                 user_id TEXT,
+                 org_id TEXT,
+                 canonical_user_id TEXT,
+                 canonical_org_id TEXT,
+                 bound_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             INSERT INTO host_bindings
+                 (local_account_namespace, tenant_id, verifier_digest, bound_at, updated_at)
+             VALUES ('acct_legacy', 'tnt_legacy', 'verifier-v1', 1, 1);",
+        )
+        .unwrap();
+        migrate_host_binding_recovery(&mut conn, 50).unwrap();
+        migrate_host_binding_recovery(&mut conn, 51).unwrap();
+        assert!(migration_applied(&conn, MIGRATION_HOST_BINDING_RECOVERY).unwrap());
+
+        let store = SecurityStore::in_memory().unwrap();
+        store
+            .bind_host_account("acct_legacy", Some("verifier-v1"), 10)
+            .unwrap();
+        assert_eq!(
+            store
+                .host_binding("acct_legacy")
+                .unwrap()
+                .unwrap()
+                .recovery_digest,
+            None
+        );
+
+        // Wrong current verifier is refused even before a recovery digest is armed.
+        assert!(matches!(
+            store.recover_host_verifier(
+                "acct_legacy",
+                "forged-current",
+                "recovery-v1",
+                "verifier-v2",
+                11,
+            ),
+            Err(SecurityStoreError::HostBindingMismatch)
+        ));
+
+        // Pre-migration binding adopts and arms recovery_digest on first valid recovery.
+        let recovered = store
+            .recover_host_verifier(
+                "acct_legacy",
+                "verifier-v1",
+                "recovery-v1",
+                "verifier-v2",
+                12,
+            )
+            .unwrap();
+        assert_eq!(recovered.verifier_digest.as_deref(), Some("verifier-v2"));
+        assert_eq!(recovered.recovery_digest.as_deref(), Some("recovery-v1"));
+
+        // Once armed, a different recovery digest is rejected as InvalidRecoveryKey.
+        assert!(matches!(
+            store.recover_host_verifier(
+                "acct_legacy",
+                "verifier-v2",
+                "wrong-recovery",
+                "verifier-v3",
+                13,
+            ),
+            Err(SecurityStoreError::InvalidRecoveryKey)
+        ));
+
+        // Rotating recovery key updates recovery_digest cleanly.
+        store
+            .rebind_host_verifier_with_recovery(
+                "acct_legacy",
+                "verifier-v2",
+                Some("recovery-v2"),
+                14,
+            )
+            .unwrap();
+        assert!(matches!(
+            store.recover_host_verifier(
+                "acct_legacy",
+                "verifier-v2",
+                "recovery-v1",
+                "verifier-v3",
+                15,
+            ),
+            Err(SecurityStoreError::InvalidRecoveryKey)
+        ));
+        let after_rotate = store
+            .recover_host_verifier(
+                "acct_legacy",
+                "verifier-v2",
+                "recovery-v2",
+                "verifier-v3",
+                16,
+            )
+            .unwrap();
+        assert_eq!(after_rotate.verifier_digest.as_deref(), Some("verifier-v3"));
     }
 
     #[test]

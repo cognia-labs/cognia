@@ -99,7 +99,9 @@ export interface CloudDeploymentCardProps {
   deps?: CloudDeploymentCardDeps
 }
 
-async function defaultSignOut(localAccountId: string) {
+async function defaultSignOut(
+  localAccountId: string
+): ReturnType<NonNullable<CloudDeploymentCardDeps["signOut"]>> {
   const report = await signOutFromLogto({
     localAccountId,
     afterClear: (context) => completeSignOut({ localAccountId, ...context }),

@@ -930,6 +930,18 @@ describe("lock screen wiring for automatic unlock", () => {
     )
     expect(screen.queryByTestId("account-lock-screen-remember")).not.toBeInTheDocument()
   })
+
+  it("exposes the recovery-key toggle on the desktop lock screen while preserving the desktop badge (F7)", () => {
+    ;(window as unknown as Record<string, unknown>).__TAURI_INTERNALS__ = {}
+    setGateState({ accounts: [alpha], activeAccountId: alpha.id, locked: true })
+    render(
+      <AccountGate>
+        <div>workspace</div>
+      </AccountGate>
+    )
+    expect(screen.getByTestId("account-lock-screen-recovery-toggle")).toBeInTheDocument()
+    expect(screen.getByText("runtimeBadgeDesktop")).toBeInTheDocument()
+  })
 })
 
 // ADR-0037, "The anonymous visitor". `/share/view` renders for anyone holding

@@ -389,6 +389,8 @@ function activateVaultSession(session: BrowserVaultSession, generation: number):
   activeBrowserVaultSession = session
 }
 
+const PENDING_RECOVERY_KEY_SECRET = "pending-recovery-key"
+
 export async function provisionBrowserVault(
   localAccountId: string,
   password: string,
@@ -401,12 +403,31 @@ export async function provisionBrowserVault(
     assertVaultActivation(generation)
   }
   await repository().put(created.record)
+  await created.session.storeSecret(
+    PENDING_RECOVERY_KEY_SECRET,
+    created.recoveryKey,
+    created.record.createdAt
+  )
   if (activate) {
     activateVaultSession(created.session, generation)
   } else {
     created.session.lock()
   }
   return created.recoveryKey
+}
+
+export async function readPendingVaultRecoveryKey(localAccountId: string): Promise<string | null> {
+  if (
+    activeBrowserVaultSession?.localAccountId !== localAccountId ||
+    !activeBrowserVaultSession.isUnlocked()
+  ) {
+    return null
+  }
+  return activeBrowserVaultSession.loadSecret(PENDING_RECOVERY_KEY_SECRET)
+}
+
+export async function clearPendingVaultRecoveryKey(localAccountId: string): Promise<void> {
+  await repository().deleteSecret(localAccountId, PENDING_RECOVERY_KEY_SECRET)
 }
 
 export async function browserVaultExists(localAccountId: string): Promise<boolean> {
@@ -612,6 +633,9 @@ export async function changeBrowserVaultPassword(
   now = Date.now()
 ): Promise<void> {
   const generation = vaultActivationGeneration
+  const wasActiveUnlockedAccount =
+    activeBrowserVaultSession?.localAccountId === localAccountId &&
+    activeBrowserVaultSession.isUnlocked()
   const current = await repository().get(localAccountId)
   if (!current) throw new Error("Browser Vault is not provisioned for this account.")
   const currentPasswordKey = await derivePasswordKeyForRecord(current, currentPassword)
@@ -633,7 +657,6 @@ export async function changeBrowserVaultPassword(
       await importAesKey(masterBytes, ["encrypt", "decrypt"])
     )
     try {
-      assertVaultActivation(generation)
       await repository().put({
         ...current,
         version: 2,
@@ -653,12 +676,65 @@ export async function changeBrowserVaultPassword(
       session.lock()
       throw error
     }
-    // A committed rewrap must not be reported as an uncommitted failure.
-    if (generation === vaultActivationGeneration) activateVaultSession(session, generation)
-    else session.lock()
+    // Never replace another profile's unlocked Vault session when an inactive
+    // profile's password is changed, and never re-open a session after lock().
+    if (
+      wasActiveUnlockedAccount &&
+      generation === vaultActivationGeneration &&
+      activeBrowserVaultSession?.localAccountId === localAccountId
+    ) {
+      activateVaultSession(session, generation)
+    } else {
+      session.lock()
+    }
   } finally {
     zeroBytes(masterBytes)
     zeroBytes(nextSalt)
+  }
+}
+
+export async function rotateBrowserVaultRecoveryKey(
+  localAccountId: string,
+  currentPassword: string,
+  now = Date.now()
+): Promise<string> {
+  const current = await repository().get(localAccountId)
+  if (!current) throw new Error("Browser Vault is not provisioned for this account.")
+  validateRecord(current)
+  assertPassword(currentPassword)
+  const currentPasswordKey = await derivePasswordKeyForRecord(current, currentPassword)
+  const masterBytes = await unwrapMasterKey(
+    current.passwordWrap,
+    currentPasswordKey,
+    wrapAad(localAccountId, "password")
+  )
+  const recoveryBytes = randomBytes(32)
+  try {
+    const [recoveryKek, masterKey] = await Promise.all([
+      importAesKey(recoveryBytes, ["encrypt", "decrypt"]),
+      importAesKey(masterBytes, ["encrypt", "decrypt"]),
+    ])
+    const recoveryWrap = await wrapMasterKey(
+      masterBytes,
+      recoveryKek,
+      wrapAad(localAccountId, "recovery")
+    )
+    const recoveryKey = encodeBase64Url(recoveryBytes)
+    const writerSession = new BrowserVaultSession(localAccountId, masterKey)
+    try {
+      await repository().put({
+        ...current,
+        recoveryWrap,
+        updatedAt: now,
+      })
+      await writerSession.storeSecret(PENDING_RECOVERY_KEY_SECRET, recoveryKey, now)
+    } finally {
+      writerSession.lock()
+    }
+    return recoveryKey
+  } finally {
+    zeroBytes(masterBytes)
+    zeroBytes(recoveryBytes)
   }
 }
 

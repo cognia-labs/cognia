@@ -44,7 +44,8 @@ export async function createPasswordVerifier(password: string): Promise<Password
 export async function verifyPassword(
   password: string,
   verifier: PasswordVerifierRecord,
-  accountId?: string
+  accountId?: string,
+  recoveryKey?: string
 ): Promise<boolean> {
   assertUsablePassword(password)
   if (!isTauri()) {
@@ -55,6 +56,7 @@ export async function verifyPassword(
       password,
       verifier,
       accountId,
+      ...(recoveryKey !== undefined ? { recoveryKey } : {}),
     })
     if (typeof result !== "boolean") {
       throw new Error("Native password verification returned a malformed result.")
@@ -92,7 +94,8 @@ export async function rotateNativePassword(
   currentPassword: string,
   currentVerifier: PasswordVerifierRecord,
   newPassword: string,
-  newVerifier?: PasswordVerifierRecord
+  newVerifier?: PasswordVerifierRecord,
+  recoveryKey?: string
 ): Promise<PasswordVerifierRecord> {
   if (!isTauri()) {
     throw new Error("Native password rotation is only available in the desktop runtime.")
@@ -104,6 +107,42 @@ export async function rotateNativePassword(
       currentVerifier,
       newPassword,
       newVerifier: newVerifier ?? null,
+      ...(recoveryKey !== undefined ? { recoveryKey } : {}),
+    })
+    return normalizePasswordVerifier(result)
+  } catch (error) {
+    throw toError(error)
+  }
+}
+
+/**
+ * Redeem a Vault recovery key on the desktop host: verify and arm the recovery
+ * digest against `host_bindings`, mint and pin the replacement Argon2id
+ * verifier, and activate the native account security session.
+ */
+export async function recoverNativePassword(
+  accountId: string,
+  recoveryKey: string,
+  currentVerifier: PasswordVerifierRecord,
+  newPassword: string
+): Promise<PasswordVerifierRecord> {
+  if (!isTauri()) {
+    throw new Error("Native password recovery is only available in the desktop runtime.")
+  }
+  assertUsablePassword(newPassword)
+  assertPasswordMeetsPolicy(newPassword)
+  if (!recoveryKey.trim()) {
+    throw new Error("Vault recovery key is required.")
+  }
+  try {
+    const result = await (invoke as InvokeFn)<unknown>(ACCOUNT_PASSWORD_ROTATE_COMMAND, {
+      accountId,
+      currentPassword: "",
+      currentVerifier,
+      newPassword,
+      newVerifier: null,
+      recoveryKey: recoveryKey.trim(),
+      unlockSession: true,
     })
     return normalizePasswordVerifier(result)
   } catch (error) {

@@ -72,7 +72,9 @@ export interface AccountIdentityTabProps {
   deps?: AccountIdentityTabDeps
 }
 
-async function defaultSignOut(localAccountId: string) {
+async function defaultSignOut(
+  localAccountId: string
+): ReturnType<NonNullable<AccountIdentityTabDeps["signOut"]>> {
   const report = await signOutFromLogto({
     localAccountId,
     afterClear: (context) => completeSignOut({ localAccountId, ...context }),

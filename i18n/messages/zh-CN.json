@@ -1654,7 +1654,7 @@
       "errorThrottled": "尝试次数过多，请等待冷却结束。",
       "errorUnknown": "解锁失败。如果反复出现，请复制下方详情。",
       "errorVaultIncompatible": "该账户的保险库由更新版本的应用写入。",
-      "errorVaultNotProvisioned": "该账户在此浏览器中没有保险库。它是在桌面应用中创建的，请在桌面端解锁。",
+      "errorVaultNotProvisioned": "本设备上缺少此档案的本地加密保险库记录。请先从备份恢复，或在确认放弃旧本地数据后重置本机数据。",
       "firstRunForm": "创建本地账户",
       "firstRunTitle": "创建本地账户",
       "hidePassword": "隐藏密码",
@@ -1672,7 +1672,7 @@
       "recoveryContinue": "继续",
       "recoveryCopied": "已复制",
       "recoveryCopy": "复制恢复密钥",
-      "recoveryDescription": "继续前请保存这枚一次性恢复密钥。忘记账户密码时，可用它解锁浏览器 Vault。",
+      "recoveryDescription": "继续前请保存这枚恢复密钥。忘记账户密码时，可用它在本设备上恢复并解锁此档案的本地加密数据。",
       "recoveryDownload": "下载 .txt",
       "recoveryForm": "保存恢复密钥",
       "recoveryKeyLabel": "恢复密钥",
@@ -1875,6 +1875,12 @@
       "rememberOnDeviceOnHelp": "已开启。在这台设备上打开此档案时无需输入密码。",
       "rememberOnDevicePasswordLabel": "输入此档案的密码以确认",
       "rememberOnDevicePasswordRequired": "请输入密码以开启此选项。",
+      "replaceRecoveryKeyAction": "更换恢复密钥",
+      "replaceRecoveryKeyHeading": "恢复密钥",
+      "replaceRecoveryKeyHelp": "为此档案的本地加密数据重新生成恢复密钥。生成后，此前的旧恢复密钥会立即失效。",
+      "replaceRecoveryKeyPasswordLabel": "输入当前密码以确认",
+      "replaceRecoveryKeyPasswordRequired": "请输入当前密码以生成新的恢复密钥。",
+      "replaceRecoveryKeySuccess": "已生成新的恢复密钥，请在继续前妥善保存。",
       "save": "保存",
       "searchLabel": "搜索账户",
       "searchPlaceholder": "搜索账户",
@@ -1894,6 +1900,7 @@
       "tabSecurity": "安全",
       "title": "本地账户",
       "undo": "撤销",
+      "unlockProfileToManageSecurity": "桌面端需先切换并解锁此档案，才能修改其密码或快速解锁方式。",
       "updatedAtLabel": "更新于"
     },
     "passwordStrength": {
@@ -2030,15 +2037,10 @@
     },
     "switcher": {
       "active": "当前账户：{name}",
-      "activeBadge": "当前",
-      "confirmSwitch": "切换",
-      "heading": "账户",
       "lock": "锁定",
       "manage": "管理账户",
       "noActive": "无当前账户",
-      "operationFailed": "本地账户操作失败。",
-      "switchPasswordLabel": "密码",
-      "switchPasswordPlaceholder": "密码"
+      "operationFailed": "本地账户操作失败。"
     }
   },
   "accountSync": {

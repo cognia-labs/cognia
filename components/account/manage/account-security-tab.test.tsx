@@ -11,11 +11,15 @@ jest.mock("next-intl", () => ({
 }))
 
 const changePasswordMock = jest.fn<Promise<LocalAccountRecord>, [string, string, string]>()
+const rotateRecoveryKeyMock = jest.fn<Promise<string>, [string, string]>()
 const lockMock = jest.fn<Promise<void>, []>()
 let mockState: {
   changePassword: typeof changePasswordMock
+  rotateRecoveryKey?: typeof rotateRecoveryKeyMock
   lock: typeof lockMock
   unlockedAccountId: string | null
+  activeAccountId?: string | null
+  accounts?: LocalAccountRecord[]
 }
 jest.mock("@/stores/account/account-store", () => ({
   useAccountStore: (selector: (s: typeof mockState) => unknown) => selector(mockState),
@@ -58,8 +62,16 @@ const fillPasswords = (current: string, next: string, confirm: string) => {
 beforeEach(() => {
   jest.clearAllMocks()
   changePasswordMock.mockResolvedValue(account)
+  rotateRecoveryKeyMock.mockResolvedValue("fresh-recovery-key")
   lockMock.mockResolvedValue(undefined)
-  mockState = { changePassword: changePasswordMock, lock: lockMock, unlockedAccountId: "acct_a" }
+  mockState = {
+    changePassword: changePasswordMock,
+    rotateRecoveryKey: rotateRecoveryKeyMock,
+    lock: lockMock,
+    unlockedAccountId: "acct_a",
+    activeAccountId: "acct_a",
+    accounts: [account],
+  }
 })
 
 describe("AccountSecurityTab", () => {
@@ -188,5 +200,33 @@ describe("unlock automatically on this device", () => {
     const device = { ...account, id: "acct_desktop_local_workspace", protection: "device" as const }
     render(<AccountSecurityTab account={device} />)
     expect(screen.queryByTestId("remember-on-device-control")).not.toBeInTheDocument()
+  })
+
+  it("replaces password and quick-unlock forms with an unlock notice for an inactive desktop profile (F24)", () => {
+    enterTauriShell()
+    const inactive: LocalAccountRecord = { ...account, id: "acct_b", displayName: "Beta" }
+    mockState.accounts = [account, inactive]
+    render(<AccountSecurityTab account={inactive} />)
+
+    expect(screen.getByTestId("account-security-locked-profile-notice")).toHaveTextContent(
+      "unlockProfileToManageSecurity"
+    )
+    expect(screen.queryByLabelText("currentPasswordLabel")).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "changePassword" })).not.toBeInTheDocument()
+    expect(screen.queryByTestId("account-security-lock-now")).not.toBeInTheDocument()
+  })
+
+  it("rotates the recovery key for an unlocked password profile after confirming the current password (F15)", async () => {
+    render(<AccountSecurityTab account={account} />)
+    fireEvent.click(screen.getByTestId("account-security-rotate-recovery-key"))
+    expect(screen.getByText("replaceRecoveryKeyPasswordRequired")).toBeInTheDocument()
+    expect(rotateRecoveryKeyMock).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByLabelText("replaceRecoveryKeyPasswordLabel"), {
+      target: { value: "current-pw" },
+    })
+    fireEvent.click(screen.getByTestId("account-security-rotate-recovery-key"))
+    await waitFor(() => expect(rotateRecoveryKeyMock).toHaveBeenCalledWith("acct_a", "current-pw"))
+    expect(await screen.findByText("replaceRecoveryKeySuccess")).toBeInTheDocument()
   })
 })

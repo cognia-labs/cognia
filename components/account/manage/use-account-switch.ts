@@ -1,9 +1,8 @@
 "use client"
 
 /**
- * Shared switch/unlock-with-password flow for local accounts. Extracted so the
- * rail `AccountSwitcher` popover and the manage dialog's detail header drive the
- * exact same behaviour instead of duplicating password handling:
+ * Shared switch/unlock-with-password flow for local accounts, driving the
+ * account manage dialog's detail header:
  *
  * - switching to the active account is a no-op,
  * - switching to an already-unlocked (this-session) account is passwordless,

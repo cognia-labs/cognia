@@ -21,7 +21,6 @@
   "components/a2ui/rich-output/svg-plotter-rich-output.tsx": 1,
   "components/a2ui/rich-output/three-scene-rich-output.tsx": 1,
   "components/a2ui/rich-output/tone-synth-rich-output.tsx": 1,
-  "components/account/account-switcher.tsx": 1,
   "components/account/manage/account-danger-tab.tsx": 1,
   "components/agent-migration/agent-migration-dialog.tsx": 1,
   "components/agent/external-agent/lifecycle-status-notice.tsx": 1,

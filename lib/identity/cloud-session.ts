@@ -45,7 +45,6 @@ import { readLogtoIdentity } from "./logto-claims"
 import { UserBindingRegistry } from "./user-binding"
 
 import type { UserBindingRow } from "@/lib/accounts/account-db"
-import type { ReadyDeployment } from "./deployment-discovery"
 import type { OrgRole } from "@/types/identity"
 
 /** Who this profile is signed in as, for display. Not an authorization input. */
@@ -197,7 +196,7 @@ function normalizeIssuer(issuer: string): string {
  */
 export function sessionMatchesDeployment(
   state: CloudSessionState,
-  deployment: Pick<ReadyDeployment, "config">
+  deployment: { config?: { oidc?: { issuer?: string; audience?: string } | null } | null }
 ): boolean {
   const expectedIssuer = deployment.config?.oidc?.issuer
   if (!expectedIssuer) return state.status !== "signed-out"

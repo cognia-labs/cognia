@@ -71,7 +71,7 @@ const mockCreateRegistryAccount = jest.fn<Promise<LocalAccountRecord>, [unknown]
 const mockRenameRegistryAccount = jest.fn<Promise<LocalAccountRecord>, [string, string]>()
 const mockUpdatePasswordVerifier = jest.fn<
   Promise<LocalAccountRecord>,
-  [string, PasswordVerifierRecord]
+  [string, PasswordVerifierRecord, number?, LocalAccountRecord["protection"]?]
 >()
 const mockSetActiveAccountId = jest.fn<Promise<void>, [string]>()
 const mockDeleteRegistryAccount = jest.fn<Promise<void>, [string, unknown?]>()
@@ -118,12 +118,16 @@ jest.mock("@/lib/accounts/account-db", () => ({
 const mockCreatePasswordVerifier = jest.fn<Promise<PasswordVerifierRecord>, [string]>()
 const mockVerifyPassword = jest.fn<
   Promise<boolean>,
-  [string, PasswordVerifierRecord, string | undefined]
+  [string, PasswordVerifierRecord, string | undefined, string | undefined]
 >()
 const mockUnbindLocalAccount = jest.fn<Promise<void>, []>()
 const mockRotateNativePassword = jest.fn<
   Promise<PasswordVerifierRecord>,
-  [string, string, PasswordVerifierRecord, string, PasswordVerifierRecord?]
+  [string, string, PasswordVerifierRecord, string, PasswordVerifierRecord?, string?]
+>()
+const mockRecoverNativePassword = jest.fn<
+  Promise<PasswordVerifierRecord>,
+  [string, string, PasswordVerifierRecord, string]
 >()
 
 jest.mock("@/lib/accounts/password-client", () => ({
@@ -131,6 +135,7 @@ jest.mock("@/lib/accounts/password-client", () => ({
   verifyPassword: mockVerifyPassword,
   unbindLocalAccount: mockUnbindLocalAccount,
   rotateNativePassword: mockRotateNativePassword,
+  recoverNativePassword: mockRecoverNativePassword,
 }))
 
 let mockIsTauri = true
@@ -140,17 +145,21 @@ jest.mock("@/lib/platform/detect", () => ({
   isCapacitor: () => mockIsCapacitor,
 }))
 
-const mockProvisionBrowserVault = jest.fn<Promise<string>, [string, string]>()
+const mockProvisionBrowserVault = jest.fn<Promise<string>, [string, string, boolean?]>()
 const mockUnlockBrowserVault = jest.fn<Promise<void>, [string, string]>()
 const mockVerifyBrowserVaultPassword = jest.fn<Promise<boolean>, [string, string]>()
 const mockChangeBrowserVaultPassword = jest.fn<Promise<void>, [string, string, string]>()
 const mockResetVaultWithRecoveryKey = jest.fn<Promise<void>, [string, string, string]>()
+const mockRotateVaultRecoveryKey = jest.fn<Promise<string>, [string, string]>()
+const mockReadPendingVaultRecoveryKey = jest.fn<Promise<string | null>, [string]>()
+const mockClearPendingVaultRecoveryKey = jest.fn<Promise<void>, [string]>()
 const mockDeleteBrowserVault = jest.fn<Promise<void>, [string]>()
 const mockLockBrowserVault = jest.fn<void, []>()
 const mockBrowserVaultExists = jest.fn<Promise<boolean>, [string]>()
 let mockActiveBrowserVaultAccountId: string | null = null
 jest.mock("@/lib/runtime/browser-vault", () => ({
-  provisionBrowserVault: (...args: [string, string]) => mockProvisionBrowserVault(...args),
+  provisionBrowserVault: (...args: [string, string, boolean?]) =>
+    mockProvisionBrowserVault(...args),
   unlockBrowserVault: (...args: [string, string]) => mockUnlockBrowserVault(...args),
   verifyBrowserVaultPassword: (...args: [string, string]) =>
     mockVerifyBrowserVaultPassword(...args),
@@ -168,6 +177,9 @@ jest.mock("@/lib/runtime/browser-vault", () => ({
       : null,
   resetBrowserVaultPasswordWithRecoveryKey: (...args: [string, string, string]) =>
     mockResetVaultWithRecoveryKey(...args),
+  rotateBrowserVaultRecoveryKey: (...args: [string, string]) => mockRotateVaultRecoveryKey(...args),
+  readPendingVaultRecoveryKey: (...args: [string]) => mockReadPendingVaultRecoveryKey(...args),
+  clearPendingVaultRecoveryKey: (...args: [string]) => mockClearPendingVaultRecoveryKey(...args),
 }))
 
 const mockSetActiveRuntimeTargetContext = jest.fn<void, [string, string]>()
@@ -184,6 +196,7 @@ const mockClearAccountDatabaseSelection = jest.fn<void, []>()
 jest.mock("@/lib/db/schema", () => ({
   activateAccountDatabase: mockActivateAccountDatabase,
   clearAccountDatabaseSelection: mockClearAccountDatabaseSelection,
+  onActiveDatabaseChange: jest.fn(() => () => {}),
 }))
 
 const mockEnsureActiveDatabaseReady = jest.fn(async () => ({
@@ -672,6 +685,12 @@ beforeEach(() => {
     async (_accountId, _currentPassword, _currentVerifier, newPassword, targetVerifier) =>
       targetVerifier ?? verifier(newPassword)
   )
+  mockRecoverNativePassword.mockImplementation(
+    async (_accountId, _recoveryKey, _currentVerifier, newPassword) => verifier(newPassword)
+  )
+  mockRotateVaultRecoveryKey.mockResolvedValue("rotated-recovery-key")
+  mockReadPendingVaultRecoveryKey.mockResolvedValue(null)
+  mockClearPendingVaultRecoveryKey.mockResolvedValue()
   mockCreateRegistryAccount.mockImplementation(async (input) => {
     const value = input as {
       id?: string
@@ -2475,18 +2494,133 @@ describe("account store unlock progress and recovery", () => {
     expect(store.getState().unlockedAccountId).toBe("acct_alpha")
   })
 
-  it("refuses a recovery unlock on the desktop host, which mints no recovery key", async () => {
+  it("redeems a recovery key on the desktop host via recoverNativePassword and unlocks (F7)", async () => {
     mockIsTauri = true
-    const alpha = account("acct_alpha", "Alpha")
+    const alpha = { ...account("acct_alpha", "Alpha"), rememberOnDevice: true }
     mockListAccounts.mockResolvedValue([alpha])
     mockGetState.mockResolvedValue({ activeAccountId: "acct_alpha" })
     const store = makeStore()
     await store.getState().load()
 
+    await store.getState().unlockAccountWithRecoveryKey("acct_alpha", " key-abc ", "brand new pw")
+
+    expect(mockResetVaultWithRecoveryKey).toHaveBeenCalledWith(
+      "acct_alpha",
+      "key-abc",
+      "brand new pw"
+    )
+    expect(mockRecoverNativePassword).toHaveBeenCalledWith(
+      "acct_alpha",
+      "key-abc",
+      alpha.passwordVerifier,
+      "brand new pw"
+    )
+    expect(mockUpdatePasswordVerifier).toHaveBeenCalledWith("acct_alpha", verifier("brand new pw"))
+    expect(mockClearDeviceUnlockSecret).toHaveBeenCalledWith("acct_alpha")
+    expect(mockUpdateRememberOnDevice).toHaveBeenCalledWith("acct_alpha", false)
+    expect(store.getState().locked).toBe(false)
+    expect(store.getState().unlockedAccountId).toBe("acct_alpha")
+  })
+
+  it("persists protection: password when promoting a Capacitor device workspace and rolls back to device on vault failure (F14)", async () => {
+    mockIsTauri = false
+    mockIsCapacitor = true
+    mockDesktopLocalEnabled = true
+    const mobileWorkspace: LocalAccountRecord = {
+      ...account("local_acct_a", "Local"),
+      protection: "device",
+    }
+    mockListAccounts.mockResolvedValue([mobileWorkspace])
+    mockGetState.mockResolvedValue({ activeAccountId: "local_acct_a" })
+    mockUpdatePasswordVerifier.mockImplementation(
+      async (id, passwordVerifier, _now, protection) => ({
+        ...account(id, "Local", passwordVerifier),
+        ...(protection ? { protection } : {}),
+      })
+    )
+    const store = makeStore()
+    await store.getState().load()
+
+    mockChangeBrowserVaultPassword.mockRejectedValueOnce(new Error("vault failure"))
     await expect(
-      store.getState().unlockAccountWithRecoveryKey("acct_alpha", "key-abc", "brand new pw")
-    ).rejects.toMatchObject({ code: "vault-not-provisioned" })
-    expect(mockResetVaultWithRecoveryKey).not.toHaveBeenCalled()
+      store.getState().changePassword("local_acct_a", "", "new-mobile-pw")
+    ).rejects.toThrow("vault failure")
+    expect(mockUpdatePasswordVerifier).toHaveBeenNthCalledWith(
+      1,
+      "local_acct_a",
+      verifier("new-mobile-pw"),
+      undefined,
+      "password"
+    )
+    expect(mockUpdatePasswordVerifier).toHaveBeenNthCalledWith(
+      2,
+      "local_acct_a",
+      mobileWorkspace.passwordVerifier,
+      undefined,
+      "device"
+    )
+
+    mockUpdatePasswordVerifier.mockClear()
+    const promoted = await store.getState().changePassword("local_acct_a", "", "new-mobile-pw")
+    expect(promoted.protection).toBe("password")
+    expect(mockClearDesktopLocalPassword).toHaveBeenCalled()
+  })
+
+  it("re-surfaces an unacknowledged ordinary profile recovery key and rotates recovery keys (F15)", async () => {
+    mockIsTauri = true
+    const alpha = account("acct_alpha", "Alpha")
+    mockListAccounts.mockResolvedValue([alpha])
+    mockGetState.mockResolvedValue({ activeAccountId: "acct_alpha" })
+    mockReadPendingVaultRecoveryKey.mockResolvedValueOnce("crash-preserved-key")
+    const store = makeStore()
+    await store.getState().load()
+
+    await store.getState().unlockAccount("acct_alpha", "secret-pw")
+    expect(store.getState().pendingRecoveryKey).toBe("crash-preserved-key")
+    expect(store.getState().pendingRecoveryKeyAccountId).toBe("acct_alpha")
+
+    store.getState().acknowledgeRecoveryKey()
+    expect(mockClearPendingVaultRecoveryKey).toHaveBeenCalledWith("acct_alpha")
+    expect(store.getState().pendingRecoveryKey).toBeNull()
+
+    const rotatedKey = await store.getState().rotateRecoveryKey("acct_alpha", "secret-pw")
+    expect(rotatedKey).toBe("rotated-recovery-key")
+    expect(mockRotateNativePassword).toHaveBeenCalledWith(
+      "acct_alpha",
+      "secret-pw",
+      alpha.passwordVerifier,
+      "secret-pw",
+      alpha.passwordVerifier,
+      "rotated-recovery-key"
+    )
+    expect(store.getState().pendingRecoveryKey).toBe("rotated-recovery-key")
+  })
+
+  it("fails closed when an encrypted database already exists on disk without a BrowserVault record (C4)", async () => {
+    const DexieMod = (await import("dexie")).default
+    const existingEncrypted = new DexieMod("cognia-account-acct_orphaned-encrypted-v1")
+    existingEncrypted.version(1).stores({ items: "id" })
+    await existingEncrypted.open()
+    existingEncrypted.close()
+
+    try {
+      mockIsTauri = true
+      mockBrowserVaultExists.mockResolvedValueOnce(false)
+      const orphaned = account("acct_orphaned", "Orphaned")
+      mockListAccounts.mockResolvedValue([orphaned])
+      mockGetState.mockResolvedValue({ activeAccountId: "acct_orphaned" })
+      const store = makeStore()
+      await store.getState().load()
+
+      await expect(
+        store.getState().unlockAccount("acct_orphaned", "secret-pw")
+      ).rejects.toMatchObject({ code: "vault-not-provisioned" })
+      expect(mockProvisionBrowserVault).not.toHaveBeenCalled()
+      expect(mockUnbindLocalAccount).toHaveBeenCalled()
+      expect(store.getState().locked).toBe(true)
+    } finally {
+      await DexieMod.delete("cognia-account-acct_orphaned-encrypted-v1")
+    }
   })
 
   it("requires both a recovery key and a replacement password", async () => {
@@ -2755,7 +2889,9 @@ describe("device-managed desktop workspace", () => {
       id,
       "device-random-secret",
       expect.anything(),
-      "user-new-password"
+      "user-new-password",
+      undefined,
+      "preserved-recovery-key"
     )
     expect(mockUpdatePasswordVerifier).toHaveBeenCalledWith(
       id,

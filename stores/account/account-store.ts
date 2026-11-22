@@ -38,10 +38,12 @@ import {
 } from "@/lib/accounts/content-cipher"
 import {
   createPasswordVerifier,
+  recoverNativePassword,
   rotateNativePassword,
   unbindLocalAccount,
   verifyPassword,
 } from "@/lib/accounts/password-client"
+import { assertPasswordMeetsPolicy } from "@/lib/accounts/password-policy"
 import {
   DEV_LOCAL_ACCOUNT_DISPLAY_NAME,
   DEV_LOCAL_ACCOUNT_ID,
@@ -72,11 +74,14 @@ import { isCapacitor, isTauri } from "@/lib/platform/detect"
 import {
   changeBrowserVaultPassword,
   browserVaultExists,
+  clearPendingVaultRecoveryKey,
   deleteBrowserVault,
   getActiveBrowserVault,
   lockBrowserVault,
   provisionBrowserVault,
+  readPendingVaultRecoveryKey,
   resetBrowserVaultPasswordWithRecoveryKey,
+  rotateBrowserVaultRecoveryKey,
   unlockBrowserVault,
   verifyBrowserVaultPassword,
 } from "@/lib/runtime/browser-vault"
@@ -254,15 +259,19 @@ export interface AccountStoreState {
     password: string
   ) => Promise<void>
   /**
-   * Redeem the Browser Vault recovery key and rotate the password in one step.
-   * Browser runtimes only — the desktop host mints no recovery key, so there is
-   * nothing to redeem there and the call refuses rather than pretending.
+   * Redeem the Vault recovery key and rotate the password in one step across
+   * Browser, Tauri desktop, and Capacitor mobile runtimes.
    */
   unlockAccountWithRecoveryKey: (
     localAccountId: string,
     recoveryKey: string,
     newPassword: string
   ) => Promise<void>
+  /**
+   * Mint and persist a replacement Vault recovery key for an unlocked
+   * password-protected profile, invalidating any earlier recovery key.
+   */
+  rotateRecoveryKey: (localAccountId: string, currentPassword: string) => Promise<string>
   switchAccount: (localAccountId: string, password?: string) => Promise<void>
   renameAccount: (localAccountId: string, displayName: string) => Promise<LocalAccountRecord>
   changePassword: (
@@ -549,6 +558,11 @@ export function createAccountStore(
         record?.protection === "password"
           ? await readDesktopLocalAccountRecoveryKey().catch(() => null)
           : null
+      const pendingVaultRecovery =
+        !pendingDesktopRecovery && record?.protection !== "device"
+          ? await readPendingVaultRecoveryKey(localAccountId).catch(() => null)
+          : null
+      const pendingHandoverKey = pendingDesktopRecovery ?? pendingVaultRecovery
       assertCurrent?.()
       // Ownership transfers before publishing unlocked state: that update
       // unmounts the unlock view and aborts its now-completed request.
@@ -560,13 +574,13 @@ export function createAccountStore(
         error: null,
         autoUnlockFailure: null,
         accountRevision: state.accountRevision + 1,
-        // A recovery key still waiting in the secret store is surfaced here
-        // until it is acknowledged. An unreadable store must not fail an
+        // A recovery key still waiting in the secret store or vault is surfaced
+        // here until it is acknowledged. An unreadable store must not fail an
         // unlock the password already proved: the key is simply shown on a
         // later unlock, once the store answers.
-        ...(pendingDesktopRecovery
+        ...(pendingHandoverKey
           ? {
-              pendingRecoveryKey: pendingDesktopRecovery,
+              pendingRecoveryKey: pendingHandoverKey,
               pendingRecoveryKeyAccountId: localAccountId,
             }
           : {}),
@@ -746,6 +760,7 @@ export function createAccountStore(
         // The recovery-key screen is the last of the six first-run
         // interactions, and this key wraps a throwaway database whose password
         // is a constant in the bundle. Surfacing it would defeat the point.
+        await clearPendingVaultRecoveryKey(account.id).catch(() => undefined)
         set({ pendingRecoveryKey: null, pendingRecoveryKeyAccountId: null, error: null })
         return account.id
       } catch {
@@ -1015,6 +1030,7 @@ export function createAccountStore(
               try {
                 if (input.protection === "device") {
                   await saveDesktopLocalAccountRecoveryKey(provisioned)
+                  await clearPendingVaultRecoveryKey(localAccountId).catch(() => undefined)
                 }
                 created = await dependencies.registry.createAccount({
                   id: localAccountId,
@@ -1032,7 +1048,10 @@ export function createAccountStore(
           )
 
           if (!useBrowserVault && shouldActivate) {
-            const verified = await verifyPassword(input.password, passwordVerifier, account.id)
+            const verified =
+              input.protection === "device"
+                ? await verifyPassword(input.password, passwordVerifier, account.id)
+                : await verifyPassword(input.password, passwordVerifier, account.id, recoveryKey)
             if (!verified) {
               await dependencies.registry.deleteAccount(account.id).catch(() => {})
               await deleteBrowserVault(account.id).catch(() => {})
@@ -1141,6 +1160,12 @@ export function createAccountStore(
               if (await browserVaultExists(account.id)) {
                 await unlockBrowserVault(account.id, password)
               } else {
+                if (await Dexie.exists(encryptedAccountDatabaseName(account.id))) {
+                  throw new AccountUnlockError(
+                    "vault-not-provisioned",
+                    "This profile's encrypted database exists, but its local vault key record is missing. Restore from backup or reset local data instead of replacing the key."
+                  )
+                }
                 const recoveryKey = await provisionBrowserVault(account.id, password)
                 set({ pendingRecoveryKey: recoveryKey, pendingRecoveryKeyAccountId: account.id })
               }
@@ -1429,46 +1454,127 @@ export function createAccountStore(
             if (get().accountRevision !== revision) throw new Error("Account changed during unlock")
           }
           set({ error: null })
+          let nativeAccountActivated = false
           try {
-            if (!shouldUseBrowserVault()) {
-              throw new AccountUnlockError(
-                "vault-not-provisioned",
-                "Desktop recovery requires the native recovery flow."
-              )
-            }
-            if (!recoveryKey.trim()) {
+            const trimmedKey = recoveryKey.trim()
+            if (!trimmedKey) {
               throw new AccountUnlockError(
                 "invalid-recovery-key",
                 "Vault recovery key is required."
               )
             }
             assertPasswordProvided(newPassword)
+            assertPasswordMeetsPolicy(newPassword)
             const account = await findAccount(localAccountId)
             assertCurrent()
             publishUnlockStage(account.id, "verifying")
             // Rotating the password is part of redeeming the key, not a follow-up
             // step: unlocking alone leaves `passwordWrap` keyed to the password
             // the user just proved they no longer have.
-            await resetBrowserVaultPasswordWithRecoveryKey(
-              account.id,
-              recoveryKey.trim(),
-              newPassword
-            )
+            await resetBrowserVaultPasswordWithRecoveryKey(account.id, trimmedKey, newPassword)
+            let passwordVerifier: LocalAccountRecord["passwordVerifier"]
+            if (isTauri()) {
+              passwordVerifier = await recoverNativePassword(
+                account.id,
+                trimmedKey,
+                account.passwordVerifier,
+                newPassword
+              )
+              nativeAccountActivated = true
+            } else {
+              passwordVerifier = await createPasswordVerifier(newPassword)
+              if (!shouldUseBrowserVault()) {
+                const verified = await verifyPassword(newPassword, passwordVerifier, account.id)
+                if (!verified) {
+                  throw new AccountUnlockError(
+                    "invalid-password",
+                    "The mobile account session could not be established."
+                  )
+                }
+              }
+            }
+            const deviceManaged = isDeviceManagedAccount(account)
             // A completed rewrap must update its registry verifier even when
             // a later lock has revoked activation.
-            const passwordVerifier = await createPasswordVerifier(newPassword)
-            const updated = await dependencies.registry.updatePasswordVerifier(
-              account.id,
-              passwordVerifier
-            )
+            const updated = deviceManaged
+              ? await dependencies.registry.updatePasswordVerifier(
+                  account.id,
+                  passwordVerifier,
+                  undefined,
+                  "password"
+                )
+              : await dependencies.registry.updatePasswordVerifier(account.id, passwordVerifier)
             set((state) => ({ accounts: upsertAccount(state.accounts, updated) }))
+            if (deviceManaged) {
+              await clearDesktopLocalAccountPassword().catch(() => undefined)
+            }
+            if (isRememberedOnDevice(account)) {
+              await forgetRejectedDeviceSecret(account.id)
+            }
             assertCurrent()
             await activateUnlockedAccount(account.id, newPassword, assertCurrent)
           } catch (error) {
+            if (nativeAccountActivated) {
+              const rollbackFailures = await rollbackNativeAccountActivation(localAccountId)
+              if (rollbackFailures.length > 0) {
+                error = new AggregateError(
+                  [error, ...rollbackFailures],
+                  "Account recovery unlock failed and native rollback was incomplete."
+                )
+              }
+            }
             publishUnlockStage(localAccountId, "failed")
             throw setFailure(asUnlockError(error))
           }
         }),
+
+      rotateRecoveryKey: async (localAccountId, currentPassword) => {
+        set({ error: null })
+        try {
+          assertPasswordProvided(currentPassword)
+          const account = await findAccount(localAccountId)
+          if (isDeviceManagedAccount(account)) {
+            throw new AccountUnlockError(
+              "invalid-password",
+              "Set a password before rotating this workspace's recovery key."
+            )
+          }
+          if (isTauri() && get().unlockedAccountId !== localAccountId) {
+            throw new AccountUnlockError(
+              "invalid-password",
+              "Switch to and unlock this profile before rotating its recovery key."
+            )
+          }
+          const ok = shouldUseBrowserVault()
+            ? await verifyBrowserVaultPassword(localAccountId, currentPassword)
+            : await verifyPassword(currentPassword, account.passwordVerifier)
+          if (!ok) {
+            throw new AccountUnlockError("invalid-password", "Invalid local account password.")
+          }
+          const nextRecoveryKey = await rotateBrowserVaultRecoveryKey(
+            localAccountId,
+            currentPassword
+          )
+          if (isTauri()) {
+            await rotateNativePassword(
+              localAccountId,
+              currentPassword,
+              account.passwordVerifier,
+              currentPassword,
+              account.passwordVerifier,
+              nextRecoveryKey
+            )
+          }
+          set({
+            pendingRecoveryKey: nextRecoveryKey,
+            pendingRecoveryKeyAccountId: localAccountId,
+            error: null,
+          })
+          return nextRecoveryKey
+        } catch (error) {
+          throw setFailure(error)
+        }
+      },
 
       switchAccount: async (localAccountId, password) => {
         set({ error: null })
@@ -1530,6 +1636,12 @@ export function createAccountStore(
             if (await browserVaultExists(account.id)) {
               await unlockBrowserVault(account.id, password)
             } else {
+              if (await Dexie.exists(encryptedAccountDatabaseName(account.id))) {
+                throw new AccountUnlockError(
+                  "vault-not-provisioned",
+                  "This profile's encrypted database exists, but its local vault key record is missing. Restore from backup or reset local data instead of replacing the key."
+                )
+              }
               const recoveryKey = await provisionBrowserVault(account.id, password)
               set({ pendingRecoveryKey: recoveryKey, pendingRecoveryKeyAccountId: account.id })
             }
@@ -1615,18 +1727,29 @@ export function createAccountStore(
               throw new AccountUnlockError("invalid-password", "Invalid local account password.")
             }
             passwordVerifier = await createPasswordVerifier(newPassword)
-            updated = await dependencies.registry.updatePasswordVerifier(
-              localAccountId,
-              passwordVerifier
-            )
+            updated = deviceManaged
+              ? await dependencies.registry.updatePasswordVerifier(
+                  localAccountId,
+                  passwordVerifier,
+                  undefined,
+                  "password"
+                )
+              : await dependencies.registry.updatePasswordVerifier(localAccountId, passwordVerifier)
             try {
               await changeBrowserVaultPassword(localAccountId, currentPassword, newPassword)
             } catch (vaultError) {
               try {
-                await dependencies.registry.updatePasswordVerifier(
-                  localAccountId,
-                  account.passwordVerifier
-                )
+                await (deviceManaged
+                  ? dependencies.registry.updatePasswordVerifier(
+                      localAccountId,
+                      account.passwordVerifier,
+                      undefined,
+                      "device"
+                    )
+                  : dependencies.registry.updatePasswordVerifier(
+                      localAccountId,
+                      account.passwordVerifier
+                    ))
               } catch (rollbackError) {
                 throw new AggregateError(
                   [vaultError, rollbackError],
@@ -1635,13 +1758,25 @@ export function createAccountStore(
               }
               throw vaultError
             }
+            if (useBrowserVault && get().unlockedAccountId === localAccountId) {
+              rememberTabSessionUnlock(localAccountId, newPassword)
+            }
           } else {
-            passwordVerifier = await rotateNativePassword(
-              localAccountId,
-              currentPassword,
-              account.passwordVerifier,
-              newPassword
-            )
+            passwordVerifier = managedRecoveryKey
+              ? await rotateNativePassword(
+                  localAccountId,
+                  currentPassword,
+                  account.passwordVerifier,
+                  newPassword,
+                  undefined,
+                  managedRecoveryKey
+                )
+              : await rotateNativePassword(
+                  localAccountId,
+                  currentPassword,
+                  account.passwordVerifier,
+                  newPassword
+                )
             try {
               await changeBrowserVaultPassword(localAccountId, currentPassword, newPassword)
             } catch (vaultError) {
@@ -1977,10 +2112,11 @@ export function createAccountStore(
         // second profile created from the manage dialog is not activated, and
         // acknowledging ITS key used to delete the Local workspace's stored
         // one, which "set a password" then needed and could not find.
-        if (
-          (isTauri() || isCapacitor()) &&
-          get().pendingRecoveryKeyAccountId === deviceLocalAccountId()
-        ) {
+        const targetAccountId = get().pendingRecoveryKeyAccountId
+        if (targetAccountId) {
+          void clearPendingVaultRecoveryKey(targetAccountId).catch(() => undefined)
+        }
+        if ((isTauri() || isCapacitor()) && targetAccountId === deviceLocalAccountId()) {
           void clearDesktopLocalAccountRecoveryKey()
             .then(() =>
               set({ pendingRecoveryKey: null, pendingRecoveryKeyAccountId: null, error: null })

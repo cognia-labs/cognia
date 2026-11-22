@@ -1,4 +1,7 @@
-use base64::{engine::general_purpose::STANDARD_NO_PAD, Engine as _};
+use base64::{
+    engine::general_purpose::{STANDARD_NO_PAD, URL_SAFE_NO_PAD},
+    Engine as _,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt;
@@ -450,6 +453,7 @@ pub fn account_password_verify(
     password: String,
     verifier: AccountPasswordVerifier,
     account_id: Option<String>,
+    recovery_key: Option<String>,
 ) -> Result<bool, String> {
     let local_account_id = account_id;
     let plugin_state = app.state::<cognia_plugin_runtime::PluginRuntimeState>();
@@ -457,6 +461,7 @@ pub fn account_password_verify(
         password,
         verifier,
         local_account_id,
+        recovery_key,
         Some(&plugin_state),
         Some(&security_session),
         unix_time_secs(),
@@ -467,12 +472,17 @@ fn account_password_verify_inner(
     password: String,
     verifier: AccountPasswordVerifier,
     local_account_id: Option<String>,
+    recovery_key: Option<String>,
     plugin_state: Option<&cognia_plugin_runtime::PluginRuntimeState>,
     security_session: Option<&AccountSecuritySession>,
     now: i64,
 ) -> Result<bool, String> {
     validate_password(&password)?;
     validate_verifier_metadata(&verifier)?;
+    let recovery_digest = recovery_key
+        .as_deref()
+        .map(decode_recovery_key_digest)
+        .transpose()?;
     // Throttle EVERY attempt, not just the ones that name an account.
     // `local_account_id` is optional on the wire, so gating the backoff on it meant a
     // caller could simply omit it and get an unlimited, unthrottled oracle
@@ -504,7 +514,7 @@ fn account_password_verify_inner(
             security_session.record_password_success(&throttle_key)?;
         }
         if let Some(local_account_id) = local_account_id.as_deref() {
-            bind_host_to_account(local_account_id, &verifier)?;
+            bind_host_to_account(local_account_id, &verifier, recovery_digest.as_deref())?;
             if let Some(plugin_state) = plugin_state {
                 if let Err(error) = plugin_state.activate_account(local_account_id) {
                     crate::companion_api::host_identity::unbind_local_account();
@@ -550,57 +560,164 @@ pub async fn account_unbind_local(
 /// restore the exact old registry value if its IndexedDB commit fails. It is
 /// still recomputed against `new_password` here before the host trusts it.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub fn account_password_rotate(
+    app: tauri::AppHandle,
     security_session: tauri::State<'_, AccountSecuritySession>,
     account_id: String,
     current_password: String,
     current_verifier: AccountPasswordVerifier,
     new_password: String,
     new_verifier: Option<AccountPasswordVerifier>,
+    recovery_key: Option<String>,
+    unlock_session: Option<bool>,
 ) -> Result<AccountPasswordVerifier, String> {
     let local_account_id = account_id;
+    let plugin_state = app.state::<cognia_plugin_runtime::PluginRuntimeState>();
     account_password_rotate_inner(
         &security_session,
+        Some(&plugin_state),
         local_account_id,
         current_password,
         current_verifier,
         new_password,
         new_verifier,
+        recovery_key,
+        unlock_session.unwrap_or(false),
         unix_time_secs(),
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn account_password_rotate_inner(
     security_session: &AccountSecuritySession,
+    plugin_state: Option<&cognia_plugin_runtime::PluginRuntimeState>,
     local_account_id: String,
     current_password: String,
     current_verifier: AccountPasswordVerifier,
     new_password: String,
     new_verifier: Option<AccountPasswordVerifier>,
+    recovery_key: Option<String>,
+    unlock_session: bool,
     now: i64,
 ) -> Result<AccountPasswordVerifier, String> {
-    let active = security_session.require_account(&local_account_id)?;
-    if active.verifier_digest != verifier_digest_of(&current_verifier) {
-        return Err("the current verifier does not match the unlocked session".into());
+    if unlock_session {
+        validate_verifier_metadata(&current_verifier)?;
+        security_session.assert_unlock_target(&local_account_id)?;
+        security_session.before_password_attempt(&local_account_id, now)?;
+        let raw_recovery = match recovery_key.as_deref() {
+            Some(value) if !value.trim().is_empty() => value,
+            _ => return Err("recovery key is required".into()),
+        };
+        let recovery_digest = match decode_recovery_key_digest(raw_recovery) {
+            Ok(digest) => digest,
+            Err(error) => {
+                security_session.record_password_failure(&local_account_id, now)?;
+                return Err(error);
+            }
+        };
+        let verifier = match new_verifier {
+            Some(verifier) => {
+                if !verify_password_material(&new_password, &verifier)? {
+                    return Err("new verifier does not match the new password".into());
+                }
+                verifier
+            }
+            None => account_password_create_verifier(new_password)?,
+        };
+        security_session.record_password_success(&local_account_id)?;
+        recover_host_to_account(
+            &local_account_id,
+            &current_verifier,
+            &recovery_digest,
+            &verifier,
+            security_session,
+            now,
+        )?;
+        if let Some(plugin_state) = plugin_state {
+            if let Err(error) = plugin_state.activate_account(&local_account_id) {
+                crate::companion_api::host_identity::unbind_local_account();
+                return Err(error.to_string());
+            }
+        }
+        security_session.activate(&local_account_id, verifier_digest_of(&verifier));
+        return Ok(verifier);
     }
-    security_session.before_password_attempt(&local_account_id, now)?;
-    if !verify_password_material(&current_password, &current_verifier)? {
-        security_session.record_password_failure(&local_account_id, now)?;
-        return Err("current password is invalid".into());
-    }
-    let verifier = match new_verifier {
-        Some(verifier) => {
-            if !verify_password_material(&new_password, &verifier)? {
+
+    let recovery_digest = recovery_key
+        .as_deref()
+        .map(decode_recovery_key_digest)
+        .transpose()?;
+
+    match security_session.require_account(&local_account_id) {
+        Ok(active) => {
+            if active.verifier_digest != verifier_digest_of(&current_verifier) {
+                return Err("the current verifier does not match the unlocked session".into());
+            }
+            security_session.before_password_attempt(&local_account_id, now)?;
+            if !verify_password_material(&current_password, &current_verifier)? {
+                security_session.record_password_failure(&local_account_id, now)?;
+                return Err("current password is invalid".into());
+            }
+            let verifier = match new_verifier {
+                Some(verifier) => {
+                    if !verify_password_material(&new_password, &verifier)? {
+                        return Err("new verifier does not match the new password".into());
+                    }
+                    verifier
+                }
+                None => account_password_create_verifier(new_password)?,
+            };
+            // Persist the throttle reset BEFORE mutating the host verifier pin so a
+            // disk write failure cannot strand `host_bindings` on a rotated digest.
+            security_session.record_password_success(&local_account_id)?;
+            rebind_host_verifier(
+                &local_account_id,
+                &verifier,
+                recovery_digest.as_deref(),
+            )?;
+            security_session.activate(&local_account_id, verifier_digest_of(&verifier));
+            Ok(verifier)
+        }
+        Err(session_error) => {
+            // Compensating rollback (`new_verifier.is_some()`) may race with a
+            // concurrent `lock()` that cleared `security_session` after the
+            // initial native rotation committed. Allow rolling the host pin back
+            // without unlocking the session, provided no OTHER account is active
+            // and the caller proves both the currently-pinned password+verifier
+            // and the target rollback password+verifier.
+            let Some(rollback_verifier) = new_verifier else {
+                return Err(session_error);
+            };
+            if security_session.require_active().is_ok() {
+                return Err(session_error);
+            }
+            let current_digest = verifier_digest_of(&current_verifier);
+            match crate::companion_api::host_identity::recorded_verifier_digest(&local_account_id) {
+                Ok(Some(recorded)) if recorded == current_digest => {}
+                Ok(_) => return Err(session_error),
+                Err(crate::companion_api::host_identity::HostIdentityError::StoreUnavailable) => {
+                    return Ok(rollback_verifier);
+                }
+                Err(error) => return Err(error.to_string()),
+            }
+            security_session.before_password_attempt(&local_account_id, now)?;
+            if !verify_password_material(&current_password, &current_verifier)? {
+                security_session.record_password_failure(&local_account_id, now)?;
+                return Err("current password is invalid".into());
+            }
+            if !verify_password_material(&new_password, &rollback_verifier)? {
                 return Err("new verifier does not match the new password".into());
             }
-            verifier
+            security_session.record_password_success(&local_account_id)?;
+            rebind_host_verifier(
+                &local_account_id,
+                &rollback_verifier,
+                recovery_digest.as_deref(),
+            )?;
+            Ok(rollback_verifier)
         }
-        None => account_password_create_verifier(new_password)?,
-    };
-    rebind_host_verifier(&local_account_id, &verifier)?;
-    security_session.record_password_success(&local_account_id)?;
-    security_session.activate(&local_account_id, verifier_digest_of(&verifier));
-    Ok(verifier)
+    }
 }
 
 /// Record which person this profile belongs to, after a verified Logto sign-in.
@@ -799,15 +916,24 @@ pub fn account_clear_cloud_deployment(
 fn bind_host_to_account(
     local_account_id: &str,
     verifier: &AccountPasswordVerifier,
+    recovery_digest: Option<&str>,
 ) -> Result<(), String> {
-    use crate::companion_api::host_identity::{bind_local_account, HostIdentityError};
+    use crate::companion_api::host_identity::{
+        bind_local_account_with_recovery, HostIdentityError,
+    };
 
-    match bind_local_account(local_account_id, &verifier_digest_of(verifier)) {
+    match bind_local_account_with_recovery(
+        local_account_id,
+        &verifier_digest_of(verifier),
+        recovery_digest,
+    ) {
         Ok(_) => Ok(()),
         // A host with no security database (no companion server has ever run
         // here) is a normal desktop state, not an unlock failure.
         Err(HostIdentityError::StoreUnavailable) => Ok(()),
-        Err(error @ HostIdentityError::BindingMismatch) => Err(error.to_string()),
+        Err(error @ (HostIdentityError::BindingMismatch | HostIdentityError::InvalidRecoveryKey)) => {
+            Err(error.to_string())
+        }
         Err(error) => {
             log::warn!("host account binding failed: {error}");
             Ok(())
@@ -818,13 +944,54 @@ fn bind_host_to_account(
 fn rebind_host_verifier(
     local_account_id: &str,
     verifier: &AccountPasswordVerifier,
+    recovery_digest: Option<&str>,
 ) -> Result<(), String> {
-    use crate::companion_api::host_identity::{rebind_verifier, HostIdentityError};
+    use crate::companion_api::host_identity::{rebind_verifier_with_recovery, HostIdentityError};
 
-    match rebind_verifier(local_account_id, &verifier_digest_of(verifier)) {
+    match rebind_verifier_with_recovery(
+        local_account_id,
+        &verifier_digest_of(verifier),
+        recovery_digest,
+    ) {
         Ok(()) | Err(HostIdentityError::StoreUnavailable) => Ok(()),
         Err(error) => Err(error.to_string()),
     }
+}
+
+fn recover_host_to_account(
+    local_account_id: &str,
+    current_verifier: &AccountPasswordVerifier,
+    recovery_digest: &str,
+    new_verifier: &AccountPasswordVerifier,
+    security_session: &AccountSecuritySession,
+    now: i64,
+) -> Result<(), String> {
+    use crate::companion_api::host_identity::{recover_verifier, HostIdentityError};
+
+    match recover_verifier(
+        local_account_id,
+        &verifier_digest_of(current_verifier),
+        recovery_digest,
+        &verifier_digest_of(new_verifier),
+    ) {
+        Ok(_) | Err(HostIdentityError::StoreUnavailable) => Ok(()),
+        Err(HostIdentityError::InvalidRecoveryKey) => {
+            security_session.record_password_failure(local_account_id, now)?;
+            Err("recovery key is invalid".into())
+        }
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+fn decode_recovery_key_digest(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim().trim_end_matches('=');
+    let decoded = URL_SAFE_NO_PAD
+        .decode(trimmed.as_bytes())
+        .map_err(|_| "recovery key is malformed".to_string())?;
+    if decoded.len() != 32 {
+        return Err("recovery key is malformed".into());
+    }
+    Ok(crate::companion_api::host_identity::recovery_digest(&decoded))
 }
 
 fn verify_password_material(
@@ -1100,7 +1267,7 @@ mod tests {
         verifier: AccountPasswordVerifier,
         local_account_id: Option<String>,
     ) -> Result<bool, String> {
-        account_password_verify_inner(password, verifier, local_account_id, None, None, 0)
+        account_password_verify_inner(password, verifier, local_account_id, None, None, None, 0)
     }
 
     #[test]
@@ -1280,6 +1447,7 @@ mod tests {
             first.clone(),
             Some("acct_one".into()),
             None,
+            None,
             Some(&session),
             1,
         )
@@ -1288,17 +1456,182 @@ mod tests {
         let rotated = create_password_verifier_with_salt("battery staple", &[8_u8; 16]).unwrap();
         let rotated = account_password_rotate_inner(
             &session,
+            None,
             "acct_one".into(),
             "correct horse".into(),
             first,
             "battery staple".into(),
             Some(rotated),
+            None,
+            false,
             2,
         )
         .unwrap();
         assert!(
             account_password_verify("battery staple".into(), rotated, Some("acct_one".into()))
                 .unwrap()
+        );
+
+        unbind_local_account();
+    }
+
+    #[test]
+    fn recovery_unlock_and_locked_compensating_rollback_preserve_host_consistency() {
+        use crate::companion_api::host_identity::{current, unbind_local_account};
+        use crate::companion_api::security_store::{
+            install_security_store, test_guard, SecurityStore,
+        };
+
+        let _guard = test_guard();
+        install_security_store(Some(SecurityStore::in_memory().unwrap()));
+        unbind_local_account();
+
+        let session = AccountSecuritySession::new(None);
+        let first = create_password_verifier_with_salt("correct horse", &[7_u8; 16]).unwrap();
+        let recovery_key = URL_SAFE_NO_PAD.encode([11_u8; 32]);
+        let wrong_recovery = URL_SAFE_NO_PAD.encode([12_u8; 32]);
+
+        account_password_verify_inner(
+            "correct horse".into(),
+            first.clone(),
+            Some("acct_recover".into()),
+            Some(recovery_key.clone()),
+            None,
+            Some(&session),
+            1,
+        )
+        .unwrap();
+
+        // Simulate lock and forgotten password.
+        session.clear();
+        unbind_local_account();
+
+        // Wrong recovery key fails and does not unlock the session.
+        let err = account_password_rotate_inner(
+            &session,
+            None,
+            "acct_recover".into(),
+            String::new(),
+            first.clone(),
+            "brand new phrase".into(),
+            None,
+            Some(wrong_recovery),
+            true,
+            2,
+        )
+        .unwrap_err();
+        assert!(err.contains("recovery key"), "{err}");
+        assert!(session.require_active().is_err());
+
+        // Matching recovery key rotates the host verifier and activates the session.
+        let recovered = account_password_rotate_inner(
+            &session,
+            None,
+            "acct_recover".into(),
+            String::new(),
+            first.clone(),
+            "brand new phrase".into(),
+            None,
+            Some(recovery_key),
+            true,
+            3,
+        )
+        .unwrap();
+        assert_eq!(current().unwrap().local_account_namespace, "acct_recover");
+        assert!(session.require_account("acct_recover").is_ok());
+
+        // Simulate a rotation followed by a concurrent lock before IndexedDB rollback:
+        // compensating rollback (`new_verifier = Some(...)`) restores the old pin
+        // while keeping the session locked.
+        let tentative = account_password_rotate_inner(
+            &session,
+            None,
+            "acct_recover".into(),
+            "brand new phrase".into(),
+            recovered.clone(),
+            "temporary phrase".into(),
+            None,
+            None,
+            false,
+            4,
+        )
+        .unwrap();
+        session.clear();
+        unbind_local_account();
+
+        let rolled_back = account_password_rotate_inner(
+            &session,
+            None,
+            "acct_recover".into(),
+            "temporary phrase".into(),
+            tentative,
+            "brand new phrase".into(),
+            Some(recovered.clone()),
+            None,
+            false,
+            5,
+        )
+        .unwrap();
+        assert!(session.require_active().is_err());
+        assert!(
+            account_password_verify(
+                "brand new phrase".into(),
+                rolled_back,
+                Some("acct_recover".into())
+            )
+            .unwrap()
+        );
+
+        unbind_local_account();
+    }
+
+    #[test]
+    fn rotation_fails_before_mutating_host_pin_when_throttle_persistence_fails() {
+        use crate::companion_api::host_identity::{recorded_verifier_digest, unbind_local_account};
+        use crate::companion_api::security_store::{
+            install_security_store, test_guard, SecurityStore,
+        };
+
+        let _guard = test_guard();
+        install_security_store(Some(SecurityStore::in_memory().unwrap()));
+        unbind_local_account();
+
+        let dir = tempfile::tempdir().unwrap();
+        let session = AccountSecuritySession::new(Some(dir.path().to_path_buf()));
+        let first = create_password_verifier_with_salt("correct horse", &[7_u8; 16]).unwrap();
+        account_password_verify_inner(
+            "correct horse".into(),
+            first.clone(),
+            Some("acct_atomic".into()),
+            None,
+            None,
+            Some(&session),
+            1,
+        )
+        .unwrap();
+
+        // Replace `<data_dir>/cognia` directory with a regular file so `persist_throttle` fails.
+        let cognia_dir = dir.path().join("cognia");
+        std::fs::remove_dir_all(&cognia_dir).unwrap();
+        std::fs::write(&cognia_dir, b"not-a-dir").unwrap();
+
+        let err = account_password_rotate_inner(
+            &session,
+            None,
+            "acct_atomic".into(),
+            "correct horse".into(),
+            first.clone(),
+            "battery staple".into(),
+            None,
+            None,
+            false,
+            2,
+        );
+        assert!(err.is_err());
+        assert_eq!(
+            recorded_verifier_digest("acct_atomic").unwrap(),
+            Some(verifier_digest_of(&first)),
+            "host verifier pin must stay on `first` when throttle persistence fails"
         );
 
         unbind_local_account();
@@ -1340,6 +1673,7 @@ mod tests {
                 verifier.clone(),
                 None,
                 None,
+                None,
                 Some(&session),
                 attempt,
             )
@@ -1353,6 +1687,7 @@ mod tests {
             verifier.clone(),
             None,
             None,
+            None,
             Some(&session),
             6,
         )
@@ -1364,6 +1699,7 @@ mod tests {
         assert!(account_password_verify_inner(
             "other secret".into(),
             other,
+            None,
             None,
             None,
             Some(&session),
