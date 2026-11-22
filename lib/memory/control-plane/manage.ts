@@ -21,7 +21,14 @@ import { appendMemoryAuditEvent, createMemoryEvidence } from "@/lib/db/memory-go
 import { noteMemoryVectorFailure } from "@/lib/memory/lifecycle/enqueue-reconcile"
 import { tryBuildMemoryVectorSink } from "@/lib/memory/runtime/build-deps"
 import { storeMemoryCore } from "@/lib/memory/api/store-memory"
-import { resolveMemoryConfig, type MemoryScope, type MemoryType } from "@/types/memory/memory"
+import {
+  resolveMemoryConfig,
+  type MemoryReviewStatus,
+  type MemoryScope,
+  type MemorySensitivity,
+  type MemoryTrustState,
+  type MemoryType,
+} from "@/types/memory/memory"
 import { recordMemoryConflictGovernance } from "@/lib/governance/producers/memory"
 import { reportGovernanceProjectionFailure } from "@/lib/db/governance-ledger"
 import { hashContent } from "@/lib/project-knowledge/ingest/ingest-file"
@@ -33,12 +40,16 @@ export type ManageMemoryCommand =
       type: MemoryType
       importance: number
       tags: string[]
+      key?: string
       scope?: MemoryScope
       characterId?: string
       projectId?: string
       agentId?: string
       branch?: string
       pathPattern?: string
+      reviewStatus?: MemoryReviewStatus
+      trustState?: MemoryTrustState
+      sensitivity?: MemorySensitivity
     }
   | {
       kind: "update"
@@ -177,12 +188,16 @@ export async function manageMemory(
       type: command.type,
       importance: command.importance,
       tags: command.tags,
+      ...(command.key ? { key: command.key } : {}),
       scope: command.scope,
       characterId: command.characterId,
       projectId: command.projectId,
       agentId: command.agentId,
       branch: command.branch,
       pathPattern: command.pathPattern,
+      ...(command.reviewStatus ? { reviewStatus: command.reviewStatus } : {}),
+      ...(command.trustState ? { trustState: command.trustState } : {}),
+      ...(command.sensitivity ? { sensitivity: command.sensitivity } : {}),
       provenance: "explicit",
       piiGate: "redact",
       databaseScope: scope,
@@ -533,7 +548,12 @@ export async function manageMemory(
       return { ok: false, reason: "policy_denied" }
     }
     return commit(async () => {
-      await updateMemory(command.id, { reviewStatus: command.status })
+      await updateMemory(command.id, {
+        reviewStatus: command.status,
+        ...(command.status === "verified" && existing.trustState === "quarantined"
+          ? { trustState: "trusted" }
+          : {}),
+      })
       scope.assertActive()
       await appendMemoryAuditEvent({
         action: command.status === "verified" ? "promoted" : "conflict",
@@ -767,6 +787,9 @@ export async function manageMemory(
       ...(redactedText !== undefined ? { text: redactedText, bumpVersion: true } : {}),
       evidenceState: "supported",
       reviewStatus: nonOwnerProceduralEdit ? "pending_instruction" : "verified",
+      ...(!nonOwnerProceduralEdit && existing.trustState === "quarantined"
+        ? { trustState: "trusted" }
+        : {}),
       contaminationState: "clean",
     })
     scope.assertActive()

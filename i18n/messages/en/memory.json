@@ -152,7 +152,8 @@
     "status": {
       "review": "Review: {value}",
       "evidence": "Evidence: {value}",
-      "context": "Context: {value}"
+      "context": "Context: {value}",
+      "sensitivity": "Topic: {value}"
     },
     "moveNamespace": "Move…"
   },
@@ -235,6 +236,8 @@
     "markConflict": "Mark conflict",
     "markVerified": "Mark verified",
     "pending_instruction": "Awaiting review",
+    "quarantined": "Quarantined",
+    "sensitive": "Sensitive topic",
     "supported": "Evidence-backed",
     "unknown": "Unknown",
     "unreviewed": "Unreviewed",
@@ -301,6 +304,7 @@
       "title": "No matching memories"
     },
     "openSettings": "Memory settings",
+    "portability": "Export / Import…",
     "piiRedacted": "Saved — personal details were redacted first.",
     "pin": "Pin",
     "provenanceLabel": "Source type",
@@ -515,5 +519,69 @@
     "relocate": "Move memory",
     "resolve-conflict": "Resolve a memory conflict",
     "clear": "Clear memories"
+  },
+  "portability": {
+    "title": "Export & import memories",
+    "description": "Export a scoped bundle as JSON or Markdown, or preview and review an import before writing anything.",
+    "cancel": "Cancel",
+    "tabs": {
+      "export": "Export",
+      "import": "Import & review"
+    },
+    "export": {
+      "scopeLabel": "Scope to export",
+      "scopes": {
+        "filtered": "Current filtered view",
+        "all": "All scopes"
+      },
+      "formatLabel": "Format",
+      "formats": {
+        "json": "JSON (.json)",
+        "markdown": "Markdown (.md)"
+      },
+      "includeArchived": "Include archived memories",
+      "summary": "{count, plural, =0 {No memories to export} =1 {# memory ready to export} other {# memories ready to export}}",
+      "previewAria": "Export bundle preview",
+      "copy": "Copy",
+      "download": "Download",
+      "downloadedToast": "Exported {count, plural, =1 {# memory} other {# memories}}"
+    },
+    "import": {
+      "inputLabel": "Bundle or Markdown bullets",
+      "uploadFile": "Choose .json or .md file",
+      "placeholder": "Paste a Cognia JSON export or Markdown bullet list (- User prefers pnpm…)",
+      "targetScopeLabel": "Target scope",
+      "targetScopes": {
+        "preserve": "Keep bundle scopes"
+      },
+      "conflictLabel": "When an entry conflicts",
+      "conflicts": {
+        "skip": "Skip conflicting entries",
+        "keepBoth": "Import as conflict for review",
+        "overwrite": "Overwrite existing memory"
+      },
+      "badges": {
+        "add": "{count} new",
+        "conflict": "{count} conflicts",
+        "duplicate": "{count} duplicates skipped",
+        "pii": "{count} blocked (PII)",
+        "sensitive": "{count} sensitive (quarantined)"
+      },
+      "disposition": {
+        "add": "New",
+        "duplicate": "Duplicate",
+        "conflict": "Conflict",
+        "blocked_pii": "PII blocked"
+      },
+      "trustNote": "Imported preferences and sensitive topics enter Needs review / Quarantined until you verify them.",
+      "errors": {
+        "empty_input": "Paste or upload a bundle first.",
+        "invalid_json": "Could not parse JSON bundle.",
+        "no_memories_found": "No valid memory entries were found."
+      },
+      "confirm": "Import {count, plural, =1 {# memory} other {# memories}}",
+      "importedToast": "Imported {count, plural, =1 {# memory} other {# memories}}",
+      "failedToast": "No memories could be imported"
+    }
   }
 }

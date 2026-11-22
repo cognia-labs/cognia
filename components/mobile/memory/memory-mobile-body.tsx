@@ -27,7 +27,14 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 import { useTranslations } from "next-intl"
 import { useVirtualizer } from "@tanstack/react-virtual"
-import { ListFilterIcon, MoreHorizontalIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react"
+import {
+  ArrowLeftRightIcon,
+  ListFilterIcon,
+  MoreHorizontalIcon,
+  PlusIcon,
+  SettingsIcon,
+  Trash2Icon,
+} from "lucide-react"
 import Link from "next/link"
 
 import { Badge } from "@/components/ui/badge"
@@ -221,15 +228,24 @@ export function MemoryMobileBody({ initialSelectedId, projectId }: MemoryMobileB
                 </Link>
               </DropdownMenuItem>
               {tab === "app" ? (
-                <DropdownMenuItem
-                  variant="destructive"
-                  disabled={rows.length === 0}
-                  onSelect={() => state.requestDelete(state.visibleIds)}
-                  data-testid="mobile-memory-clear-filtered"
-                >
-                  <Trash2Icon className="size-4" />
-                  {t("clearFiltered")}
-                </DropdownMenuItem>
+                <>
+                  <DropdownMenuItem
+                    onSelect={() => state.setPortabilityOpen(true)}
+                    data-testid="mobile-memory-portability"
+                  >
+                    <ArrowLeftRightIcon className="size-4" />
+                    {t("portability")}
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    variant="destructive"
+                    disabled={rows.length === 0}
+                    onSelect={() => state.requestDelete(state.visibleIds)}
+                    data-testid="mobile-memory-clear-filtered"
+                  >
+                    <Trash2Icon className="size-4" />
+                    {t("clearFiltered")}
+                  </DropdownMenuItem>
+                </>
               ) : null}
             </DropdownMenuContent>
           </DropdownMenu>

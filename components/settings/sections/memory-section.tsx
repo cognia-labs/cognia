@@ -25,6 +25,10 @@ import { useTranslations } from "next-intl"
 import { BrainIcon } from "lucide-react"
 
 import { useMemoryInsights } from "@/hooks/memory/use-memory-insights"
+import {
+  mergeProjectMemoryPolicyMetadata,
+  readProjectMemoryPolicy,
+} from "@/lib/memory/agent-policy"
 import { useSettingsStore } from "@/stores/settings"
 import { useProjectStore } from "@/stores/project/project-store"
 import { resolveMemoryConfig, type MemoryConfig } from "@/types/memory/memory"
@@ -68,6 +72,12 @@ export function MemorySection() {
     setPanelSelection({ tabParam: requestedTab, panel })
 
   const activeProjectId = useProjectStore((state) => state.activeProjectId) ?? undefined
+  const activeProject = useProjectStore((state) =>
+    state.activeProjectId
+      ? state.projects.find((project) => project.id === state.activeProjectId)
+      : undefined
+  )
+  const updateProject = useProjectStore((state) => state.updateProject)
   const config = resolveMemoryConfig(settings?.memory)
   const insights = useMemoryInsights(config)
   const update = (patch: Partial<MemoryConfig>) => void save({ memory: { ...config, ...patch } })
@@ -93,6 +103,18 @@ export function MemorySection() {
             update={update}
             insights={insights}
             projectId={activeProjectId}
+            projectName={activeProject?.name}
+            projectIsolationMode={readProjectMemoryPolicy(activeProject).isolationMode}
+            onProjectIsolationChange={
+              activeProject
+                ? (isolationMode) =>
+                    updateProject(activeProject.id, {
+                      metadata: mergeProjectMemoryPolicyMetadata(activeProject.metadata, {
+                        isolationMode,
+                      }),
+                    })
+                : undefined
+            }
           />
         )
       case "maintenance":

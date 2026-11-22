@@ -137,4 +137,31 @@ describe("RetrievalPanel", () => {
       screen.getByRole("slider", { name: "Corroboration weight", hidden: true }).closest("[inert]")
     ).not.toBeNull()
   })
+
+  it("renders dedicated memory embedding and vector store configuration when custom source is selected (G6)", () => {
+    const update = jest.fn()
+    render(
+      <RetrievalPanel
+        config={{
+          ...DEFAULT_MEMORY_CONFIG,
+          hybridEnabled: true,
+          embeddingSource: "custom",
+          embedding: { provider: "openai", model: "text-embedding-3-small" },
+          vectorStore: { backend: "qdrant", qdrantUrl: "http://localhost:6333" },
+        }}
+        update={update}
+        insights={insights}
+      />
+    )
+    expect(screen.getByTestId("memory-backend-config")).toBeInTheDocument()
+    const modelInput = screen.getByLabelText("Embedding model")
+    expect(modelInput).toHaveValue("text-embedding-3-small")
+    fireEvent.change(modelInput, { target: { value: "text-embedding-3-large" } })
+    expect(update).toHaveBeenCalledWith({
+      embedding: expect.objectContaining({
+        provider: "openai",
+        model: "text-embedding-3-large",
+      }),
+    })
+  })
 })

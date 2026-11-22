@@ -43,9 +43,14 @@ export * from "./lifecycle/claim-support"
 export { evictOverflow, expireStale } from "./forget/decay"
 export type { DecayDeps, MemoryDecayInput, MemoryDecayNamespace } from "./forget/decay"
 
-// Control plane: injection policy + contamination classification
+// Control plane: injection policy + contamination + sensitive-topic classification
 export * from "./control-plane/policy"
 export * from "./control-plane/contamination"
+export * from "./control-plane/sensitive-topics"
+
+// Portability (scoped export + reviewed import preview) and E2E benchmark
+export * from "./portability/memory-portability"
+export * from "./eval/e2e-memory-eval"
 
 // Assembly + read runtime
 export * from "./procedural"

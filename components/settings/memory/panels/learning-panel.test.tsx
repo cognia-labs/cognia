@@ -35,4 +35,13 @@ describe("LearningPanel", () => {
       screen.getByRole("switch", { name: "Extract automatically" }).closest("[inert]")
     ).not.toBeNull()
   })
+
+  it("toggles automatic activation for sensitive topics (G3)", () => {
+    const update = jest.fn()
+    render(<LearningPanel config={DEFAULT_MEMORY_CONFIG} update={update} />)
+    const toggle = screen.getByRole("switch", { name: "Auto-activate sensitive topics" })
+    expect(toggle).not.toBeChecked()
+    fireEvent.click(toggle)
+    expect(update).toHaveBeenCalledWith({ allowSensitiveTopics: true })
+  })
 })

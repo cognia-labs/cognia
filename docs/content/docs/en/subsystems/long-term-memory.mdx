@@ -68,12 +68,12 @@ lib/memory/
   external/       providers (claude-code · codex) · discover · edit     # foreign memory files
   CONTEXT.md                                                            # domain glossary
 
-packages/memory/src/            # the extracted core — zero `@/` imports
+packages/memory/src/            # the extracted core — zero `@/` imports (incl. sensitive-topics, portability, e2e-memory-eval)
 lib/db/memories.ts              # Dexie CRUD: create/get/update/invalidate/touch/pin/list
 lib/plugin/api/memory-api.ts    # plugin-facing ctx.memory
 lib/external-bridge/handlers/memory.ts   # MCP tools
 hooks/memory/use-memory-console.ts       # the console's state, shared by desktop and phone shells
-components/memory/              # console · detail panel · conflict resolver · bulk toolbar
+components/memory/              # console · detail panel · conflict resolver · portability wizard · bulk toolbar
 components/mobile/memory/       # the phone shell over the same hook
 app/memory/                     # the management route
 ```

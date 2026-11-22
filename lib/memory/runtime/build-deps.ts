@@ -19,6 +19,7 @@
 import type { Memory, MemoryConfig } from "@/types/memory/memory"
 import type { ApplyMemoryContextDeps } from "./apply-memory-context"
 import { createProviderEmbeddingAdapter } from "@cognia/memory/runtime/provider-embedding-adapter"
+import { createVectorStore } from "@cognia/vector/store"
 import { tryBuildTwinDeps } from "@/lib/twin/runtime/build-deps"
 import {
   listActiveForReader,
@@ -219,10 +220,125 @@ export function withPersonalMemoryVisibility(
 
 /** The (non-undefined) shape returned by `tryBuildTwinDeps`. */
 type PrebuiltTwinDeps = NonNullable<Awaited<ReturnType<typeof tryBuildTwinDeps>>>
+type VectorStoreConfig = Parameters<typeof createVectorStore>[0]
 
 interface MemoryBackend {
   store: PrebuiltTwinDeps["store"]
   embedding: PrebuiltTwinDeps["embedding"]
+  vectorBackend: NonNullable<PrebuiltTwinDeps["vectorBackend"]>
+}
+
+function isCustomMemoryEmbeddingReady(
+  embedding: MemoryConfig["embedding"]
+): embedding is NonNullable<MemoryConfig["embedding"]> {
+  if (!embedding?.provider?.trim() || !embedding?.model?.trim()) return false
+  const provider = embedding.provider.trim() as VectorStoreConfig["embeddingConfig"]["provider"]
+  if (isLocalEmbeddingProvider(provider) || provider === "ollama") return true
+  return Boolean(embedding.apiKey?.trim() || embedding.baseURL?.trim())
+}
+
+function buildCustomMemoryBackend(config: MemoryConfig): MemoryBackend | undefined {
+  if (!isCustomMemoryEmbeddingReady(config.embedding)) return undefined
+  const emb = config.embedding
+  const vectorBackend = config.vectorStore?.backend ?? "native"
+  const embeddingConfig = {
+    provider: emb.provider as VectorStoreConfig["embeddingConfig"]["provider"],
+    model: emb.model,
+    dimensions: emb.dimensions,
+    baseURL: emb.baseURL,
+  }
+  const embeddingApiKey = emb.apiKey ?? ""
+  let storeConfig: VectorStoreConfig | null = null
+  const vs = config.vectorStore
+  switch (vectorBackend) {
+    case "native":
+      storeConfig = {
+        provider: "native",
+        embeddingConfig,
+        embeddingApiKey,
+        native: {},
+      }
+      break
+    case "qdrant":
+      storeConfig = vs?.qdrantUrl?.trim()
+        ? {
+            provider: "qdrant",
+            configId: "memory-qdrant",
+            embeddingConfig,
+            embeddingApiKey,
+            qdrantUrl: vs.qdrantUrl.trim(),
+            qdrantApiKey: vs.qdrantApiKey,
+          }
+        : null
+      break
+    case "pinecone":
+      storeConfig =
+        vs?.pineconeApiKey?.trim() && vs.pineconeIndexName?.trim()
+          ? {
+              provider: "pinecone",
+              configId: "memory-pinecone",
+              embeddingConfig,
+              embeddingApiKey,
+              pineconeApiKey: vs.pineconeApiKey.trim(),
+              pineconeIndexName: vs.pineconeIndexName.trim(),
+              pineconeNamespace: vs.pineconeNamespace,
+            }
+          : null
+      break
+    case "weaviate":
+      storeConfig = vs?.weaviateUrl?.trim()
+        ? {
+            provider: "weaviate",
+            configId: "memory-weaviate",
+            embeddingConfig,
+            embeddingApiKey,
+            weaviateUrl: vs.weaviateUrl.trim(),
+            weaviateApiKey: vs.weaviateApiKey,
+          }
+        : null
+      break
+    case "milvus":
+      storeConfig = vs?.milvusAddress?.trim()
+        ? {
+            provider: "milvus",
+            configId: "memory-milvus",
+            embeddingConfig,
+            embeddingApiKey,
+            milvusAddress: vs.milvusAddress.trim(),
+            milvusToken: vs.milvusToken,
+            milvusSsl: vs.milvusSsl,
+          }
+        : null
+      break
+    case "chroma":
+      storeConfig = vs?.chromaServerUrl?.trim()
+        ? {
+            provider: "chroma",
+            configId: "memory-chroma",
+            embeddingConfig,
+            embeddingApiKey,
+            chromaMode: "server",
+            chromaServerUrl: vs.chromaServerUrl.trim(),
+          }
+        : null
+      break
+  }
+  if (!storeConfig) return undefined
+  try {
+    const store = createVectorStore(storeConfig)
+    return {
+      store,
+      embedding: {
+        provider: emb.provider as PrebuiltTwinDeps["embedding"]["provider"],
+        model: emb.model,
+        apiKey: embeddingApiKey,
+        baseURL: emb.baseURL,
+      },
+      vectorBackend,
+    }
+  } catch {
+    return undefined
+  }
 }
 
 /** Why recall fell back to keyword-only search. */
@@ -261,9 +377,19 @@ async function resolveMemoryBackendOutcome(
   prebuiltTwinDeps?: PrebuiltTwinDeps
 ): Promise<{ backend?: MemoryBackend; mode: MemoryRetrievalMode }> {
   if (!config.hybridEnabled) return { mode: { kind: "bm25", reason: "hybrid_disabled" } }
-  const twinDeps = prebuiltTwinDeps ?? (await tryBuildTwinDeps({ requireEnabled: false }))
-  const store = twinDeps?.store
-  const embedding = twinDeps?.embedding
+  const resolved: MemoryBackend | undefined =
+    config.embeddingSource === "custom"
+      ? buildCustomMemoryBackend(config)
+      : (() => {
+          return undefined
+        })()
+  const twinDeps =
+    config.embeddingSource === "custom"
+      ? undefined
+      : (prebuiltTwinDeps ?? (await tryBuildTwinDeps({ requireEnabled: false })))
+  const store = resolved?.store ?? twinDeps?.store
+  const embedding = resolved?.embedding ?? twinDeps?.embedding
+  const vectorBackend = resolved?.vectorBackend ?? twinDeps?.vectorBackend ?? "native"
   if (!store || !embedding) return { mode: { kind: "bm25", reason: "no_backend" } }
   const provider = String(embedding.provider)
   if (typeof store.searchByEmbedding !== "function") {
@@ -272,7 +398,7 @@ async function resolveMemoryBackendOutcome(
   if (!config.allowCloudEmbedding && !isLocalEmbeddingProvider(embedding.provider)) {
     return { mode: { kind: "bm25", reason: "cloud_blocked", provider } }
   }
-  return { backend: { store, embedding }, mode: { kind: "hybrid", provider } }
+  return { backend: { store, embedding, vectorBackend }, mode: { kind: "hybrid", provider } }
 }
 
 /**
@@ -384,7 +510,7 @@ export async function tryBuildMemoryDeps(
           embedding: embedConfig as EmbeddingConfig & {
             provider: PrebuiltTwinDeps["embedding"]["provider"]
           },
-          vectorBackend: prebuiltTwinDeps?.vectorBackend ?? "native",
+          vectorBackend: backend.vectorBackend,
           transport: options?.signal
             ? createProviderEmbeddingAdapter({ ...embedConfig, abortSignal: options.signal })
             : embeddingTransport,

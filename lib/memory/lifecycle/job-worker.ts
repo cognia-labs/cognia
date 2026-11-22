@@ -34,7 +34,8 @@ import { resolveJobTranscriptWindow } from "@/lib/memory/lifecycle/transcript-wi
 import { detectMemoryExternalContext } from "@/lib/memory/control-plane/contamination"
 import { parseAttachmentEvidenceSourceId } from "@cognia/memory/extract/project-attachment-evidence"
 import { hasUntrustedMemoryContext } from "@/lib/memory/control-plane/policy"
-import { resolveAgentMemoryPolicy } from "@/lib/memory/agent-policy"
+import { classifySensitiveMemoryTopic } from "@cognia/memory/control-plane/sensitive-topics"
+import { readProjectMemoryPolicy, resolveAgentMemoryPolicy } from "@/lib/memory/agent-policy"
 import {
   consolidationAuditAction,
   consolidationOpMemoryId,
@@ -309,9 +310,16 @@ async function loadJobContext(job: MemoryJob): Promise<{
     throw new MemoryJobTerminalError("character_changed")
   }
   const config = effectiveConfig(settings)
-  const character = session.characterId
-    ? await resolveCharacterById(session.characterId).catch(() => undefined)
-    : undefined
+  const [character, project] = await Promise.all([
+    session.characterId
+      ? resolveCharacterById(session.characterId).catch(() => undefined)
+      : Promise.resolve(undefined),
+    session.projectId
+      ? import("@/lib/db/schema")
+          .then(({ getDb }) => getDb().projects.get(session.projectId!))
+          .catch(() => undefined)
+      : Promise.resolve(undefined),
+  ])
   const fullTranscript = messages.map((message) => ({
     id: message.id,
     role: message.role,
@@ -344,6 +352,7 @@ async function loadJobContext(job: MemoryJob): Promise<{
     config,
     session,
     agentPolicy: character?.memoryPolicy,
+    projectPolicy: readProjectMemoryPolicy(project),
     externalContext,
   })
   const allowedToLearn =
@@ -449,6 +458,7 @@ async function processTurnExtraction(job: MemoryJob): Promise<MemoryJobProcessOu
       job,
       operations,
       contaminationState: context.contaminationState,
+      allowSensitiveTopics: context.config.allowSensitiveTopics,
       evidence: { kind: "message", sourceId: turnIdentityOf(job), sourceRole: "user" },
       auditReason: "automatic_learning",
       propagateErrors: true,
@@ -568,6 +578,7 @@ async function recordProjectClaimOutcome(params: {
   job: MemoryJob
   operation: ConsolidationOp
   contaminationState: "clean" | "external-context"
+  allowSensitiveTopics?: boolean
   transcriptRevision?: number
   roleByMessageId: Map<string, string>
   excerpts: ReadonlyMap<string, string> | undefined
@@ -585,13 +596,21 @@ async function recordProjectClaimOutcome(params: {
     operation.op === "UPDATE"
       ? operation.candidate?.projectClaim
       : undefined
+  const candidateText =
+    operation.op === "ADD" || operation.op === "CONFLICT" || operation.op === "QUARANTINE"
+      ? (operation.memory.text ?? operation.candidate?.text ?? "")
+      : operation.op === "UPDATE"
+        ? (operation.candidate?.text ?? "")
+        : ""
+  const topic = classifySensitiveMemoryTopic(candidateText)
+  const quarantineSensitive = topic.sensitive && !params.allowSensitiveTopics
   const attachmentDerived = claim?.evidence?.some((reference) => reference.kind === "file")
   await updateMemory(memoryId, {
     evidenceState: "supported",
     reviewStatus: operation.op === "CONFLICT" ? "conflict" : "unreviewed",
     contaminationState: attachmentDerived ? "external-context" : params.contaminationState,
-    sensitivity: "normal",
-    ...(attachmentDerived ? { trustState: "quarantined" as const } : {}),
+    sensitivity: topic.sensitive ? "sensitive" : "normal",
+    ...(attachmentDerived || quarantineSensitive ? { trustState: "quarantined" as const } : {}),
   })
 
   for (const reference of claim?.evidence ?? []) {
@@ -737,6 +756,7 @@ async function processProjectMining(job: MemoryJob): Promise<MemoryJobProcessOut
           job,
           operation,
           contaminationState: context.contaminationState,
+          allowSensitiveTopics: context.config.allowSensitiveTopics,
           transcriptRevision: context.session.transcriptRevision,
           roleByMessageId,
           excerpts: excerptCtx.excerpts,

@@ -14,6 +14,13 @@ function state(over: Partial<MemoryConsoleState> = {}): MemoryConsoleState {
   return {
     addOpen: false,
     setAddOpen: jest.fn(),
+    portabilityOpen: false,
+    setPortabilityOpen: jest.fn(),
+    all: [],
+    rows: [],
+    projectNames: {},
+    run: jest.fn(),
+    copyText: jest.fn(),
     create: jest.fn(),
     moveMemory: undefined,
     setMoveId: jest.fn(),
@@ -46,5 +53,10 @@ describe("MemoryConsoleDialogs", () => {
   it("opens the one delete confirmation for pending ids", () => {
     render(<MemoryConsoleDialogs state={state({ pendingDelete: ["a", "b"] })} />)
     expect(screen.getByRole("alertdialog")).toHaveTextContent("Delete 2 memories?")
+  })
+
+  it("opens the portability dialog from state (G7)", () => {
+    render(<MemoryConsoleDialogs state={state({ portabilityOpen: true })} />)
+    expect(screen.getByTestId("memory-portability-dialog")).toBeInTheDocument()
   })
 })

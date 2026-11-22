@@ -11,6 +11,7 @@ import { AddMemoryDialog } from "@/components/memory/add-memory-dialog"
 import { MemoryConflictResolver } from "@/components/memory/memory-conflict-resolver"
 import { MemoryDeleteConfirm } from "@/components/memory/memory-delete-confirm"
 import { MemoryMoveDialog } from "@/components/memory/memory-move-dialog"
+import { MemoryPortabilityDialog } from "@/components/memory/memory-portability-dialog"
 import type { MemoryConsoleState } from "@/hooks/memory/use-memory-console"
 
 export function MemoryConsoleDialogs({ state }: { state: MemoryConsoleState }) {
@@ -21,6 +22,16 @@ export function MemoryConsoleDialogs({ state }: { state: MemoryConsoleState }) {
         open={state.addOpen}
         onOpenChange={state.setAddOpen}
         onCreate={state.create}
+      />
+      <MemoryPortabilityDialog
+        open={state.portabilityOpen}
+        onOpenChange={state.setPortabilityOpen}
+        allMemories={state.all}
+        filteredRows={state.rows}
+        projectNames={state.projectNames}
+        onCreate={state.create}
+        onRunCommand={state.run}
+        onCopyText={state.copyText}
       />
       <MemoryMoveDialog
         memory={state.moveMemory}

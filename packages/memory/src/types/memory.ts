@@ -37,6 +37,49 @@ export type MemorySensitivity = "unknown" | "normal" | "sensitive"
 export type MemoryStaleness = "unknown" | "fresh" | "stale" | "expired"
 export type MemoryTrustState = "trusted" | "untrusted" | "quarantined"
 
+export const SENSITIVE_MEMORY_CATEGORIES = ["health", "beliefs", "finance", "identity"] as const
+
+export type SensitiveMemoryCategory = (typeof SENSITIVE_MEMORY_CATEGORIES)[number]
+
+export type ProjectMemoryIsolationMode = "inherit" | "project-only"
+
+export interface ProjectMemoryPolicy {
+  /**
+   * `inherit` keeps normal global + workspace + character recall and learning.
+   * `project-only` narrows readable and writable scopes to `"workspace"` for
+   * sessions bound to this project.
+   */
+  isolationMode: ProjectMemoryIsolationMode
+}
+
+export type MemoryEmbeddingSource = "twin" | "custom"
+
+export type MemoryVectorBackend =
+  "native" | "qdrant" | "pinecone" | "weaviate" | "milvus" | "chroma"
+
+export interface MemoryEmbeddingBackendConfig {
+  provider: string
+  model: string
+  apiKey?: string
+  baseURL?: string
+  dimensions?: number
+}
+
+export interface MemoryVectorStoreBackendConfig {
+  backend: MemoryVectorBackend
+  qdrantUrl?: string
+  qdrantApiKey?: string
+  pineconeApiKey?: string
+  pineconeIndexName?: string
+  pineconeNamespace?: string
+  weaviateUrl?: string
+  weaviateApiKey?: string
+  milvusAddress?: string
+  milvusToken?: string
+  milvusSsl?: boolean
+  chromaServerUrl?: string
+}
+
 /**
  * `active` rows are retrievable; `invalidated` rows are soft-deleted (kept for
  * history + temporal reasoning) and excluded from retrieval.
@@ -319,10 +362,25 @@ export interface MemoryConfig {
   mineProjectContext: boolean
   /** Refuse automatic learning when a turn contains untrusted external context. */
   disableLearningOnExternalContext: boolean
+  /**
+   * Allow automatically learned sensitive-topic memories (health, beliefs,
+   * personal finance, identity) to enter active recall without manual review.
+   * Default `false`: sensitive candidates are quarantined until verified.
+   */
+  allowSensitiveTopics?: boolean
   /** Default scope new auto-extracted memories land in. */
   scopeDefault: MemoryScope
   /** Vector+BM25 hybrid vs BM25-only retrieval. */
   hybridEnabled: boolean
+  /**
+   * Which embedding + vector backend powers semantic recall (`"twin"` reuses
+   * Digital Twin's runtime adapters; `"custom"` uses dedicated memory settings).
+   */
+  embeddingSource?: MemoryEmbeddingSource
+  /** Dedicated memory embedding model when `embeddingSource === "custom"`. */
+  embedding?: MemoryEmbeddingBackendConfig
+  /** Dedicated memory vector store when `embeddingSource === "custom"`. */
+  vectorStore?: MemoryVectorStoreBackendConfig
   /**
    * Gate for sending memory text to a cloud embedding provider. Default false →
    * prefer a local embedder; if none is available, fall back to BM25-only so
@@ -425,8 +483,10 @@ export const DEFAULT_MEMORY_CONFIG: MemoryConfig = {
   autoExtract: true,
   mineProjectContext: true,
   disableLearningOnExternalContext: true,
+  allowSensitiveTopics: false,
   scopeDefault: "global",
   hybridEnabled: true,
+  embeddingSource: "twin",
   allowCloudEmbedding: false,
   retrievalTopK: 8,
   recallTokenBudget: 900,

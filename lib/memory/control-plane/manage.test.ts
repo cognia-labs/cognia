@@ -798,3 +798,24 @@ describe("database and runtime-target scope fencing (F12)", () => {
     }
   })
 })
+
+describe("manageMemory quarantined sensitive review promotion (G3)", () => {
+  it("promotes trustState from quarantined to trusted when the owner marks a sensitive draft verified", async () => {
+    mockGet.mockResolvedValueOnce({
+      id: "m-sens",
+      text: "User was diagnosed with asthma.",
+      type: "semantic",
+      version: 1,
+      sensitivity: "sensitive",
+      trustState: "quarantined",
+      reviewStatus: "unreviewed",
+    })
+    await expect(
+      manageMemory({ kind: "review", id: "m-sens", status: "verified" })
+    ).resolves.toEqual({ ok: true, memoryId: "m-sens" })
+    expect(mockUpdate).toHaveBeenCalledWith("m-sens", {
+      reviewStatus: "verified",
+      trustState: "trusted",
+    })
+  })
+})

@@ -59,6 +59,14 @@ export function LearningPanel({ config, update }: LearningPanelProps) {
           checked={config.disableLearningOnExternalContext}
           onCheckedChange={(v) => update({ disableLearningOnExternalContext: v })}
         />
+
+        <MemoryToggleRow
+          id="mem-sensitive-topics"
+          label={t("sensitiveTopics.label")}
+          description={t("sensitiveTopics.description")}
+          checked={config.allowSensitiveTopics ?? false}
+          onCheckedChange={(allowSensitiveTopics) => update({ allowSensitiveTopics })}
+        />
       </GatedGroup>
 
       <div className="space-y-1.5">

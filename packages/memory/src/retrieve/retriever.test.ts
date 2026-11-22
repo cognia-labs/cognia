@@ -1349,5 +1349,36 @@ describe("ranking extensions", () => {
       expect(ids(out)).toEqual(["sem", "epi", "low"])
       expect(rerank).not.toHaveBeenCalled()
     })
+
+    it("anchors unaccessed backfilled claim recency to observedAt rather than createdAt", async () => {
+      const day = 86_400_000
+      const out = await retrieveMemories(
+        {
+          ...base,
+          queryText: "deployment cluster",
+          now: NOW,
+          relevanceFloor: 0,
+        },
+        {
+          loadCandidates: async () => [
+            mem("Deployment cluster uses legacy Swarm", {
+              id: "ancient-backfilled",
+              createdAt: NOW,
+              lastAccessedAt: NOW,
+              accessCount: 0,
+              observedAt: NOW - 180 * day,
+            }),
+            mem("Deployment cluster uses Kubernetes", {
+              id: "recent-observed",
+              createdAt: NOW - day,
+              lastAccessedAt: NOW - day,
+              accessCount: 0,
+              observedAt: NOW - day,
+            }),
+          ],
+        }
+      )
+      expect(ids(out)).toEqual(["recent-observed", "ancient-backfilled"])
+    })
   })
 })

@@ -152,7 +152,8 @@
     "status": {
       "review": "审核：{value}",
       "evidence": "证据：{value}",
-      "context": "上下文：{value}"
+      "context": "上下文：{value}",
+      "sensitivity": "话题：{value}"
     },
     "moveNamespace": "移动…"
   },
@@ -235,6 +236,8 @@
     "markConflict": "标记冲突",
     "markVerified": "标记已验证",
     "pending_instruction": "待审阅",
+    "quarantined": "已隔离待审",
+    "sensitive": "敏感话题",
     "supported": "有证据",
     "unknown": "未知",
     "unreviewed": "未审核",
@@ -301,6 +304,7 @@
       "title": "没有匹配的记忆"
     },
     "openSettings": "记忆设置",
+    "portability": "导出 / 导入…",
     "piiRedacted": "已保存——其中的个人信息已先行脱敏。",
     "pin": "置顶",
     "provenanceLabel": "来源类型",
@@ -515,5 +519,69 @@
     "relocate": "移动记忆",
     "resolve-conflict": "解决记忆冲突",
     "clear": "清除记忆"
+  },
+  "portability": {
+    "title": "导出与导入记忆",
+    "description": "按作用域导出 JSON 或 Markdown 记忆包，或在写入前预览重复项、冲突项与可信度隔离状态。",
+    "cancel": "取消",
+    "tabs": {
+      "export": "导出",
+      "import": "导入并审阅"
+    },
+    "export": {
+      "scopeLabel": "导出范围",
+      "scopes": {
+        "filtered": "当前筛选视图",
+        "all": "全部作用域"
+      },
+      "formatLabel": "导出格式",
+      "formats": {
+        "json": "JSON (.json)",
+        "markdown": "Markdown (.md)"
+      },
+      "includeArchived": "包含已归档记忆",
+      "summary": "{count, plural, =0 {没有可导出的记忆} other {共 # 条记忆可导出}}",
+      "previewAria": "导出内容预览",
+      "copy": "复制",
+      "download": "下载文件",
+      "downloadedToast": "已导出 {count} 条记忆"
+    },
+    "import": {
+      "inputLabel": "JSON 记忆包或 Markdown 列表",
+      "uploadFile": "选择 .json 或 .md 文件",
+      "placeholder": "粘贴 Cognia JSON 导出内容或 Markdown 列表（例如：- 用户偏好 pnpm…）",
+      "targetScopeLabel": "导入目标范围",
+      "targetScopes": {
+        "preserve": "保留原包中的作用域"
+      },
+      "conflictLabel": "遇到冲突记忆时",
+      "conflicts": {
+        "skip": "跳过冲突项",
+        "keepBoth": "作为待审冲突保留两条",
+        "overwrite": "覆盖已有记忆"
+      },
+      "badges": {
+        "add": "新增 {count} 条",
+        "conflict": "冲突 {count} 条",
+        "duplicate": "重复跳过 {count} 条",
+        "pii": "隐私拦截 {count} 条",
+        "sensitive": "敏感隔离 {count} 条"
+      },
+      "disposition": {
+        "add": "新增",
+        "duplicate": "重复",
+        "conflict": "冲突",
+        "blocked_pii": "PII 拦截"
+      },
+      "trustNote": "导入的偏好指令与敏感话题会进入“待审阅 / 已隔离待审”，在人工验证前不会直接注入。",
+      "errors": {
+        "empty_input": "请先粘贴或上传导入内容。",
+        "invalid_json": "无法解析 JSON 记忆包。",
+        "no_memories_found": "未识别到有效的记忆条目。"
+      },
+      "confirm": "导入 {count} 条记忆",
+      "importedToast": "已导入 {count} 条记忆",
+      "failedToast": "未能导入任何记忆"
+    }
   }
 }

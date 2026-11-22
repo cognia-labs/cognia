@@ -19,11 +19,18 @@
 
 import { useTranslations } from "next-intl"
 
-import type { MemoryConfig } from "@/types/memory/memory"
+import type { MemoryConfig, ProjectMemoryIsolationMode } from "@/types/memory/memory"
 import type { MemoryInsights } from "@/hooks/memory/use-memory-insights"
 import { maxCombinedRecallTokens } from "@cognia/memory/runtime/recall-budget"
 import { ClampedNumberInput } from "@/components/settings/common/clamped-number-input"
 import { Label } from "@/components/ui/label"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { GatedGroup, MemoryToggleRow } from "../memory-controls"
 import { ProjectBackfillCard } from "../project-backfill-card"
 
@@ -33,6 +40,9 @@ export interface ProjectContextPanelProps {
   insights: MemoryInsights
   /** The workspace a history sweep would cover. Absent means no active one. */
   projectId?: string
+  projectName?: string
+  projectIsolationMode?: ProjectMemoryIsolationMode
+  onProjectIsolationChange?: (mode: ProjectMemoryIsolationMode) => void
 }
 
 /** Job kinds this panel is the home for. */
@@ -43,6 +53,9 @@ export function ProjectContextPanel({
   update,
   insights,
   projectId,
+  projectName,
+  projectIsolationMode = "inherit",
+  onProjectIsolationChange,
 }: ProjectContextPanelProps) {
   const t = useTranslations("settings.memory.projectContext")
 
@@ -63,6 +76,36 @@ export function ProjectContextPanel({
       <p className="text-[11px] leading-relaxed text-muted-foreground">{t("intro")}</p>
 
       <GatedGroup gated={gated} reason={gated ? gateReason : undefined} className="space-y-4">
+        <div className="space-y-1.5 rounded-md border p-3" data-testid="memory-project-isolation">
+          <Label htmlFor="mem-project-isolation" className="text-sm font-medium">
+            {projectName
+              ? t("isolation.labelNamed", { workspace: projectName })
+              : t("isolation.label")}
+          </Label>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            {projectId ? t("isolation.description") : t("isolation.noWorkspace")}
+          </p>
+          <Select
+            value={projectIsolationMode}
+            disabled={!projectId || !onProjectIsolationChange}
+            onValueChange={(value) =>
+              onProjectIsolationChange?.(value as ProjectMemoryIsolationMode)
+            }
+          >
+            <SelectTrigger
+              id="mem-project-isolation"
+              className="w-full sm:w-80"
+              aria-label={t("isolation.label")}
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="inherit">{t("isolation.options.inherit")}</SelectItem>
+              <SelectItem value="project-only">{t("isolation.options.projectOnly")}</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
         <MemoryToggleRow
           id="mem-mine-project"
           label={t("mine.label")}

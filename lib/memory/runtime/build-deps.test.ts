@@ -9,12 +9,16 @@ import { contributions } from "@/lib/memory/context"
 import type { ContextTurnContext } from "@/lib/modules/manifest-types"
 
 const mockTryBuildTwinDeps = jest.fn()
+const mockCreateVectorStore = jest.fn()
 const mockCreateProviderEmbeddingAdapter = jest.fn()
 const mockSearchByEmbedding = jest.fn()
 const mockGetSettings = jest.fn()
 const mockBuildUtilityLlmClient = jest.fn()
 const mockCreateMemoryLlmReranker = jest.fn()
 
+jest.mock("@cognia/vector/store", () => ({
+  createVectorStore: (...args: unknown[]) => mockCreateVectorStore(...args),
+}))
 jest.mock("@/lib/twin/runtime/build-deps", () => ({
   tryBuildTwinDeps: (...args: unknown[]) => mockTryBuildTwinDeps(...args),
 }))
@@ -67,6 +71,12 @@ function cfg(over: Partial<MemoryConfig> = {}): MemoryConfig {
 beforeEach(() => {
   jest.clearAllMocks()
   mockSearchByEmbedding.mockResolvedValue([{ id: "v1", content: "x", score: 0.7 }])
+  mockCreateVectorStore.mockReturnValue({
+    searchByEmbedding: mockSearchByEmbedding,
+    getDocuments: jest.fn(async () => []),
+    addDocuments: jest.fn(async () => undefined),
+    deleteDocuments: jest.fn(async () => undefined),
+  })
   mockCreateProviderEmbeddingAdapter.mockReturnValue(async () => [0.1, 0.2])
   mockGetSettings.mockResolvedValue({ theme: "dark" })
   mockBuildUtilityLlmClient.mockReturnValue({ complete: jest.fn() })
@@ -1078,5 +1088,43 @@ describe("describeMemoryRetrievalMode", () => {
       const deps = await tryBuildMemoryDeps(config)
       expect(mode.kind === "hybrid").toBe(deps?.vectorSearch !== undefined)
     }
+  })
+
+  it("builds a dedicated memory vector backend independent of Twin when embeddingSource is custom (G6)", async () => {
+    mockTryBuildTwinDeps.mockResolvedValue(undefined)
+
+    const incompleteCustom = cfg({
+      embeddingSource: "custom",
+      embedding: { provider: "openai", model: "text-embedding-3-small" },
+      allowCloudEmbedding: true,
+    })
+    await expect(describeMemoryRetrievalMode(incompleteCustom)).resolves.toEqual({
+      kind: "bm25",
+      reason: "no_backend",
+    })
+    expect(mockTryBuildTwinDeps).not.toHaveBeenCalled()
+
+    const localCustom = cfg({
+      embeddingSource: "custom",
+      embedding: { provider: "transformersjs", model: "Xenova/all-MiniLM-L6-v2" },
+      vectorStore: { backend: "native" },
+    })
+    await expect(describeMemoryRetrievalMode(localCustom)).resolves.toEqual({
+      kind: "hybrid",
+      provider: "transformersjs",
+    })
+    const deps = await tryBuildMemoryDeps(localCustom)
+    expect(deps?.embed).toBeDefined()
+    expect(deps?.vectorSearch).toBeDefined()
+    expect(mockCreateVectorStore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "native",
+        embeddingConfig: expect.objectContaining({
+          provider: "transformersjs",
+          model: "Xenova/all-MiniLM-L6-v2",
+        }),
+      })
+    )
+    expect(mockTryBuildTwinDeps).not.toHaveBeenCalled()
   })
 })

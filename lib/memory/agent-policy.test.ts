@@ -1,4 +1,6 @@
 import {
+  mergeProjectMemoryPolicyMetadata,
+  readProjectMemoryPolicy,
   resolveAgentMemoryPolicy,
   scopeAllowedByAgentMemoryPolicy,
   consolidationPermissionsForAgent,
@@ -138,6 +140,31 @@ describe("resolveAgentMemoryPolicy", () => {
         config: { ...DEFAULT_MEMORY_CONFIG, temporary: true },
       }).canAutoLearn
     ).toBe(false)
+  })
+
+  it("narrows readable and writable scopes to workspace when project isolation is project-only (G1)", () => {
+    const metadata = mergeProjectMemoryPolicyMetadata(
+      { customFlag: true },
+      { isolationMode: "project-only" }
+    )
+    const projectPolicy = readProjectMemoryPolicy({ metadata })
+    expect(projectPolicy).toEqual({ isolationMode: "project-only" })
+
+    const resolved = resolveAgentMemoryPolicy({
+      config: DEFAULT_MEMORY_CONFIG,
+      projectPolicy,
+    })
+    expect(resolved.canRecall).toBe(true)
+    expect(resolved.canAutoLearn).toBe(true)
+    expect(resolved.readableScopes).toEqual(["workspace"])
+    expect(resolved.writableScopes).toEqual(["workspace"])
+    expect(scopeAllowedByAgentMemoryPolicy(resolved, "recall", "global")).toBe(false)
+    expect(scopeAllowedByAgentMemoryPolicy(resolved, "create", "global")).toBe(false)
+    expect(scopeAllowedByAgentMemoryPolicy(resolved, "create", "workspace")).toBe(true)
+
+    const cleared = mergeProjectMemoryPolicyMetadata(metadata, { isolationMode: "inherit" })
+    expect(cleared).toEqual({ customFlag: true })
+    expect(readProjectMemoryPolicy({ metadata: cleared })).toEqual({ isolationMode: "inherit" })
   })
 })
 

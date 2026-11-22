@@ -623,3 +623,61 @@ describe("evidence recorded for the source chips", () => {
     ])
   })
 })
+
+describe("multi-session diversity, long-history fallback, and pagination (G5)", () => {
+  it("interleaves hits across distinct conversations so one verbose session cannot crowd out older ones", async () => {
+    const s1Hits = Array.from({ length: 12 }, (_, idx) => ({
+      messageId: `s1-m${idx}`,
+      sessionId: "s-verbose",
+      createdAt: 10_000 - idx,
+    }))
+    const olderSessionHits = [
+      { messageId: "s2-m1", sessionId: "s-older-a", createdAt: 2_000 },
+      { messageId: "s3-m1", sessionId: "s-older-b", createdAt: 1_000 },
+    ]
+    const result = await runProjectHistorySearch(
+      { queries: ["architecture"], scope: "messages", maxHits: 4 },
+      makeDeps({
+        searchMessages: async () => searchOutcome([...s1Hits, ...olderSessionHits]),
+      }),
+      ctx
+    )
+    if (!result.ok) throw new Error("expected success")
+    expect(result.hits).toHaveLength(4)
+    const sessionIds = new Set(result.hits.map((hit) => hit.sessionId))
+    expect(sessionIds).toEqual(new Set(["s-verbose", "s-older-a", "s-older-b"]))
+    expect(result.coverage).toBe("partial")
+    expect(result.pagination).toEqual({
+      distinctSessions: 3,
+      nextBefore: 1_000,
+    })
+  })
+
+  it("falls back to decomposed & synonym-expanded terms across sessions when literal phrase search misses", async () => {
+    const searchMessages = jest.fn(async ({ query, collapseBySession }) => {
+      if (query === "redis connection timeout") return searchOutcome([])
+      if (query === "redis" && collapseBySession) {
+        return searchOutcome([
+          {
+            messageId: "m-old-redis",
+            sessionId: "s-old",
+            snippet: { text: "fixed redis pool exhaustion", positions: [] },
+          },
+        ])
+      }
+      return searchOutcome([])
+    })
+    const result = await runProjectHistorySearch(
+      { queries: ["redis connection timeout"], scope: "messages" },
+      makeDeps({ searchMessages }),
+      ctx
+    )
+    if (!result.ok) throw new Error("expected success")
+    expect(result.hits).toHaveLength(1)
+    expect(result.hits[0]).toMatchObject({
+      sessionId: "s-old",
+      messageId: "m-old-redis",
+      matchedQuery: "redis",
+    })
+  })
+})

@@ -327,7 +327,7 @@ export async function bindMemoryGovernanceOutcome(input: {
   patch: Partial<
     Pick<
       import("@/types/memory/memory").Memory,
-      "evidenceState" | "reviewStatus" | "contaminationState" | "sensitivity"
+      "evidenceState" | "reviewStatus" | "contaminationState" | "sensitivity" | "trustState"
     >
   >
   evidence: MemoryEvidenceDraft

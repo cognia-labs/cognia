@@ -23,10 +23,14 @@
 
 import type {
   MemoryProvenance,
+  MemoryReviewStatus,
   MemoryScope,
+  MemorySensitivity,
   MemorySourceChannel,
+  MemoryTrustState,
   MemoryType,
 } from "@/types/memory/memory"
+import { classifySensitiveMemoryTopic } from "@cognia/memory/control-plane/sensitive-topics"
 import { memoryRowWithinNamespaces, type TrustedMemoryCaller } from "@cognia/memory/types/caller"
 import { captureDatabaseScope, type DatabaseScopeSnapshot } from "@/lib/db/schema"
 import { localUserCaller, resolveMemoryCaller } from "./caller"
@@ -67,6 +71,10 @@ export interface StoreMemoryCoreInput {
   importance?: number
   tags?: string[]
   provenance: MemoryProvenance
+  /** Optional governance overrides (e.g. conservative quarantine on bundle import). */
+  reviewStatus?: MemoryReviewStatus
+  trustState?: MemoryTrustState
+  sensitivity?: MemorySensitivity
   /** PII gate mode; external surfaces must use "block". */
   piiGate?: "block" | "redact"
   source?: { sessionId?: string; messageId?: string }
@@ -258,6 +266,15 @@ async function applyStoreMemory(
   }
 
   const tags = (input.tags ?? []).map((t) => t.trim()).filter(Boolean)
+  const topic = classifySensitiveMemoryTopic(text)
+  const quarantineSensitive =
+    input.provenance !== "explicit" && topic.sensitive && !config.allowSensitiveTopics
+  const effectiveSensitivity: MemorySensitivity =
+    input.sensitivity ?? (topic.sensitive ? "sensitive" : "normal")
+  const effectiveTrustState: MemoryTrustState | undefined =
+    input.trustState ?? (quarantineSensitive ? "quarantined" : undefined)
+  const defaultReviewStatus: MemoryReviewStatus =
+    input.reviewStatus ?? (input.provenance === "explicit" ? "verified" : "unreviewed")
   const candidate = {
     type,
     text,
@@ -300,14 +317,10 @@ async function applyStoreMemory(
               }
               await memDb.updateMemory(id, {
                 evidenceState: "supported",
-                reviewStatus:
-                  op.op === "CONFLICT"
-                    ? "conflict"
-                    : input.provenance === "explicit"
-                      ? "verified"
-                      : "unreviewed",
+                reviewStatus: op.op === "CONFLICT" ? "conflict" : defaultReviewStatus,
                 contaminationState: input.provenance === "external" ? "external-context" : "clean",
-                sensitivity: "normal",
+                sensitivity: effectiveSensitivity,
+                ...(effectiveTrustState ? { trustState: effectiveTrustState } : {}),
               })
               await governance.createMemoryEvidence({
                 memoryId: id,
@@ -423,11 +436,10 @@ async function applyStoreMemory(
                 evidenceState: "supported",
                 reviewStatus: applied.some((op) => op.op === "CONFLICT" && op.memory.id === id)
                   ? "conflict"
-                  : input.provenance === "explicit"
-                    ? "verified"
-                    : "unreviewed",
+                  : defaultReviewStatus,
                 contaminationState: input.provenance === "external" ? "external-context" : "clean",
-                sensitivity: "normal",
+                sensitivity: effectiveSensitivity,
+                ...(effectiveTrustState ? { trustState: effectiveTrustState } : {}),
               })
               await governance.createMemoryEvidence({
                 memoryId: id,
@@ -562,10 +574,11 @@ async function applyStoreMemory(
     sourceChannel: input.attribution?.channel,
     sourcePluginId: input.attribution?.pluginId,
     evidenceState: "supported" as const,
-    reviewStatus: input.provenance === "explicit" ? ("verified" as const) : ("unreviewed" as const),
+    reviewStatus: defaultReviewStatus,
     contaminationState:
       input.provenance === "external" ? ("external-context" as const) : ("clean" as const),
-    sensitivity: "normal" as const,
+    sensitivity: effectiveSensitivity,
+    ...(effectiveTrustState ? { trustState: effectiveTrustState } : {}),
     ...(input.scopeRationale ? { scopeRationale: input.scopeRationale } : {}),
   }
   beforeWrite()

@@ -417,6 +417,14 @@ describe("corroboration and compaction", () => {
     expect(screen.getByTestId("memory-inspector-compacted").textContent).toBe("compacted")
   })
 
+  it("badges sensitive and quarantined governance state (G3)", () => {
+    setup({ memory: mem({ sensitivity: "sensitive", trustState: "quarantined" }) })
+    expect(screen.getByTestId("memory-inspector-sensitive").textContent).toContain(
+      "Sensitive topic"
+    )
+    expect(screen.getByTestId("memory-inspector-quarantined").textContent).toBe("Quarantined")
+  })
+
   it("shows no compacted badge otherwise", () => {
     setup()
     expect(screen.queryByTestId("memory-inspector-compacted")).toBeNull()

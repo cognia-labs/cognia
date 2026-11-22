@@ -40,7 +40,7 @@ description: 持久化、受证据治理的跨会话记忆 —— 租约式后�
 | 治理状态 | `status`（`active` \| `invalidated`）、`evidenceState`（`legacy` \| `supported`）、`reviewStatus`（`unreviewed` \| `verified` \| `conflict`）、`trustState?`、`contaminationState`、`sensitivity` | 外部上下文或附件派生的候选默认保持隔离待审，直至显式审核 |
 | 来源边界 | `provenance`（`user` \| `explicit` \| `inbound` \| `system` \| `external`）、`sourceSessionId?`、`sourceMessageId?` | 仅 `user` / `explicit` 可成为直接生效的 `procedural` 指令 |
 
-`AppSettings.memory` 中的 `MemoryConfig` 统一管理全局学习（`enabled`、`learnFromChats`、`autoExtract`、`defaultScope`、`disableLearningOnExternalContext`）、项目上下文（`mineProjectContext`、`injectProjectContext`、`projectContextTopK`、`projectContextTokenBudget`）、检索（`useMemory`、`hybridEnabled`、`allowCloudEmbedding`、`queryExpansionEnabled`、`llmRerankEnabled`、`sessionRecallEnabled`、`corroborationWeight`、`retrievalTopK`、`relevanceFloor`、`tokenBudget`）、生命周期（`maxActivePerScope`、`maxIdleDays`、`decayHalfLifeDays`、`accessReinforcementWeight`、`compactColdEpisodic`、`dedupColdClusters`、`coldRetentionThreshold`）及隐私授权（`temporary`、`principalGrants`）。单会话 `session.memoryUse` 与 `session.memoryLearn` 可独立覆盖全局默认值，并受 `Character.memoryPolicy` 上限约束（`lib/memory/agent-policy.ts`）。
+`AppSettings.memory` 中的 `MemoryConfig` 统一管理全局学习（`enabled`、`learnFromChats`、`autoExtract`、`scopeDefault`、`disableLearningOnExternalContext`、`allowSensitiveTopics`）、项目上下文（`mineProjectContext`、`enableProjectContinuity`、`projectRecallTopK`、`projectRecallTokenBudget`，以及工作区级 `ProjectMemoryPolicy.isolationMode` `"inherit" | "project-only"`）、检索（`useMemory`、`hybridEnabled`、`embeddingSource` `"twin" | "custom"`、`embedding`、`vectorStore`、`allowCloudEmbedding`、`enableQueryExpansion`、`llmRerank`、`sessionRecallRouting`、`beliefRankingWeight`、`retrievalTopK`、`relevanceFloor`、`recallTokenBudget`）、生命周期（`maxActivePerScope`、`maxIdleDays`、`decayHalfLifeDays`、`accessReinforcementWeight`、`compactColdEpisodic`、`dedupColdClusters`、`coldRetentionThreshold`）及隐私授权（`temporary`、`principalGrants`）。单会话 `session.memoryUse` 与 `session.memoryLearn` 可独立覆盖全局默认值，并同时受 `Character.memoryPolicy` 与工作区 `project-only` 隔离策略上限约束（`lib/memory/agent-policy.ts`）。
 
 ## 两条路径
 
@@ -86,7 +86,9 @@ flowchart TB
 
 ## 检索后端与降级提示
 
-`tryBuildTwinDeps`（`lib/twin/runtime/build-deps.ts` + `lib/twin/runtime/twin-embedding.ts`）按需解析共享 embedding 与向量检索适配器，无需启动 Twin 同步后台。仅当向量库可用且（已开启 `allowCloudEmbedding` 或使用本地 `transformersjs`）时才启用混合向量检索；否则自动回退到纯 BM25，并在 `MemoryRetrievalChip` 与 `RetrievalModeAlert`（直达 `/twin` 配置向量后端）中如实展示原因。
+记忆检索既支持**与数字分身共用后端**（`embeddingSource: "twin"`，由 `tryBuildTwinDeps` 按需构建适配器，无需启动 Twin 同步后台），也支持在「设置 → 记忆 → 检索」中配置**记忆独立的向量模型与向量存储后端**（`embeddingSource: "custom"`、`embedding`、`vectorStore`）。仅当向量库可用且（已开启 `allowCloudEmbedding` 或使用本地 `transformersjs`）时才启用混合向量检索；否则自动回退到纯 BM25，并在 `MemoryRetrievalChip` 与 `RetrievalModeAlert` 中如实展示原因。
+
+对开启项目连续性的工作区会话，`project_history_search`（`lib/memory/project-history-tool.ts`）支持跨会话轮询去重、分词/同义词回退检索及 `pagination.nextBefore` 深历史翻页。`/memory` 控制台内置按范围导出与导入审阅向导（`components/memory/memory-portability-dialog.tsx`），并在 `@cognia/memory/eval/e2e-memory-eval` 中提供覆盖抽取、知识更新、跨会话与时序推理、拒答及来源/敏感话题隔离的端到端质量评测套件。
 
 ## 下一步
 

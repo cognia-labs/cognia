@@ -256,6 +256,12 @@ describe("MemoryRow — restore, move, pin marker", () => {
     expect(onRestore).toHaveBeenCalledWith("m1")
   })
 
+  it("surfaces sensitive and quarantined badges on sensitive drafts (G3)", () => {
+    setup({ sensitivity: "sensitive", trustState: "quarantined", reviewStatus: "unreviewed" })
+    expect(screen.getByTestId("memory-row-sensitive")).toHaveTextContent("Sensitive topic")
+    expect(screen.getByTestId("memory-row-quarantined")).toHaveTextContent("Quarantined")
+  })
+
   it("moves a live row from the menu, and hands copy to the caller", async () => {
     const onMove = jest.fn()
     const onCopy = jest.fn()

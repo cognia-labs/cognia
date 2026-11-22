@@ -8,6 +8,7 @@
  */
 
 import type { ChatSession, AppSettings } from "@cognia/agent-config-types"
+import { classifySensitiveMemoryTopic } from "@cognia/memory/control-plane/sensitive-topics"
 import type { MemoryConfig } from "@/types/memory/memory"
 import type { MemoryMaintenanceDeps } from "./maintenance"
 import {
@@ -62,11 +63,18 @@ export async function buildEpisodicMaintenanceDeps(
     const memoryId = consolidationOpMemoryId(operation)
     const auditAction = consolidationAuditAction(operation)
     if (!memoryId || !auditAction) return
+    const text =
+      operation.op === "ADD" || operation.op === "CONFLICT"
+        ? (operation.memory.text ?? operation.candidate?.text ?? "")
+        : ((await memDb.getMemory(memoryId).catch(() => undefined))?.text ?? "")
+    const topic = classifySensitiveMemoryTopic(text)
+    const quarantineSensitive = topic.sensitive && !config.allowSensitiveTopics
     await memDb.updateMemory(memoryId, {
       evidenceState: "supported",
       reviewStatus: operation.op === "CONFLICT" ? "conflict" : "unreviewed",
       contaminationState: targetContamination,
-      sensitivity: "normal",
+      sensitivity: topic.sensitive ? "sensitive" : "normal",
+      ...(quarantineSensitive ? { trustState: "quarantined" } : {}),
     })
     await createMemoryEvidence({
       memoryId,
@@ -80,7 +88,8 @@ export async function buildEpisodicMaintenanceDeps(
       action: auditAction,
       memoryId,
       sessionId: targetSessionId,
-      reason: "session_distillation",
+      reason: quarantineSensitive ? "sensitive_topic_quarantined" : "session_distillation",
+      ...(topic.sensitive ? { metadata: { sensitiveCategories: topic.categories.join(",") } } : {}),
     })
     recordedMemoryIds.add(memoryId)
   }

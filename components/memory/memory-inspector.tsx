@@ -366,6 +366,24 @@ export function MemoryInspector({
                   value: tGovernance(memory.contaminationState ?? "unknown"),
                 })}
               </Badge>
+              {memory.sensitivity === "sensitive" ? (
+                <Badge
+                  variant="secondary"
+                  className="font-normal"
+                  data-testid="memory-inspector-sensitive"
+                >
+                  {t("status.sensitivity", { value: tGovernance("sensitive") })}
+                </Badge>
+              ) : null}
+              {memory.trustState === "quarantined" ? (
+                <Badge
+                  variant="secondary"
+                  className="font-normal"
+                  data-testid="memory-inspector-quarantined"
+                >
+                  {tGovernance("quarantined")}
+                </Badge>
+              ) : null}
             </div>
             {onReview && !invalidated ? (
               <div className="mt-2 flex flex-wrap items-center gap-2">

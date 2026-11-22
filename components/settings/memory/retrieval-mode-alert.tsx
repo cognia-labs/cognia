@@ -27,6 +27,8 @@ export interface RetrievalModeAlertProps {
   /** Flip `hybridEnabled` / `allowCloudEmbedding` in place. */
   onEnableHybrid: () => void
   onAllowCloudEmbedding: () => void
+  /** Destination for embedding configuration (`/twin` when shared, or memory retrieval tab). */
+  configureHref?: string
   /** Hide the "all good" state where a green banner would just be noise. */
   quietWhenHealthy?: boolean
 }
@@ -35,6 +37,7 @@ export function RetrievalModeAlert({
   mode,
   onEnableHybrid,
   onAllowCloudEmbedding,
+  configureHref = "/twin",
   quietWhenHealthy,
 }: RetrievalModeAlertProps) {
   const t = useTranslations("settings.memory.retrievalMode")
@@ -90,7 +93,7 @@ export function RetrievalModeAlert({
         ) : null}
         {mode.reason === "no_backend" || mode.reason === "store_unsupported" ? (
           <Button size="sm" variant="outline" asChild>
-            <Link href="/twin">
+            <Link href={configureHref}>
               <ExternalLinkIcon className="size-3.5" />
               {t("actions.configureEmbedding")}
             </Link>

@@ -28411,7 +28411,8 @@
       "status": {
         "context": "上下文：{value}",
         "evidence": "证据：{value}",
-        "review": "审核：{value}"
+        "review": "审核：{value}",
+        "sensitivity": "话题：{value}"
       },
       "tagsLabel": "标签",
       "tagsPlaceholder": "用逗号分隔的标签",
@@ -28497,6 +28498,8 @@
       "markConflict": "标记冲突",
       "markVerified": "标记已验证",
       "pending_instruction": "待审阅",
+      "quarantined": "已隔离待审",
+      "sensitive": "敏感话题",
       "supported": "有证据",
       "unknown": "未知",
       "unreviewed": "未审核",
@@ -28687,6 +28690,7 @@
       "piiRedacted": "已保存——其中的个人信息已先行脱敏。",
       "pin": "置顶",
       "pinnedLabel": "已置顶",
+      "portability": "导出 / 导入…",
       "provenanceLabel": "来源类型",
       "restore": "恢复",
       "restoredToast": "已恢复 {count} 条记忆",
@@ -28735,6 +28739,70 @@
         "pinned": "置顶"
       },
       "viewsLabel": "记忆视图"
+    },
+    "portability": {
+      "cancel": "取消",
+      "description": "按作用域导出 JSON 或 Markdown 记忆包，或在写入前预览重复项、冲突项与可信度隔离状态。",
+      "export": {
+        "copy": "复制",
+        "download": "下载文件",
+        "downloadedToast": "已导出 {count} 条记忆",
+        "formatLabel": "导出格式",
+        "formats": {
+          "json": "JSON (.json)",
+          "markdown": "Markdown (.md)"
+        },
+        "includeArchived": "包含已归档记忆",
+        "previewAria": "导出内容预览",
+        "scopeLabel": "导出范围",
+        "scopes": {
+          "all": "全部作用域",
+          "filtered": "当前筛选视图"
+        },
+        "summary": "{count, plural, =0 {没有可导出的记忆} other {共 # 条记忆可导出}}"
+      },
+      "import": {
+        "badges": {
+          "add": "新增 {count} 条",
+          "conflict": "冲突 {count} 条",
+          "duplicate": "重复跳过 {count} 条",
+          "pii": "隐私拦截 {count} 条",
+          "sensitive": "敏感隔离 {count} 条"
+        },
+        "confirm": "导入 {count} 条记忆",
+        "conflictLabel": "遇到冲突记忆时",
+        "conflicts": {
+          "keepBoth": "作为待审冲突保留两条",
+          "overwrite": "覆盖已有记忆",
+          "skip": "跳过冲突项"
+        },
+        "disposition": {
+          "add": "新增",
+          "blocked_pii": "PII 拦截",
+          "conflict": "冲突",
+          "duplicate": "重复"
+        },
+        "errors": {
+          "empty_input": "请先粘贴或上传导入内容。",
+          "invalid_json": "无法解析 JSON 记忆包。",
+          "no_memories_found": "未识别到有效的记忆条目。"
+        },
+        "failedToast": "未能导入任何记忆",
+        "importedToast": "已导入 {count} 条记忆",
+        "inputLabel": "JSON 记忆包或 Markdown 列表",
+        "placeholder": "粘贴 Cognia JSON 导出内容或 Markdown 列表（例如：- 用户偏好 pnpm…）",
+        "targetScopeLabel": "导入目标范围",
+        "targetScopes": {
+          "preserve": "保留原包中的作用域"
+        },
+        "trustNote": "导入的偏好指令与敏感话题会进入“待审阅 / 已隔离待审”，在人工验证前不会直接注入。",
+        "uploadFile": "选择 .json 或 .md 文件"
+      },
+      "tabs": {
+        "export": "导出",
+        "import": "导入并审阅"
+      },
+      "title": "导出与导入记忆"
     },
     "projectKind": {
       "constraint": "约束",
@@ -55506,6 +55574,10 @@
             "global": "全局",
             "workspace": "当前工作区"
           }
+        },
+        "sensitiveTopics": {
+          "description": "允许自动学习到的健康医疗、宗教/政治信仰、个人财务及身份属性事实直接参与召回。关闭时，敏感候选会保持隔离状态，需在 /memory 中人工验证后才会注入。",
+          "label": "自动启用敏感话题记忆"
         }
       },
       "maintenance": {
@@ -55641,6 +55713,16 @@
           "label": "把学到的内容告诉模型"
         },
         "intro": "Cognia 可以阅读本工作区先前的对话，并保留其中确立的项目事实，让新会话不必从零开始。学习与告知模型是两个开关，默认值不同。",
+        "isolation": {
+          "description": "“仅工作区”会将本工作区中的所有会话限制为仅读写工作区范围记忆，禁止读取或写入全局个人记忆，避免跨项目串味。",
+          "label": "工作区记忆隔离",
+          "labelNamed": "工作区记忆隔离（{workspace}）",
+          "noWorkspace": "打开一个工作区后即可配置其记忆隔离模式。",
+          "options": {
+            "inherit": "标准继承（全局 + 工作区）",
+            "projectOnly": "仅工作区（严格项目隔离）"
+          }
+        },
         "jobs": {
           "failed": "{count, plural, other {# 个在重试后放弃}}",
           "pending": "{count, plural, =0 {没有排队任务} other {# 个任务排队或运行中}}",
@@ -55656,6 +55738,49 @@
         }
       },
       "retrieval": {
+        "backend": {
+          "apiKeyLabel": "API 密钥",
+          "baseUrlLabel": "基础地址（可选）",
+          "modelLabel": "向量模型",
+          "pineconeIndexLabel": "Pinecone 索引名称",
+          "placeholders": {
+            "apiKey": "sk-...",
+            "chromaUrl": "http://localhost:8000",
+            "cloudUrl": "https://...",
+            "milvusAddress": "localhost:19530",
+            "model": "Xenova/all-MiniLM-L6-v2",
+            "ollamaUrl": "http://127.0.0.1:11434",
+            "pineconeIndex": "cognia-memory",
+            "qdrantUrl": "http://localhost:6333",
+            "weaviateUrl": "http://localhost:8080"
+          },
+          "providerLabel": "向量模型服务商",
+          "providers": {
+            "cohere": "Cohere",
+            "google": "Google Gemini",
+            "mistral": "Mistral",
+            "ollama": "Ollama（本地）",
+            "openai": "OpenAI",
+            "transformersjs": "Transformers.js（本地）",
+            "voyage": "Voyage AI"
+          },
+          "sourceDescription": "可与数字分身共用向量模型和向量库，也可为长期记忆单独配置独立的检索后端。",
+          "sourceLabel": "向量化与向量库后端",
+          "sources": {
+            "custom": "记忆独立后端",
+            "twin": "与数字分身共用"
+          },
+          "vectorEndpointLabel": "向量库地址 / URL",
+          "vectorStoreLabel": "向量存储后端",
+          "vectorStores": {
+            "chroma": "Chroma",
+            "milvus": "Milvus",
+            "native": "本地 / 内置存储",
+            "pinecone": "Pinecone",
+            "qdrant": "Qdrant",
+            "weaviate": "Weaviate"
+          }
+        },
         "beliefWeight": {
           "description": "让在多次对话中得到印证的记忆排得更靠前。关闭时排序不考虑佐证，但记忆检查器中仍会显示。",
           "label": "佐证权重",

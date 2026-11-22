@@ -4,9 +4,41 @@ import {
   type MemoryExternalContextSource,
   type MemorySessionPolicy,
 } from "@/lib/memory/control-plane/policy"
-import { resolveMemoryConfig, type MemoryConfig, type MemoryScope } from "@/types/memory/memory"
+import {
+  resolveMemoryConfig,
+  type MemoryConfig,
+  type MemoryScope,
+  type ProjectMemoryIsolationMode,
+  type ProjectMemoryPolicy,
+} from "@/types/memory/memory"
 
 const ALL_SCOPES: readonly MemoryScope[] = ["global", "workspace", "character", "agent"]
+
+export function readProjectMemoryPolicy(
+  project: { metadata?: Record<string, unknown> } | null | undefined
+): ProjectMemoryPolicy {
+  const raw = project?.metadata?.memoryPolicy
+  if (raw && typeof raw === "object") {
+    const mode = (raw as { isolationMode?: unknown }).isolationMode
+    if (mode === "project-only" || mode === "inherit") {
+      return { isolationMode: mode as ProjectMemoryIsolationMode }
+    }
+  }
+  return { isolationMode: "inherit" }
+}
+
+export function mergeProjectMemoryPolicyMetadata(
+  metadata: Record<string, unknown> | undefined,
+  policy: ProjectMemoryPolicy
+): Record<string, unknown> {
+  const next = { ...(metadata ?? {}) }
+  if (policy.isolationMode === "inherit") {
+    delete next.memoryPolicy
+  } else {
+    next.memoryPolicy = { isolationMode: policy.isolationMode }
+  }
+  return next
+}
 
 export interface ResolvedAgentMemoryPolicy {
   canRecall: boolean
@@ -25,6 +57,7 @@ export interface ResolvedAgentMemoryPolicy {
 export function resolveAgentMemoryPolicy(input: {
   config: Partial<MemoryConfig>
   agentPolicy?: AgentMemoryPolicy
+  projectPolicy?: ProjectMemoryPolicy
   session?: MemorySessionPolicy
   externalContext?: readonly MemoryExternalContextSource[]
 }): ResolvedAgentMemoryPolicy {
@@ -35,21 +68,25 @@ export function resolveAgentMemoryPolicy(input: {
     update: true,
     forget: true,
   }
-  const readableScopes = [...(input.agentPolicy?.readableScopes ?? ALL_SCOPES)]
-  const writableScopes = [...(input.agentPolicy?.writableScopes ?? ALL_SCOPES)]
+  const projectOnly = input.projectPolicy?.isolationMode === "project-only"
+  const baseReadable = [...(input.agentPolicy?.readableScopes ?? ALL_SCOPES)]
+  const baseWritable = [...(input.agentPolicy?.writableScopes ?? ALL_SCOPES)]
+  const readableScopes = projectOnly
+    ? baseReadable.filter((scope) => scope === "workspace")
+    : baseReadable
+  const writableScopes = projectOnly
+    ? baseWritable.filter((scope) => scope === "workspace")
+    : baseWritable
   const turn = resolveMemoryTurnPolicy({
     config,
     session: input.session,
     externalContext: input.externalContext,
   })
   const globallyWritable = config.enabled && !config.temporary
-  // Intersection, not `??` chains: the Agent's declared operations are a hard
-  // ceiling the session toggles can only narrow. `turn` already folds the
-  // session preference over the global default (`session?.memoryUse ??
-  // config.useMemory`), so the only thing left to apply here is the Agent's
-  // contract — a hard `recall: false` / `autoLearn: false` must survive a
-  // chat that has memory switched on.
-  const canRecall = turn.canRecall && operations.recall
+  // Intersection, not `??` chains: the Agent's declared operations and the
+  // workspace's isolation policy are hard ceilings the session toggles can only
+  // narrow.
+  const canRecall = turn.canRecall && operations.recall && readableScopes.length > 0
   const canLearnSession =
     turn.canLearn &&
     (input.agentPolicy?.autoLearn ?? true) &&
@@ -70,24 +107,26 @@ export function resolveAgentMemoryPolicy(input: {
       ? "allowed"
       : turn.recallReason === "temporary" || turn.recallReason === "disabled"
         ? turn.recallReason
-        : !operations.recall
+        : !operations.recall || baseReadable.length === 0
           ? "agent_policy"
-          : input.session?.memoryUse === false
-            ? "disabled_for_chat"
-            : turn.recallReason,
+          : readableScopes.length === 0
+            ? "project_policy"
+            : input.session?.memoryUse === false
+              ? "disabled_for_chat"
+              : turn.recallReason,
     learnReason: canAutoLearn
       ? "allowed"
       : turn.learnReason === "temporary" || turn.learnReason === "disabled"
         ? turn.learnReason
-        : !operations.create ||
-            input.agentPolicy?.autoLearn === false ||
-            writableScopes.length === 0
+        : !operations.create || input.agentPolicy?.autoLearn === false || baseWritable.length === 0
           ? "agent_policy"
-          : input.session?.memoryLearn === false
-            ? "disabled_for_chat"
-            : !config.autoExtract
-              ? "disabled"
-              : turn.learnReason,
+          : writableScopes.length === 0
+            ? "project_policy"
+            : input.session?.memoryLearn === false
+              ? "disabled_for_chat"
+              : !config.autoExtract
+                ? "disabled"
+                : turn.learnReason,
   }
 }
 
@@ -109,6 +148,7 @@ export async function resolvePersistedAgentMemoryPolicy(input: {
   config: Partial<MemoryConfig>
   characterId?: string
   sessionId?: string
+  projectId?: string
   externalContext?: readonly MemoryExternalContextSource[]
 }): Promise<ResolvedAgentMemoryPolicy> {
   const session = input.sessionId
@@ -117,15 +157,24 @@ export async function resolvePersistedAgentMemoryPolicy(input: {
         .catch(() => undefined)
     : undefined
   const characterId = input.characterId ?? session?.characterId
-  const character = characterId
-    ? await import("@/lib/db/characters")
-        .then(({ resolveCharacterById }) => resolveCharacterById(characterId))
-        .catch(() => undefined)
-    : undefined
+  const projectId = input.projectId ?? session?.projectId
+  const [character, project] = await Promise.all([
+    characterId
+      ? import("@/lib/db/characters")
+          .then(({ resolveCharacterById }) => resolveCharacterById(characterId))
+          .catch(() => undefined)
+      : Promise.resolve(undefined),
+    projectId
+      ? import("@/lib/db/schema")
+          .then(({ getDb }) => getDb().projects.get(projectId))
+          .catch(() => undefined)
+      : Promise.resolve(undefined),
+  ])
   return resolveAgentMemoryPolicy({
     config: input.config,
     session,
     agentPolicy: character?.memoryPolicy,
+    projectPolicy: readProjectMemoryPolicy(project),
     externalContext: input.externalContext,
   })
 }

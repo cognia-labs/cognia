@@ -80,6 +80,10 @@
       "description": "Do not learn from turns that used web, MCP, screen, or connector context.",
       "label": "Block external-context learning"
     },
+    "sensitiveTopics": {
+      "description": "Allow automatically learned health, religious/political belief, personal finance, and identity facts to enter recall immediately. When off, sensitive candidates stay quarantined until you verify them in /memory.",
+      "label": "Auto-activate sensitive topics"
+    },
     "gates": {
       "learningOff": "Turn on learning from chats to edit these controls.",
       "memoryOff": "Turn on long-term memory to edit learning controls."
@@ -231,6 +235,16 @@
       "label": "Tell the model what was learned"
     },
     "intro": "Cognia can read this workspace's earlier conversations and keep what they established about the project, so a new chat does not start from nothing. Learning and telling the model are separate switches, and they ship with different defaults.",
+    "isolation": {
+      "description": "Project-only restricts every conversation in this workspace to reading and writing workspace memories only, blocking global personal memory recall and cross-project spillover.",
+      "label": "Workspace memory isolation",
+      "labelNamed": "Workspace memory isolation ({workspace})",
+      "noWorkspace": "Open a workspace to configure its memory isolation mode.",
+      "options": {
+        "inherit": "Standard (Global + Workspace)",
+        "projectOnly": "Workspace-only (strict project isolation)"
+      }
+    },
     "jobs": {
       "failed": "{count, plural, one {# gave up after retries} other {# gave up after retries}}",
       "pending": "{count, plural, =0 {Nothing queued} one {# job queued or running} other {# jobs queued or running}}",
@@ -246,6 +260,49 @@
     }
   },
   "retrieval": {
+    "backend": {
+      "apiKeyLabel": "API key",
+      "baseUrlLabel": "Base URL (optional)",
+      "modelLabel": "Embedding model",
+      "pineconeIndexLabel": "Pinecone index name",
+      "placeholders": {
+        "apiKey": "sk-...",
+        "chromaUrl": "http://localhost:8000",
+        "cloudUrl": "https://...",
+        "milvusAddress": "localhost:19530",
+        "model": "Xenova/all-MiniLM-L6-v2",
+        "ollamaUrl": "http://127.0.0.1:11434",
+        "pineconeIndex": "cognia-memory",
+        "qdrantUrl": "http://localhost:6333",
+        "weaviateUrl": "http://localhost:8080"
+      },
+      "providerLabel": "Embedding provider",
+      "providers": {
+        "cohere": "Cohere",
+        "google": "Google Gemini",
+        "mistral": "Mistral",
+        "ollama": "Ollama (Local)",
+        "openai": "OpenAI",
+        "transformersjs": "Transformers.js (Local)",
+        "voyage": "Voyage AI"
+      },
+      "sourceDescription": "Share Digital Twin's embedding and vector store, or configure a dedicated backend exclusively for long-term memory.",
+      "sourceLabel": "Embedding & vector backend",
+      "sources": {
+        "custom": "Dedicated memory backend",
+        "twin": "Shared with Digital Twin"
+      },
+      "vectorEndpointLabel": "Vector store URL / address",
+      "vectorStoreLabel": "Vector store",
+      "vectorStores": {
+        "chroma": "Chroma",
+        "milvus": "Milvus",
+        "native": "Local / Built-in",
+        "pinecone": "Pinecone",
+        "qdrant": "Qdrant",
+        "weaviate": "Weaviate"
+      }
+    },
     "beliefWeight": {
       "description": "Rank memories confirmed across several conversations higher. At off, ranking ignores corroboration; it is still shown in the memory inspector.",
       "label": "Corroboration weight",

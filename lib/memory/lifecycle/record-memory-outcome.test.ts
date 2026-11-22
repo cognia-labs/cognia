@@ -155,6 +155,59 @@ describe("recordMemoryJobOutcome", () => {
     expect(call.evidence).not.toHaveProperty("sessionId")
     expect(call.audit).not.toHaveProperty("sessionId")
   })
+
+  it("quarantines sensitive-topic memories unless allowSensitiveTopics is enabled (G3)", async () => {
+    const sensitiveAdd = {
+      op: "ADD",
+      memory: {
+        id: "m-sens",
+        type: "semantic",
+        text: "The user was diagnosed with asthma last year.",
+      },
+      candidate: {
+        type: "semantic",
+        text: "The user was diagnosed with asthma last year.",
+        importance: 7,
+      },
+    } as unknown as ConsolidationOp
+
+    await recordMemoryJobOutcome({
+      job: JOB,
+      operations: [sensitiveAdd],
+      contaminationState: "clean",
+      allowSensitiveTopics: false,
+      evidence: EVIDENCE,
+      auditReason: "automatic_learning",
+    })
+    expect(mockBind).toHaveBeenCalledWith(
+      expect.objectContaining({
+        memoryId: "m-sens",
+        patch: expect.objectContaining({
+          sensitivity: "sensitive",
+          trustState: "quarantined",
+          reviewStatus: "unreviewed",
+        }),
+        audit: expect.objectContaining({
+          reason: "sensitive_topic_quarantined",
+          metadata: { sensitiveCategories: "health" },
+        }),
+      })
+    )
+
+    mockBind.mockClear()
+    await recordMemoryJobOutcome({
+      job: JOB,
+      operations: [sensitiveAdd],
+      contaminationState: "clean",
+      allowSensitiveTopics: true,
+      evidence: EVIDENCE,
+      auditReason: "automatic_learning",
+    })
+    const [allowedCall] = mockBind.mock.calls[0] as [Record<string, Record<string, unknown>>]
+    expect(allowedCall.patch.sensitivity).toBe("sensitive")
+    expect(allowedCall.patch).not.toHaveProperty("trustState")
+    expect(allowedCall.audit.reason).toBe("automatic_learning")
+  })
 })
 
 function corroborate(targetId: string): ConsolidationOp {

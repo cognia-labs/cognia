@@ -717,6 +717,12 @@ export async function retrieveMemoriesWithOutcome(
     .filter((m): m is Memory => m !== undefined)
     .map((m) => ({
       ...m,
+      // Until a backfilled claim is recalled (`accessCount > 0`), anchor recency
+      // to `observedAt` (when the evidence happened) rather than `createdAt`
+      // (`lastAccessedAt` at insert), so an ancient backfilled session never
+      // outranks a recent observation simply because it was mined today.
+      lastAccessedAt:
+        (m.accessCount ?? 0) === 0 && m.observedAt !== undefined ? m.observedAt : m.lastAccessedAt,
       relevance: relevanceById.get(m.id) ?? 0,
       halfLifeDays: recencyHalfLifeDaysForType(m.type, baseHalfLife),
       veracity: veracityFor(m),

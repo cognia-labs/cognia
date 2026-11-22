@@ -24,7 +24,7 @@ import {
   type MemoryExternalContextSource,
 } from "@/lib/memory/control-plane/policy"
 import { detectMemoryExternalContext } from "@/lib/memory/control-plane/contamination"
-import { resolveAgentMemoryPolicy } from "@/lib/memory/agent-policy"
+import { readProjectMemoryPolicy, resolveAgentMemoryPolicy } from "@/lib/memory/agent-policy"
 import {
   auditMemoryScopeRefusal,
   resolveMemoryWriteTarget,
@@ -94,9 +94,16 @@ export async function enqueueTurnMemory(
   const sessionRow = await getSession(sessionId).catch(() => undefined)
   if (!sessionRow) return { enqueued: false, reason: "session_missing" }
 
-  const character = sessionRow.characterId
-    ? await resolveCharacterById(sessionRow.characterId).catch(() => undefined)
-    : undefined
+  const [character, project] = await Promise.all([
+    sessionRow.characterId
+      ? resolveCharacterById(sessionRow.characterId).catch(() => undefined)
+      : Promise.resolve(undefined),
+    sessionRow.projectId
+      ? import("@/lib/db/schema")
+          .then(({ getDb }) => getDb().projects.get(sessionRow.projectId!))
+          .catch(() => undefined)
+      : Promise.resolve(undefined),
+  ])
   const memoryAgentId = resolveMemoryAgentNamespace({
     twinId: character?.twinId,
     characterId: sessionRow.characterId,
@@ -109,6 +116,7 @@ export async function enqueueTurnMemory(
     config,
     session: sessionRow,
     agentPolicy: character?.memoryPolicy,
+    projectPolicy: readProjectMemoryPolicy(project),
     externalContext,
   })
   if (!policy.canAutoLearn) {

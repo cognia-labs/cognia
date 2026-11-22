@@ -133,7 +133,7 @@ import {
   resolveAgentModel,
 } from "@/lib/agent/agent-profile-policy"
 import { createAgentEnvSecretRef, saveAgentEnvSecret } from "@/lib/agent/agent-env-keyring"
-import { resolveAgentMemoryPolicy } from "@/lib/memory/agent-policy"
+import { readProjectMemoryPolicy, resolveAgentMemoryPolicy } from "@/lib/memory/agent-policy"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import type {
   AgentEnvBinding,
@@ -681,12 +681,13 @@ export function SessionSettingsSheet({
       config: resolveMemoryConfig(credentialSettings?.memory),
       session,
       agentPolicy: character?.memoryPolicy,
+      projectPolicy: readProjectMemoryPolicy(activeProject),
     })
     return {
       readable: policy.canRecall ? policy.readableScopes : [],
       writable: policy.canLearnSession ? policy.writableScopes : [],
     }
-  }, [credentialSettings?.memory, session, character?.memoryPolicy])
+  }, [credentialSettings?.memory, session, character?.memoryPolicy, activeProject])
 
   // Per-section override counts, derived from the *draft* form so the badges
   // update live as the user edits (before Save).

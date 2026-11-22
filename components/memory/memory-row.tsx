@@ -239,6 +239,23 @@ function MemoryRowImpl({
             >
               {tGovernance(governance)}
             </Badge>
+          ) : memory.trustState === "quarantined" ? (
+            <Badge
+              variant="secondary"
+              className="h-5 px-1.5 font-normal"
+              data-testid="memory-row-quarantined"
+            >
+              {tGovernance("quarantined")}
+            </Badge>
+          ) : null}
+          {memory.sensitivity === "sensitive" ? (
+            <Badge
+              variant="outline"
+              className="h-5 px-1.5 font-normal"
+              data-testid="memory-row-sensitive"
+            >
+              {tGovernance("sensitive")}
+            </Badge>
           ) : null}
           {invalidated ? (
             <Badge variant="secondary" className="h-5 px-1.5 font-normal">

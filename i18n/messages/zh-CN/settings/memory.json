@@ -80,6 +80,10 @@
       "description": "不从使用了网页、MCP、屏幕或连接器上下文的轮次中学习。",
       "label": "阻止外部上下文学习"
     },
+    "sensitiveTopics": {
+      "description": "允许自动学习到的健康医疗、宗教/政治信仰、个人财务及身份属性事实直接参与召回。关闭时，敏感候选会保持隔离状态，需在 /memory 中人工验证后才会注入。",
+      "label": "自动启用敏感话题记忆"
+    },
     "gates": {
       "learningOff": "请先开启从对话学习，再编辑这些控制项。",
       "memoryOff": "请先开启长期记忆，再编辑学习控制项。"
@@ -231,6 +235,16 @@
       "label": "把学到的内容告诉模型"
     },
     "intro": "Cognia 可以阅读本工作区先前的对话，并保留其中确立的项目事实，让新会话不必从零开始。学习与告知模型是两个开关，默认值不同。",
+    "isolation": {
+      "description": "“仅工作区”会将本工作区中的所有会话限制为仅读写工作区范围记忆，禁止读取或写入全局个人记忆，避免跨项目串味。",
+      "label": "工作区记忆隔离",
+      "labelNamed": "工作区记忆隔离（{workspace}）",
+      "noWorkspace": "打开一个工作区后即可配置其记忆隔离模式。",
+      "options": {
+        "inherit": "标准继承（全局 + 工作区）",
+        "projectOnly": "仅工作区（严格项目隔离）"
+      }
+    },
     "jobs": {
       "failed": "{count, plural, other {# 个在重试后放弃}}",
       "pending": "{count, plural, =0 {没有排队任务} other {# 个任务排队或运行中}}",
@@ -246,6 +260,49 @@
     }
   },
   "retrieval": {
+    "backend": {
+      "apiKeyLabel": "API 密钥",
+      "baseUrlLabel": "基础地址（可选）",
+      "modelLabel": "向量模型",
+      "pineconeIndexLabel": "Pinecone 索引名称",
+      "placeholders": {
+        "apiKey": "sk-...",
+        "chromaUrl": "http://localhost:8000",
+        "cloudUrl": "https://...",
+        "milvusAddress": "localhost:19530",
+        "model": "Xenova/all-MiniLM-L6-v2",
+        "ollamaUrl": "http://127.0.0.1:11434",
+        "pineconeIndex": "cognia-memory",
+        "qdrantUrl": "http://localhost:6333",
+        "weaviateUrl": "http://localhost:8080"
+      },
+      "providerLabel": "向量模型服务商",
+      "providers": {
+        "cohere": "Cohere",
+        "google": "Google Gemini",
+        "mistral": "Mistral",
+        "ollama": "Ollama（本地）",
+        "openai": "OpenAI",
+        "transformersjs": "Transformers.js（本地）",
+        "voyage": "Voyage AI"
+      },
+      "sourceDescription": "可与数字分身共用向量模型和向量库，也可为长期记忆单独配置独立的检索后端。",
+      "sourceLabel": "向量化与向量库后端",
+      "sources": {
+        "custom": "记忆独立后端",
+        "twin": "与数字分身共用"
+      },
+      "vectorEndpointLabel": "向量库地址 / URL",
+      "vectorStoreLabel": "向量存储后端",
+      "vectorStores": {
+        "chroma": "Chroma",
+        "milvus": "Milvus",
+        "native": "本地 / 内置存储",
+        "pinecone": "Pinecone",
+        "qdrant": "Qdrant",
+        "weaviate": "Weaviate"
+      }
+    },
     "beliefWeight": {
       "description": "让在多次对话中得到印证的记忆排得更靠前。关闭时排序不考虑佐证，但记忆检查器中仍会显示。",
       "label": "佐证权重",

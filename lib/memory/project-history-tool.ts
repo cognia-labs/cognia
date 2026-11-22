@@ -47,6 +47,8 @@
  */
 
 import type { ChatSession } from "@cognia/agent-config-types"
+import { meaningfulTerms } from "@cognia/memory/retrieve/retriever"
+import { buildExpandedKeywordQuery } from "@cognia/rag/keyword-expansion"
 import { hasNoLeakingPii } from "@cognia/redact"
 
 import type { ChatSearchOutcome, ChatSearchQuery } from "@/lib/chat/search/engine"
@@ -76,8 +78,12 @@ export const MAX_QUERIES = 3
 export const MAX_EXPAND = 4
 /** Hits returned per leg after filtering. */
 export const MAX_HITS_PER_LEG = 12
+/** Upper bound when caller requests wider cross-session coverage (`maxHits`). */
+export const MAX_CUSTOM_HITS_PER_LEG = 24
 /** Per-query fetch, before project / exposure / PII filtering. */
 export const PER_QUERY_LIMIT = 8
+/** Fallback queries tried when literal multi-word/synonym queries return nothing. */
+export const MAX_FALLBACK_QUERIES = 4
 /** Neighbours included on each side of an expanded message. */
 export const EXPAND_SPAN: MessageSpan = { before: 2, after: 2 }
 /** Longest snippet handed back per hit. */
@@ -136,7 +142,22 @@ export function projectHistoryToolEntries(): ModuleToolEntry[] {
             description: "Restrict message hits to these authors.",
           },
           after: { type: "integer", description: "Only hits at or after this epoch-ms instant." },
-          before: { type: "integer", description: "Only hits strictly before this instant." },
+          before: {
+            type: "integer",
+            description:
+              "Only hits strictly before this instant (use `pagination.nextBefore` to page deeper into older history).",
+          },
+          diversifySessions: {
+            type: "boolean",
+            description:
+              "Prefer hits spread across distinct conversations so one verbose chat does not crowd out older sessions (default true).",
+          },
+          maxHits: {
+            type: "integer",
+            minimum: 1,
+            maximum: MAX_CUSTOM_HITS_PER_LEG,
+            description: "Maximum hits per leg (1-24, default 12).",
+          },
           expand: {
             type: "array",
             maxItems: MAX_EXPAND,
@@ -205,6 +226,13 @@ export interface ProjectHistoryBudgetReport {
   capped: string[]
 }
 
+export interface ProjectHistoryPagination {
+  /** Distinct conversations represented in `hits`. */
+  distinctSessions: number
+  /** Pass as `before` on a follow-up call to continue scanning older workspace history. */
+  nextBefore?: number
+}
+
 export interface ProjectHistorySuccess {
   ok: true
   hits: ProjectHistoryHit[]
@@ -212,6 +240,7 @@ export interface ProjectHistorySuccess {
   coverage: ProjectHistoryCoverage
   /** Hits dropped by the PII gate before they could reach the model. */
   withheldCount: number
+  pagination?: ProjectHistoryPagination
   budget: ProjectHistoryBudgetReport
   _notice: string
 }
@@ -311,6 +340,72 @@ function parseInstant(raw: unknown): number | undefined {
   return typeof raw === "number" && Number.isFinite(raw) ? raw : undefined
 }
 
+function parseMaxHits(raw: unknown): number {
+  if (typeof raw !== "number" || !Number.isFinite(raw)) return MAX_HITS_PER_LEG
+  return Math.min(MAX_CUSTOM_HITS_PER_LEG, Math.max(1, Math.floor(raw)))
+}
+
+/**
+ * Decompose multi-term or synonym-bearing queries into individual distinctive
+ * terms so older conversations that phrased the same topic differently (or split
+ * words across sentences) are still recovered when literal phrase matching misses.
+ */
+function deriveFallbackQueries(queries: readonly string[]): string[] {
+  const already = new Set(queries.map((q) => q.toLocaleLowerCase()))
+  const candidates: string[] = []
+  for (const query of queries) {
+    const expanded = buildExpandedKeywordQuery(query)
+    for (const term of meaningfulTerms(expanded)) {
+      if (term.length < 2) continue
+      const lower = term.toLocaleLowerCase()
+      if (already.has(lower)) continue
+      already.add(lower)
+      candidates.push(term)
+      if (candidates.length >= MAX_FALLBACK_QUERIES) return candidates
+    }
+  }
+  return candidates
+}
+
+/**
+ * Interleave hits round-robin by `sessionId` (each session ordered newest-first,
+ * sessions ordered by their newest hit) so one verbose recent session cannot
+ * crowd out older workspace sessions while still filling `limit` slots.
+ */
+function selectWithSessionDiversity<T extends { hit: { sessionId: string; createdAt: number } }>(
+  sortedNewestFirst: readonly T[],
+  limit: number,
+  diversify: boolean
+): T[] {
+  if (!diversify || sortedNewestFirst.length <= limit) {
+    return sortedNewestFirst.slice(0, limit)
+  }
+  const buckets = new Map<string, T[]>()
+  for (const entry of sortedNewestFirst) {
+    const list = buckets.get(entry.hit.sessionId)
+    if (list) list.push(entry)
+    else buckets.set(entry.hit.sessionId, [entry])
+  }
+  if (buckets.size <= 1) return sortedNewestFirst.slice(0, limit)
+
+  const selected: T[] = []
+  const queues = [...buckets.values()]
+  let cursor = 0
+  while (selected.length < limit) {
+    let progressed = false
+    for (const queue of queues) {
+      if (cursor < queue.length) {
+        selected.push(queue[cursor]!)
+        progressed = true
+        if (selected.length >= limit) break
+      }
+    }
+    if (!progressed) break
+    cursor += 1
+  }
+  return selected.sort((a, b) => b.hit.createdAt - a.hit.createdAt)
+}
+
 /**
  * Is this session allowed to answer an agent-driven history search?
  *
@@ -371,6 +466,9 @@ export async function runProjectHistorySearch(
   const roles = parseStringList(args.roles, 4)
   const after = parseInstant(args.after)
   const before = parseInstant(args.before)
+  const diversifySessions = args.diversifySessions !== false
+  const maxHits = parseMaxHits(args.maxHits)
+  const collapseBySession = args.diversifySessions === true
 
   // Each hit is carried with the UNFENCED text it was built from. The fenced
   // copy is what the model reads; the raw copy is what the source chip renders,
@@ -385,18 +483,18 @@ export async function runProjectHistorySearch(
 
   // ── Message leg ────────────────────────────────────────────────────────
   if (queries && scope !== "results") {
-    for (const query of queries) {
-      if (outOfTime()) {
-        if (!capped.includes("messages")) capped.push("messages")
-        break
-      }
+    const collectMessageQuery = async (
+      query: string,
+      options: { collapse?: boolean } = {}
+    ): Promise<ProjectHistoryRefusal | null> => {
       let outcome: ChatSearchOutcome
       try {
         outcome = await deps.searchMessages({
           query,
-          limit: PER_QUERY_LIMIT,
+          limit: Math.max(PER_QUERY_LIMIT, maxHits),
           projectId,
           includeArchived: false,
+          ...(options.collapse ? { collapseBySession: true } : {}),
           ...(roles.length > 0 ? { roles } : {}),
           ...(after !== undefined ? { after } : {}),
           ...(before !== undefined ? { before } : {}),
@@ -442,6 +540,31 @@ export async function runProjectHistorySearch(
             createdAt: result.createdAt,
           },
         })
+      }
+      return null
+    }
+
+    for (const query of queries) {
+      if (outOfTime()) {
+        if (!capped.includes("messages")) capped.push("messages")
+        break
+      }
+      const err = await collectMessageQuery(query, { collapse: collapseBySession })
+      if (err) return err
+    }
+
+    // Long-history fallback (`G5`): when literal multi-word/synonym queries
+    // missed across older sessions (`seenMessages.size === 0`), decompose into
+    // distinctive expanded terms with per-session collapsing within budget.
+    if (seenMessages.size === 0 && !outOfTime()) {
+      const fallbackQueries = deriveFallbackQueries(queries)
+      for (const fallback of fallbackQueries) {
+        if (outOfTime()) {
+          if (!capped.includes("messages")) capped.push("messages")
+          break
+        }
+        const err = await collectMessageQuery(fallback, { collapse: true })
+        if (err) return err
       }
     }
   }
@@ -535,18 +658,18 @@ export async function runProjectHistorySearch(
     }
   }
 
-  // Newest first within each leg's cap: the most recent evidence about a
-  // workspace is the evidence most likely to still be true.
+  // Newest first within each leg's cap, diversified across conversations by
+  // default so one verbose chat cannot monopolize recall across long history.
   const messageHits = hits
     .filter((entry) => entry.hit.kind === "message")
     .sort((a, b) => b.hit.createdAt - a.hit.createdAt)
   const resultHits = hits
     .filter((entry) => entry.hit.kind === "result")
     .sort((a, b) => b.hit.createdAt - a.hit.createdAt)
-  if (messageHits.length > MAX_HITS_PER_LEG || resultHits.length > MAX_HITS_PER_LEG) partial = true
+  if (messageHits.length > maxHits || resultHits.length > maxHits) partial = true
   const carried = [
-    ...messageHits.slice(0, MAX_HITS_PER_LEG),
-    ...resultHits.slice(0, MAX_HITS_PER_LEG),
+    ...selectWithSessionDiversity(messageHits, maxHits, diversifySessions),
+    ...selectWithSessionDiversity(resultHits, maxHits, diversifySessions),
   ]
   const surfaced: ProjectHistoryHit[] = carried.map((entry) => entry.hit)
   const evidence: ProjectHistoryEvidence[] = carried.map((entry) => entry.evidence)
@@ -609,12 +732,24 @@ export async function runProjectHistorySearch(
       ? "partial"
       : "complete"
 
+  const distinctSessions = new Set(surfaced.map((hit) => hit.sessionId)).size
+  const oldestSurfacedAt =
+    surfaced.length > 0
+      ? surfaced.reduce((min, hit) => Math.min(min, hit.createdAt), surfaced[0]!.createdAt)
+      : undefined
+
   return {
     ok: true,
     hits: surfaced,
     ...(windows.length > 0 ? { windows } : {}),
     coverage,
     withheldCount,
+    pagination: {
+      distinctSessions,
+      ...(coverage !== "complete" && oldestSurfacedAt !== undefined
+        ? { nextBefore: oldestSurfacedAt }
+        : {}),
+    },
     budget: {
       timeBudgetMs: PROJECT_HISTORY_TIME_BUDGET_MS,
       elapsedMs: deps.now() - startedAt,

@@ -60,12 +60,16 @@ export interface MemoryCreateInput {
   text: string
   importance: number
   tags: string[]
+  key?: string
   scope: Memory["scope"]
   characterId?: string
   projectId?: string
   agentId?: string
   branch?: string
   pathPattern?: string
+  reviewStatus?: Memory["reviewStatus"]
+  trustState?: Memory["trustState"]
+  sensitivity?: Memory["sensitivity"]
 }
 
 export interface UseMemoryConsoleOptions {
@@ -105,6 +109,7 @@ export function useMemoryConsole({
   // always shows the checkboxes, so this only gates the compact body.
   const [selecting, setSelecting] = useState(false)
   const [addOpen, setAddOpen] = useState(false)
+  const [portabilityOpen, setPortabilityOpen] = useState(false)
   const [resolverOpen, setResolverOpen] = useState(false)
   const [moveId, setMoveId] = useState<string | null>(null)
   const [pendingDelete, setPendingDelete] = useState<readonly string[] | null>(null)
@@ -431,6 +436,8 @@ export function useMemoryConsole({
     // dialogs
     addOpen,
     setAddOpen,
+    portabilityOpen,
+    setPortabilityOpen,
     resolverOpen,
     setResolverOpen,
     moveMemory,

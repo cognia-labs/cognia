@@ -24,7 +24,7 @@
 
 import { useCallback, useEffect } from "react"
 import { useTranslations } from "next-intl"
-import { BrainIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react"
+import { ArrowLeftRightIcon, BrainIcon, PlusIcon, SettingsIcon, Trash2Icon } from "lucide-react"
 
 import { FeaturePageHeader } from "@/components/feature-shell/feature-page-header"
 import { FeaturePageShell } from "@/components/feature-shell/feature-page-shell"
@@ -169,6 +169,13 @@ export function MemoryConsole({ initialSelectedId, initialProjectId }: MemoryCon
       overflowActions={
         isAppTab
           ? [
+              {
+                id: "portability",
+                label: t("portability"),
+                icon: ArrowLeftRightIcon,
+                onSelect: () => state.setPortabilityOpen(true),
+                testId: "memory-portability-button",
+              },
               {
                 id: "clear-filtered",
                 label: t("clearFiltered"),

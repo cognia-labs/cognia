@@ -145,4 +145,25 @@ describe("the history backfill control", () => {
     const card = screen.getByTestId("backfill-card-stub")
     expect([...gated].some((node) => node.contains(card))).toBe(false)
   })
+
+  it("renders workspace memory isolation and explains when no workspace is open (G1)", () => {
+    setup()
+    expect(screen.getByTestId("memory-project-isolation")).toHaveTextContent(
+      /Open a workspace to configure its memory isolation mode/i
+    )
+  })
+
+  it("displays the active workspace name on the isolation control when bound (G1)", () => {
+    const onProjectIsolationChange = jest.fn()
+    setup({
+      projectId: "p1",
+      projectName: "Cognia Repo",
+      projectIsolationMode: "project-only",
+      onProjectIsolationChange,
+    })
+    expect(screen.getByTestId("memory-project-isolation")).toHaveTextContent(
+      "Workspace memory isolation (Cognia Repo)"
+    )
+    expect(screen.getByRole("combobox", { name: "Workspace memory isolation" })).not.toBeDisabled()
+  })
 })

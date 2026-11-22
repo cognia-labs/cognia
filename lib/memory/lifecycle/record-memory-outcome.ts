@@ -13,11 +13,13 @@
  * gains the atomicity it never had.
  */
 
+import { getMemory } from "@/lib/db/memories"
 import {
   appendMemoryAuditEvent,
   bindMemoryGovernanceOutcome,
   createMemoryEvidence,
 } from "@/lib/db/memory-governance"
+import { classifySensitiveMemoryTopic } from "@cognia/memory/control-plane/sensitive-topics"
 import {
   consolidationAuditAction,
   consolidationCorroboratedId,
@@ -30,6 +32,8 @@ export interface RecordMemoryJobOutcomeInput {
   job: Pick<MemoryJob, "id" | "sessionId">
   operations: readonly ConsolidationOp[]
   contaminationState: "clean" | "external-context"
+  /** When false (default), sensitive-topic candidates are quarantined until reviewed. */
+  allowSensitiveTopics?: boolean
   evidence: {
     kind: MemoryEvidence["kind"]
     sourceId: string
@@ -86,6 +90,12 @@ export async function recordMemoryJobOutcome(input: RecordMemoryJobOutcomeInput)
     if (!memoryId || !auditAction) continue
     const addedType =
       operation.op === "ADD" || operation.op === "CONFLICT" ? operation.memory.type : undefined
+    const candidateText =
+      operation.op === "ADD" || operation.op === "CONFLICT"
+        ? (operation.memory.text ?? operation.candidate?.text ?? "")
+        : ((await getMemory(memoryId).catch(() => undefined))?.text ?? "")
+    const topic = classifySensitiveMemoryTopic(candidateText)
+    const quarantineSensitive = topic.sensitive && !input.allowSensitiveTopics
     try {
       await bindMemoryGovernanceOutcome({
         memoryId,
@@ -98,7 +108,8 @@ export async function recordMemoryJobOutcome(input: RecordMemoryJobOutcomeInput)
                 ? "pending_instruction"
                 : "unreviewed",
           contaminationState: input.contaminationState,
-          sensitivity: "normal",
+          sensitivity: topic.sensitive ? "sensitive" : "normal",
+          ...(quarantineSensitive ? { trustState: "quarantined" } : {}),
         },
         evidence: {
           kind: input.evidence.kind,
@@ -111,7 +122,10 @@ export async function recordMemoryJobOutcome(input: RecordMemoryJobOutcomeInput)
         audit: {
           action: auditAction,
           ...(input.job.sessionId ? { sessionId: input.job.sessionId } : {}),
-          reason: input.auditReason,
+          reason: quarantineSensitive ? "sensitive_topic_quarantined" : input.auditReason,
+          ...(topic.sensitive
+            ? { metadata: { sensitiveCategories: topic.categories.join(",") } }
+            : {}),
         },
       })
     } catch (error) {

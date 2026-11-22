@@ -20,7 +20,7 @@
 import type { ContextContribution, ContextTurnContext } from "@/lib/modules/manifest-types"
 import { resolveMemoryConfig } from "@/types/memory/memory"
 import type { MemoryRecallSources, ProjectContinuitySources } from "@/types/memory/context-sources"
-import { resolveAgentMemoryPolicy } from "./agent-policy"
+import { readProjectMemoryPolicy, resolveAgentMemoryPolicy } from "./agent-policy"
 import { resolveMemoryAgentNamespace } from "./twin-namespace"
 import type { ApplyMemoryContextDeps } from "./runtime/apply-memory-context"
 import type { PersonalMemoryContextDeps } from "./runtime/build-deps"
@@ -48,19 +48,30 @@ export interface RecallHandoff {
 const RECALL_DEADLINE_MS = 15_000
 
 /** The run's memory inputs, or `null` when the caller did not ask for memory. */
-function memoryInputs(ctx: ContextTurnContext) {
+async function memoryInputs(ctx: ContextTurnContext) {
   const deps = ctx.hostDeps.memory
   const query = ctx.hostDeps.memoryQuery
   if (!deps || !query?.trim()) return null
   const config = resolveMemoryConfig(ctx.settings?.memory)
+  const scope = ctx.hostDeps.memoryScope ?? {}
+  const projectId = ctx.session?.projectId ?? ctx.activeProject?.id
+  const project =
+    projectId && ctx.activeProject?.id === projectId
+      ? ctx.activeProject
+      : projectId
+        ? await import("@/lib/db/schema")
+            .then(({ getDb }) => getDb().projects.get(projectId))
+            .catch(() => undefined)
+        : undefined
   const policy = resolveAgentMemoryPolicy({
     config,
     session: ctx.session ?? undefined,
     agentPolicy: ctx.agent?.memoryPolicy,
+    projectPolicy: readProjectMemoryPolicy(project),
   })
-  const scope = ctx.hostDeps.memoryScope ?? {}
-  const projectId = ctx.session?.projectId ?? ctx.activeProject?.id
-  return { deps, query, config, policy, scope, projectId }
+  const shareTwinQueryEmbedding =
+    (config.embeddingSource ?? "twin") !== "custom" && Boolean(ctx.query.embedding)
+  return { deps, query, config, policy, scope, projectId, shareTwinQueryEmbedding }
 }
 
 export const contributions: readonly ContextContribution[] = [
@@ -70,9 +81,9 @@ export const contributions: readonly ContextContribution[] = [
     slot: "memory",
     deadlineMs: RECALL_DEADLINE_MS,
     produce: async (ctx) => {
-      const inputs = memoryInputs(ctx)
+      const inputs = await memoryInputs(ctx)
       if (!inputs) return null
-      const { deps, query, config, policy, scope, projectId } = inputs
+      const { deps, query, config, policy, scope, projectId, shareTwinQueryEmbedding } = inputs
       await import("@/lib/db/memory-governance")
         .then(({ appendMemoryAuditEvent }) =>
           appendMemoryAuditEvent({
@@ -111,9 +122,11 @@ export const contributions: readonly ContextContribution[] = [
         twinChunkTexts: [...ctx.kernelRetrieval.identityTexts],
         enableQueryExpansion: config.enableQueryExpansion,
         recencyHalfLifeDays: config.decayHalfLifeDays,
-        // Memory's vector backend shares the twin embedding model, so the
-        // turn's query embedding is reused rather than recomputed.
-        ...(ctx.query.embedding ? { precomputedQueryEmbedding: [...ctx.query.embedding] } : {}),
+        // Reuse the turn's query embedding only when memory shares Twin's
+        // embedding model; dedicated custom memory embedders compute their own.
+        ...(shareTwinQueryEmbedding
+          ? { precomputedQueryEmbedding: [...ctx.query.embedding!] }
+          : {}),
         deps: scopedDeps,
       })
       if (result.systemPromptSection?.trim())
@@ -152,9 +165,9 @@ export const contributions: readonly ContextContribution[] = [
     after: "recall",
     deadlineMs: RECALL_DEADLINE_MS,
     produce: async (ctx) => {
-      const inputs = memoryInputs(ctx)
+      const inputs = await memoryInputs(ctx)
       if (!inputs) return null
-      const { deps, query, config, policy, scope, projectId } = inputs
+      const { deps, query, config, policy, scope, projectId, shareTwinQueryEmbedding } = inputs
       const { evaluateProjectRecallGate } = await import("@cognia/memory/runtime/recall-gate")
       const gate = evaluateProjectRecallGate({
         userMessage: query,
@@ -186,7 +199,9 @@ export const contributions: readonly ContextContribution[] = [
         maxTokens: limit,
         enableQueryExpansion: config.enableQueryExpansion,
         recencyHalfLifeDays: config.decayHalfLifeDays,
-        ...(ctx.query.embedding ? { precomputedQueryEmbedding: [...ctx.query.embedding] } : {}),
+        ...(shareTwinQueryEmbedding
+          ? { precomputedQueryEmbedding: [...ctx.query.embedding!] }
+          : {}),
         deps,
       })
       if (result.systemPromptSection?.trim())

@@ -28411,7 +28411,8 @@
       "status": {
         "context": "Context: {value}",
         "evidence": "Evidence: {value}",
-        "review": "Review: {value}"
+        "review": "Review: {value}",
+        "sensitivity": "Topic: {value}"
       },
       "tagsLabel": "Tags",
       "tagsPlaceholder": "comma, separated, tags",
@@ -28497,6 +28498,8 @@
       "markConflict": "Mark conflict",
       "markVerified": "Mark verified",
       "pending_instruction": "Awaiting review",
+      "quarantined": "Quarantined",
+      "sensitive": "Sensitive topic",
       "supported": "Evidence-backed",
       "unknown": "Unknown",
       "unreviewed": "Unreviewed",
@@ -28687,6 +28690,7 @@
       "piiRedacted": "Saved — personal details were redacted first.",
       "pin": "Pin",
       "pinnedLabel": "Pinned",
+      "portability": "Export / Import…",
       "provenanceLabel": "Source type",
       "restore": "Restore",
       "restoredToast": "{count, plural, =1 {Restored # memory} other {Restored # memories}}",
@@ -28735,6 +28739,70 @@
         "pinned": "Pinned"
       },
       "viewsLabel": "Memory views"
+    },
+    "portability": {
+      "cancel": "Cancel",
+      "description": "Export a scoped bundle as JSON or Markdown, or preview and review an import before writing anything.",
+      "export": {
+        "copy": "Copy",
+        "download": "Download",
+        "downloadedToast": "Exported {count, plural, =1 {# memory} other {# memories}}",
+        "formatLabel": "Format",
+        "formats": {
+          "json": "JSON (.json)",
+          "markdown": "Markdown (.md)"
+        },
+        "includeArchived": "Include archived memories",
+        "previewAria": "Export bundle preview",
+        "scopeLabel": "Scope to export",
+        "scopes": {
+          "all": "All scopes",
+          "filtered": "Current filtered view"
+        },
+        "summary": "{count, plural, =0 {No memories to export} =1 {# memory ready to export} other {# memories ready to export}}"
+      },
+      "import": {
+        "badges": {
+          "add": "{count} new",
+          "conflict": "{count} conflicts",
+          "duplicate": "{count} duplicates skipped",
+          "pii": "{count} blocked (PII)",
+          "sensitive": "{count} sensitive (quarantined)"
+        },
+        "confirm": "Import {count, plural, =1 {# memory} other {# memories}}",
+        "conflictLabel": "When an entry conflicts",
+        "conflicts": {
+          "keepBoth": "Import as conflict for review",
+          "overwrite": "Overwrite existing memory",
+          "skip": "Skip conflicting entries"
+        },
+        "disposition": {
+          "add": "New",
+          "blocked_pii": "PII blocked",
+          "conflict": "Conflict",
+          "duplicate": "Duplicate"
+        },
+        "errors": {
+          "empty_input": "Paste or upload a bundle first.",
+          "invalid_json": "Could not parse JSON bundle.",
+          "no_memories_found": "No valid memory entries were found."
+        },
+        "failedToast": "No memories could be imported",
+        "importedToast": "Imported {count, plural, =1 {# memory} other {# memories}}",
+        "inputLabel": "Bundle or Markdown bullets",
+        "placeholder": "Paste a Cognia JSON export or Markdown bullet list (- User prefers pnpm…)",
+        "targetScopeLabel": "Target scope",
+        "targetScopes": {
+          "preserve": "Keep bundle scopes"
+        },
+        "trustNote": "Imported preferences and sensitive topics enter Needs review / Quarantined until you verify them.",
+        "uploadFile": "Choose .json or .md file"
+      },
+      "tabs": {
+        "export": "Export",
+        "import": "Import & review"
+      },
+      "title": "Export & import memories"
     },
     "projectKind": {
       "constraint": "Constraint",
@@ -55506,6 +55574,10 @@
             "global": "Global",
             "workspace": "Current workspace"
           }
+        },
+        "sensitiveTopics": {
+          "description": "Allow automatically learned health, religious/political belief, personal finance, and identity facts to enter recall immediately. When off, sensitive candidates stay quarantined until you verify them in /memory.",
+          "label": "Auto-activate sensitive topics"
         }
       },
       "maintenance": {
@@ -55641,6 +55713,16 @@
           "label": "Tell the model what was learned"
         },
         "intro": "Cognia can read this workspace's earlier conversations and keep what they established about the project, so a new chat does not start from nothing. Learning and telling the model are separate switches, and they ship with different defaults.",
+        "isolation": {
+          "description": "Project-only restricts every conversation in this workspace to reading and writing workspace memories only, blocking global personal memory recall and cross-project spillover.",
+          "label": "Workspace memory isolation",
+          "labelNamed": "Workspace memory isolation ({workspace})",
+          "noWorkspace": "Open a workspace to configure its memory isolation mode.",
+          "options": {
+            "inherit": "Standard (Global + Workspace)",
+            "projectOnly": "Workspace-only (strict project isolation)"
+          }
+        },
         "jobs": {
           "failed": "{count, plural, one {# gave up after retries} other {# gave up after retries}}",
           "pending": "{count, plural, =0 {Nothing queued} one {# job queued or running} other {# jobs queued or running}}",
@@ -55656,6 +55738,49 @@
         }
       },
       "retrieval": {
+        "backend": {
+          "apiKeyLabel": "API key",
+          "baseUrlLabel": "Base URL (optional)",
+          "modelLabel": "Embedding model",
+          "pineconeIndexLabel": "Pinecone index name",
+          "placeholders": {
+            "apiKey": "sk-...",
+            "chromaUrl": "http://localhost:8000",
+            "cloudUrl": "https://...",
+            "milvusAddress": "localhost:19530",
+            "model": "Xenova/all-MiniLM-L6-v2",
+            "ollamaUrl": "http://127.0.0.1:11434",
+            "pineconeIndex": "cognia-memory",
+            "qdrantUrl": "http://localhost:6333",
+            "weaviateUrl": "http://localhost:8080"
+          },
+          "providerLabel": "Embedding provider",
+          "providers": {
+            "cohere": "Cohere",
+            "google": "Google Gemini",
+            "mistral": "Mistral",
+            "ollama": "Ollama (Local)",
+            "openai": "OpenAI",
+            "transformersjs": "Transformers.js (Local)",
+            "voyage": "Voyage AI"
+          },
+          "sourceDescription": "Share Digital Twin's embedding and vector store, or configure a dedicated backend exclusively for long-term memory.",
+          "sourceLabel": "Embedding & vector backend",
+          "sources": {
+            "custom": "Dedicated memory backend",
+            "twin": "Shared with Digital Twin"
+          },
+          "vectorEndpointLabel": "Vector store URL / address",
+          "vectorStoreLabel": "Vector store",
+          "vectorStores": {
+            "chroma": "Chroma",
+            "milvus": "Milvus",
+            "native": "Local / Built-in",
+            "pinecone": "Pinecone",
+            "qdrant": "Qdrant",
+            "weaviate": "Weaviate"
+          }
+        },
         "beliefWeight": {
           "description": "Rank memories confirmed across several conversations higher. At off, ranking ignores corroboration; it is still shown in the memory inspector.",
           "label": "Corroboration weight",

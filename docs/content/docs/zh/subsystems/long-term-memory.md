@@ -63,12 +63,12 @@ lib/memory/
   external/       providers（claude-code · codex）· discover · edit     # 外部记忆文件
   CONTEXT.md                                                            # 领域词汇表
 
-packages/memory/src/            # 抽取出的内核 —— 零 `@/` 导入
+packages/memory/src/            # 抽取出的内核 —— 零 `@/` 导入（含 sensitive-topics、portability、e2e-memory-eval）
 lib/db/memories.ts              # Dexie CRUD：create/get/update/invalidate/touch/pin/list
 lib/plugin/api/memory-api.ts    # 面向插件的 ctx.memory
 lib/external-bridge/handlers/memory.ts   # MCP 工具
 hooks/memory/use-memory-console.ts       # 控制台状态，桌面与手机外壳共用
-components/memory/              # 控制台 · 详情面板 · 冲突解决 · 批量工具条
+components/memory/              # 控制台 · 详情面板 · 冲突解决 · 导入导出审阅向导 · 批量工具条
 components/mobile/memory/       # 同一 hook 之上的手机外壳
 app/memory/                     # 管理页路由
 ```
