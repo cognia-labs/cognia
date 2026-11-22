@@ -10,6 +10,7 @@ import {
   cloudSessionNeedsReauth,
   isCloudSessionActive,
   readCloudSessionState,
+  sessionMatchesDeployment,
   summarizeIdentity,
 } from "./cloud-session"
 
@@ -176,5 +177,89 @@ describe("summarizeIdentity", () => {
     expect(summary).not.toHaveProperty("orgId")
     expect(summary).not.toHaveProperty("logtoOrganizationId")
     expect(summary).not.toHaveProperty("orgRole")
+  })
+})
+
+describe("sessionMatchesDeployment", () => {
+  const deployment = {
+    config: {
+      deploymentMode: "multi-tenant" as const,
+      hostId: "host_b",
+      oidc: {
+        issuer: "https://auth-b.example/oidc/",
+        webClientId: "web-b",
+        audience: "https://api-b.example",
+      },
+    },
+  }
+
+  it("matches an active or offline session from the same normalized issuer and audience", () => {
+    const s = session({
+      issuer: "https://auth-b.example/oidc",
+      resource: "https://api-b.example",
+    })
+    expect(
+      sessionMatchesDeployment(
+        { status: "active", session: s, identity: { userId: "usr_1", logtoSubject: "sub" } },
+        deployment
+      )
+    ).toBe(true)
+    expect(
+      sessionMatchesDeployment(
+        {
+          status: "offline",
+          sessionMetadata: {
+            issuer: "https://auth-b.example/oidc",
+            clientId: "web-b",
+            resource: "https://api-b.example",
+            scopes: [],
+          },
+        },
+        deployment
+      )
+    ).toBe(true)
+  })
+
+  it("rejects active and offline sessions from another deployment or audience", () => {
+    expect(
+      sessionMatchesDeployment(
+        {
+          status: "active",
+          session: session({
+            issuer: "https://auth-a.example/oidc",
+            resource: "https://api-b.example",
+          }),
+          identity: { userId: "usr_1", logtoSubject: "sub", orgId: "org_a" },
+        },
+        deployment
+      )
+    ).toBe(false)
+    expect(
+      sessionMatchesDeployment(
+        {
+          status: "active",
+          session: session({
+            issuer: "https://auth-b.example/oidc",
+            resource: "https://api-a.example",
+          }),
+          identity: { userId: "usr_1", logtoSubject: "sub", orgId: "org_a" },
+        },
+        deployment
+      )
+    ).toBe(false)
+    expect(
+      sessionMatchesDeployment(
+        {
+          status: "offline",
+          sessionMetadata: {
+            issuer: "https://auth-a.example/oidc",
+            clientId: "web-a",
+            resource: "https://api-a.example",
+            scopes: [],
+          },
+        },
+        deployment
+      )
+    ).toBe(false)
   })
 })

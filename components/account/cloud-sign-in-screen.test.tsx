@@ -299,4 +299,48 @@ describe("CloudSignInScreen", () => {
     fireEvent.click(screen.getByTestId("cloud-sign-in-offline"))
     expect(h.onContinueOffline).toHaveBeenCalled()
   })
+
+  it("offers cancel and offline while signing in, retry when unavailable, and sign-out even without a profile name", () => {
+    const onCancelSignIn = jest.fn()
+    const onRetry = jest.fn()
+    const h = { ...handlers(), onCancelSignIn, onRetry }
+    const { rerender } = render(
+      <CloudSignInScreen
+        view={{ kind: "signing-in", canContinueOffline: true }}
+        error={null}
+        busy
+        {...h}
+      />
+    )
+    fireEvent.click(screen.getByTestId("cloud-sign-in-cancel"))
+    expect(onCancelSignIn).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTestId("cloud-sign-in-offline"))
+    expect(h.onContinueOffline).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <CloudSignInScreen
+        view={{ kind: "unavailable", baseUrl: null, message: "db error", canContinueOffline: true }}
+        error={null}
+        busy={false}
+        {...h}
+      />
+    )
+    fireEvent.click(screen.getByTestId("cloud-sign-in-retry"))
+    expect(onRetry).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <CloudSignInScreen
+        view={{ kind: "unaffiliated", deployment, allowClaim: false }}
+        error={null}
+        busy={false}
+        personName={null}
+        {...h}
+      />
+    )
+    expect(screen.getByTestId("cloud-sign-in-person")).toHaveTextContent("signedInNoName")
+    fireEvent.click(screen.getByTestId("cloud-sign-in-sign-out"))
+    expect(h.onSignOut).toHaveBeenCalledTimes(1)
+    fireEvent.click(screen.getByTestId("cloud-sign-in-offline"))
+    expect(h.onContinueOffline).toHaveBeenCalledTimes(2)
+  })
 })

@@ -711,6 +711,19 @@ describe("config helpers", () => {
     expect(await loadCompanionConfig()).toBeNull()
   })
 
+  it("clearCompanionConfig restores the cached pairing when secure storage refuses to clear", async () => {
+    __setCompanionConfigCacheForTests(MOCK_CONFIG)
+    __setCompanionStorageForTests({
+      load: async () => MOCK_CONFIG,
+      save: async () => undefined,
+      clear: async () => {
+        throw new Error("keychain locked")
+      },
+    })
+    await expect(clearCompanionConfig()).rejects.toThrow("keychain locked")
+    expect(loadCompanionConfig()).toBe(MOCK_CONFIG)
+  })
+
   it("hydrateCompanionConfig fails closed on a malformed host book", async () => {
     // The cache must be primed via `hydrate*`, which delegates to the
     // credential book. A host book that does not parse is refused rather than

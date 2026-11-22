@@ -18,7 +18,8 @@ import { getDb } from "@/lib/db/schema"
 /** Account id assumed when the runtime predates multi-account databases. */
 export const DEFAULT_LOCAL_ACCOUNT_ID = "local_acct_a"
 
-export function getActiveAccountId(): string {
+/** The account id of the open account-scoped database, or `null` when none is mounted. */
+export function getOpenAccountDatabaseId(): string | null {
   try {
     const name = getDb().name
     if (name.startsWith(ACCOUNT_DB_PREFIX)) {
@@ -39,7 +40,13 @@ export function getActiveAccountId(): string {
     // static export's build pass). Resolution never runs there, but the
     // fallback stays total so a caller can never see an exception for this.
   }
-  return process.env.COGNIA_LOCAL_ACCOUNT_ID ?? DEFAULT_LOCAL_ACCOUNT_ID
+  return null
+}
+
+export function getActiveAccountId(): string {
+  return (
+    getOpenAccountDatabaseId() ?? process.env.COGNIA_LOCAL_ACCOUNT_ID ?? DEFAULT_LOCAL_ACCOUNT_ID
+  )
 }
 
 /** Capture one open profile lifetime, including lock/reopen of the same account. */

@@ -364,11 +364,19 @@ export async function saveCompanionConfig(config: CompanionConfig): Promise<void
 }
 
 export async function clearCompanionConfig(): Promise<void> {
-  configGeneration += 1
+  const generation = ++configGeneration
+  const previous = cachedConfig
   cachedConfig = null
   return runConfigLifecycle(async () => {
     await metadataWriteTail.catch(() => {})
-    await companionStorage().clear()
+    try {
+      await companionStorage().clear()
+    } catch (error) {
+      if (configGeneration === generation && cachedConfig === null) {
+        cachedConfig = previous
+      }
+      throw error
+    }
     if (isPlainBrowser()) {
       const [{ detachActiveCompanionRuntimeTarget }, { setTransport }, { WebStubTransport }] =
         await Promise.all([

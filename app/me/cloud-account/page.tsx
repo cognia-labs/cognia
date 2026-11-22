@@ -1,24 +1,25 @@
 "use client"
 
 /**
- * Mobile cloud-account route: which Cognia Cloud this phone signs in to.
+ * Mobile cloud-account route: official Cognia account and self-hosted gateway.
  *
- * A phone has no pairing and no build-time server URL, so without this card
- * discovery finds nothing and the sign-in gate lets the person straight past.
- * The card stores the gateway address, and the gate (which already runs
- * through the in-app browser on Capacitor) does the sign-in itself.
- *
- * Reused rather than rebuilt, the same way `/me/appearance` embeds the desktop
- * appearance section.
+ * When a local profile is active, embeds the shared `AccountIdentityTab` so
+ * mobile users get the exact same official Cognia account sign-in, re-sign-in,
+ * sign-out, encrypted account sync, account deletion, and self-hosted gateway
+ * replacement controls as desktop and web. Falls back to `CloudDeploymentCard`
+ * before the profile store hydrates.
  */
 
 import { useTranslations } from "next-intl"
 
+import { AccountIdentityTab } from "@/components/account/manage/account-identity-tab"
 import { CloudDeploymentCard } from "@/components/settings/companion/cloud-deployment-card"
 import { SubPageShell } from "@/components/mobile/me/sub-page-shell"
+import { selectActiveAccount, useAccountStore } from "@/stores/account/account-store"
 
 export default function MobileCloudAccountPage() {
   const t = useTranslations("mobile.me")
+  const activeAccount = useAccountStore(selectActiveAccount)
 
   return (
     <SubPageShell
@@ -27,7 +28,7 @@ export default function MobileCloudAccountPage() {
       backAria={t("appearanceBackAria")}
       testid="mobile-cloud-account-page"
     >
-      <CloudDeploymentCard />
+      {activeAccount ? <AccountIdentityTab account={activeAccount} /> : <CloudDeploymentCard />}
     </SubPageShell>
   )
 }

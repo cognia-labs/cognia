@@ -48,7 +48,7 @@ export function platformSignInDrivers(options: PlatformDriversOptions): Platform
   const nativeRedirectUri = nativeCallbackUriFor(options.issuerKind)
   if ((options.isCapacitor ?? detectCapacitor)()) {
     return {
-      drivers: createLogtoCapacitorDrivers(),
+      drivers: createLogtoCapacitorDrivers(options.signal ? { signal: options.signal } : {}),
       redirectUri: nativeRedirectUri,
       clientKind: "native",
     }
@@ -59,7 +59,10 @@ export function platformSignInDrivers(options: PlatformDriversOptions): Platform
   if (popupCapable) {
     return {
       // Called from the sign-in button's click handler, before any await.
-      drivers: createLogtoWebPopupDrivers(undefined, { reserveWindow: true }),
+      drivers: createLogtoWebPopupDrivers(undefined, {
+        reserveWindow: true,
+        ...(options.signal ? { signal: options.signal } : {}),
+      }),
       redirectUri: `${window.location.origin}/logto/callback`,
       clientKind: "web",
     }
@@ -67,12 +70,17 @@ export function platformSignInDrivers(options: PlatformDriversOptions): Platform
   return {
     drivers: {
       openUrl: (url) => {
+        if (options.signal?.aborted) return
         void openUrl(url)
       },
       waitForCode: ({ state }) => {
         const controller = new AbortController()
         const forward = () => controller.abort()
-        options.signal?.addEventListener("abort", forward, { once: true })
+        if (options.signal?.aborted) {
+          controller.abort()
+        } else {
+          options.signal?.addEventListener("abort", forward, { once: true })
+        }
         const delivered = waitForLogtoDeepLinkCallback({ state, signal: controller.signal })
         const racers = options.pasted ? [delivered, options.pasted(state)] : [delivered]
         return Promise.race(racers).finally(() => {

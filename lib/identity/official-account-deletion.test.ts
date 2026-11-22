@@ -49,12 +49,17 @@ describe("the deletion endpoint", () => {
     })
   })
 
-  it("cancels with DELETE and reads an unknown status as none", async () => {
-    const fetchImpl = respond(200, { status: "weird" })
+  it("cancels with DELETE, preserves coolingOffDays, and rejects malformed statuses", async () => {
+    const fetchImpl = respond(200, { status: "cancelled", coolingOffDays: 14 })
     await expect(cancelAccountDeletion(current, { fetchImpl })).resolves.toEqual({
-      status: "none",
+      status: "cancelled",
+      coolingOffDays: 14,
     })
     expect(fetchImpl).toHaveBeenCalledWith(URL_, expect.objectContaining({ method: "DELETE" }))
+
+    await expect(
+      cancelAccountDeletion(current, { fetchImpl: respond(200, { status: "weird" }) })
+    ).rejects.toMatchObject({ code: "failed" })
   })
 
   it("names a refused token, a stale sign-in, and anything else", async () => {
@@ -154,5 +159,49 @@ describe("confirmAccountDeletion", () => {
       )
     ).rejects.toMatchObject({ code: "unauthorized" })
     expect(login).not.toHaveBeenCalled()
+  })
+
+  it("fences POST when aborted or when assertActive rejects after fresh login", async () => {
+    const controller = new AbortController()
+    const fetchImpl = jest.fn()
+    const login = jest.fn(async () => {
+      controller.abort()
+      return {
+        issuer: ISSUER,
+        clientId: "cognia-web",
+        resource: "https://sync.cognia.cn",
+        accessToken: token({ sub: "usr_ada" }),
+        idToken: "fresh.id.token",
+        scopes: [],
+      } satisfies LogtoSession
+    })
+    await expect(
+      confirmAccountDeletion(
+        deployment,
+        drivers,
+        { redirectUri: "x", clientKind: "web" },
+        current,
+        { login, fetchImpl, signal: controller.signal }
+      )
+    ).rejects.toMatchObject({ name: "AbortError" })
+    expect(fetchImpl).not.toHaveBeenCalled()
+
+    const { login: okLogin } = freshLogin("usr_ada")
+    await expect(
+      confirmAccountDeletion(
+        deployment,
+        drivers,
+        { redirectUri: "x", clientKind: "web" },
+        current,
+        {
+          login: okLogin,
+          fetchImpl,
+          assertActive: () => {
+            throw new AccountDeletionError("unauthorized", "signed out")
+          },
+        }
+      )
+    ).rejects.toMatchObject({ code: "unauthorized" })
+    expect(fetchImpl).not.toHaveBeenCalled()
   })
 })

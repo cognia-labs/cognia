@@ -118,6 +118,9 @@ describe("AccountSyncDataPanel", () => {
     expect(screen.getByTestId("account-sync-too-large")).toHaveTextContent("tooLarge(1)")
     fireEvent.click(screen.getByTestId("account-sync-sync-now"))
     expect(engine.syncNow).toHaveBeenCalled()
+
+    withEngine(running({ error: "the server returned an empty device list" }))
+    expect(screen.getByTestId("account-sync-data-error")).toHaveTextContent("spaceCleared")
   })
 
   it("switches a class through the engine, and says when that failed", async () => {

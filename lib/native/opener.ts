@@ -17,7 +17,15 @@ export interface OpenUrlOptions {
   forceWebFallback?: boolean
 }
 
-export async function openUrl(url: string, options: OpenUrlOptions = {}): Promise<void> {
+/**
+ * Open an external URL and report whether a handler accepted it.
+ *
+ * In web mode `window.open` returns `null` when popup blockers suppress an
+ * asynchronous call (such as an OIDC `end_session_endpoint` opened after token
+ * revocation). Returning `false` lets sign-out surfaces tell the person their
+ * browser session may still be active instead of failing silently.
+ */
+export async function tryOpenUrl(url: string, options: OpenUrlOptions = {}): Promise<boolean> {
   // E2E hook: when the dev bridge has installed `__cogniaE2EOpenUrl`, route
   // the call through it instead of the OS browser. Specs use this to assert
   // an OAuth flow opened the right authorize URL without popping a real
@@ -27,7 +35,7 @@ export async function openUrl(url: string, options: OpenUrlOptions = {}): Promis
     const w = window as { __cogniaE2EOpenUrl?: (url: string) => void }
     if (typeof w.__cogniaE2EOpenUrl === "function") {
       w.__cogniaE2EOpenUrl(url)
-      return
+      return true
     }
   }
 
@@ -35,7 +43,7 @@ export async function openUrl(url: string, options: OpenUrlOptions = {}): Promis
     try {
       const mod = await import("@tauri-apps/plugin-opener")
       await mod.openUrl(url)
-      return
+      return true
     } catch (err) {
       // Fall through to web fallback if the plugin isn't bundled.
       console.warn("openUrl: tauri opener failed, falling back to window.open", err)
@@ -49,15 +57,20 @@ export async function openUrl(url: string, options: OpenUrlOptions = {}): Promis
     try {
       const { open } = await import("@/lib/capacitor/browser")
       const out = await open({ url })
-      if (out.kind === "ok") return
+      if (out.kind === "ok") return true
     } catch (err) {
       console.warn("openUrl: capacitor browser failed, falling back to window.open", err)
     }
   }
 
   if (typeof window !== "undefined") {
-    window.open(url, "_blank", "noopener,noreferrer")
+    return window.open(url, "_blank", "noopener,noreferrer") !== null
   }
+  return false
+}
+
+export async function openUrl(url: string, options: OpenUrlOptions = {}): Promise<void> {
+  await tryOpenUrl(url, options)
 }
 
 export async function openPath(path: string, options: OpenUrlOptions = {}): Promise<void> {

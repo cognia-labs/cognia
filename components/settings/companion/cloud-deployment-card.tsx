@@ -40,13 +40,18 @@ import { Spinner } from "@/components/ui/spinner"
 import { SettingsBlock } from "@/components/settings/common/settings-block"
 import { forgetOfflineChoice } from "@/components/account/cloud-sign-in-gate"
 import { getActiveAccountId } from "@/lib/accounts/active-account-id"
-import { readCloudSessionState, type CloudSessionState } from "@/lib/identity/cloud-session"
+import {
+  readCloudSessionState,
+  sessionMatchesDeployment,
+  type CloudSessionState,
+} from "@/lib/identity/cloud-session"
 import { clearHostDeployment } from "@/lib/identity/host-person"
 import { completeSignOut } from "@/lib/identity/complete-sign-in"
 import {
   KNOWN_SOCIAL_PROVIDERS,
   discoverDeployment,
   type DeploymentDiscovery,
+  type ReadyDeployment,
 } from "@/lib/identity/deployment-discovery"
 import {
   forgetDeploymentSource,
@@ -58,17 +63,26 @@ import {
   type DeploymentSourceDeps,
 } from "@/lib/identity/deployment-source"
 import { officialDeployment, type OfficialDeployment } from "@/lib/identity/official-deployment"
-import { signOutFromLogto, signOutLeftTokensLive } from "@/lib/logto/app-session"
-import { openUrl } from "@/lib/native/opener"
+import {
+  signOutFromLogto,
+  signOutLeftTokensLive,
+  signOutRevocationWarning,
+  type LogtoSignOutRevocationWarning,
+} from "@/lib/logto/app-session"
+import { tryOpenUrl } from "@/lib/native/opener"
+import { useAccountStore } from "@/stores/account/account-store"
 
 export interface CloudDeploymentCardDeps {
   /** Whose deployment. Defaults to the active local profile. */
   localAccountId?: string
   discover?: (source: DeploymentSource) => Promise<DeploymentDiscovery>
   readState?: (localAccountId: string) => Promise<CloudSessionState>
-  signOut?: (
-    localAccountId: string
-  ) => Promise<{ endSessionUrl?: string | null; tokensLive: boolean }>
+  signOut?: (localAccountId: string) => Promise<{
+    endSessionUrl?: string | null
+    endSessionOpened?: boolean
+    tokensLive: boolean
+    revocationWarning?: LogtoSignOutRevocationWarning | null
+  }>
   /** What "sign in" does once the offline choice is withdrawn. */
   reload?: () => void
   /** Forget the desktop host's own trust anchor. Defaults to the Tauri command. */
@@ -90,7 +104,11 @@ async function defaultSignOut(localAccountId: string) {
     localAccountId,
     afterClear: (context) => completeSignOut({ localAccountId, ...context }),
   })
-  return { endSessionUrl: report.endSessionUrl ?? null, tokensLive: signOutLeftTokensLive(report) }
+  return {
+    endSessionUrl: report.endSessionUrl ?? null,
+    tokensLive: signOutLeftTokensLive(report),
+    revocationWarning: signOutRevocationWarning(report),
+  }
 }
 
 function defaultReload(): void {
@@ -104,12 +122,18 @@ export function CloudDeploymentCard({ frame = "block", deps = {} }: CloudDeploym
   useEffect(() => {
     depsRef.current = deps
   })
+  const servedAccountId = useAccountStore(
+    (store) => store.unlockedAccountId ?? store.activeAccountId
+  )
   const [localAccountId] = useState(() => deps.localAccountId ?? getActiveAccountId())
+  const isServedProfile = !servedAccountId || localAccountId === servedAccountId
   const [official] = useState(() => (deps.official ?? officialDeployment)())
   const [stored, setStored] = useState<DeploymentSource | null>(() =>
     loadDeploymentSource(localAccountId, deps.storage)
   )
   const [session, setSession] = useState<CloudSessionState | null>(null)
+  const [storedDiscovery, setStoredDiscovery] = useState<ReadyDeployment | null>(null)
+  const [sessionError, setSessionError] = useState<string | null>(null)
   const [editing, setEditing] = useState(false)
   const [url, setUrl] = useState("")
   const [fingerprint, setFingerprint] = useState("")
@@ -123,10 +147,28 @@ export function CloudDeploymentCard({ frame = "block", deps = {} }: CloudDeploym
 
   const reloadSession = useCallback(async () => {
     const d = depsRef.current
-    const next = await (
-      d.readState ?? ((id: string) => readCloudSessionState({ localAccountId: id }))
-    )(localAccountId)
-    setSession(next)
+    setSessionError(null)
+    try {
+      const currentStored = loadDeploymentSource(localAccountId, d.storage)
+      const [next, discovered] = await Promise.all([
+        (d.readState ?? ((id: string) => readCloudSessionState({ localAccountId: id })))(
+          localAccountId
+        ),
+        currentStored && d.discover
+          ? d.discover(currentStored).catch(() => null)
+          : currentStored
+            ? discoverDeployment({
+                localAccountId,
+                deploymentSource: () => currentStored,
+                officialFallback: false,
+              }).catch(() => null)
+            : Promise.resolve(null),
+      ])
+      setSession(next)
+      setStoredDiscovery(discovered?.status === "ready" ? discovered : null)
+    } catch (cause) {
+      setSessionError(cause instanceof Error ? cause.message : String(cause))
+    }
   }, [localAccountId])
 
   useEffect(() => {
@@ -190,16 +232,26 @@ export function CloudDeploymentCard({ frame = "block", deps = {} }: CloudDeploym
     forgetDeploymentSource(localAccountId, depsRef.current.storage)
     setStored(loadDeploymentSource(localAccountId, depsRef.current.storage))
     setSession(null)
+    setStoredDiscovery(null)
+    setSessionError(null)
     setEditing(false)
     // The desktop host keeps its own copy of the anchor (it fetched it itself).
-    // Best-effort: off the desktop there is none, and a locked host keeps a
-    // record that the next sign-in gate decision would replace anyway.
-    void (depsRef.current.clearHost ?? (() => clearHostDeployment()))().catch((cause: unknown) => {
-      console.warn("[identity] the host kept its cloud deployment record", cause)
-    })
+    // Only clear it when forgetting the served profile's deployment so editing
+    // an inactive profile never wipes the active profile's host anchor.
+    if (isServedProfile) {
+      void (depsRef.current.clearHost ?? (() => clearHostDeployment()))().catch(
+        (cause: unknown) => {
+          console.warn("[identity] the host kept its cloud deployment record", cause)
+        }
+      )
+    }
   }
 
   const signIn = () => {
+    if (!isServedProfile) {
+      toast.error(t("signInOtherProfile"))
+      return
+    }
     forgetOfflineChoice(localAccountId)
     ;(depsRef.current.reload ?? defaultReload)()
   }
@@ -209,8 +261,13 @@ export function CloudDeploymentCard({ frame = "block", deps = {} }: CloudDeploym
     try {
       const report = await (depsRef.current.signOut ?? defaultSignOut)(localAccountId)
       toast.success(t("signOutDone"))
-      if (report.tokensLive) toast.warning(t("revocationFailed"))
-      if (report.endSessionUrl) void openUrl(report.endSessionUrl)
+      const warning = report.revocationWarning ?? (report.tokensLive ? "failed" : null)
+      if (warning === "failed") toast.warning(t("revocationFailed"))
+      else if (warning === "unsupported") toast.warning(t("revocationUnsupported"))
+      if (report.endSessionUrl) {
+        const opened = report.endSessionOpened ?? (await tryOpenUrl(report.endSessionUrl))
+        if (!opened) toast.warning(t("endSessionBlocked"))
+      }
       await reloadSession()
     } catch (cause) {
       toast.error(
@@ -298,6 +355,22 @@ export function CloudDeploymentCard({ frame = "block", deps = {} }: CloudDeploym
     </div>
   )
 
+  const sessionMatchesStored =
+    session && storedDiscovery ? sessionMatchesDeployment(session, storedDiscovery) : true
+  const foreignSession =
+    session !== null &&
+    (session.status === "active" || session.status === "offline") &&
+    !sessionMatchesStored
+  const canSignOut =
+    session !== null &&
+    (session.status === "active" || session.status === "offline" || session.status === "error")
+  const canSignIn =
+    session === null ||
+    session.status === "signed-out" ||
+    session.status === "reauth-required" ||
+    session.status === "error" ||
+    foreignSession
+
   const current = stored ? (
     <div className="flex flex-col gap-3" data-testid="cloud-deployment-current">
       <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-sm">
@@ -313,11 +386,17 @@ export function CloudDeploymentCard({ frame = "block", deps = {} }: CloudDeploym
         ) : null}
         <dt className="text-muted-foreground">{t("current.session")}</dt>
         <dd className="text-xs" data-testid="cloud-deployment-session">
-          {session === null ? (
+          {sessionError ? (
+            <span className="text-destructive">
+              {t("session.readFailed", { message: sessionError })}
+            </span>
+          ) : session === null ? (
             <span className="inline-flex items-center gap-2 text-muted-foreground">
               <Spinner className="size-3" />
               {t("session.loading")}
             </span>
+          ) : foreignSession ? (
+            t("session.foreign")
           ) : session.status === "active" ? (
             <>
               <Badge variant="secondary">{t("session.active")}</Badge>{" "}
@@ -329,24 +408,44 @@ export function CloudDeploymentCard({ frame = "block", deps = {} }: CloudDeploym
         </dd>
       </dl>
       <div className="flex flex-wrap gap-2">
-        {session?.status === "active" ? (
+        {sessionError ? (
           <Button
             type="button"
             size="sm"
             variant="outline"
-            disabled={busy}
+            onClick={() => void reloadSession()}
+            data-testid="cloud-deployment-retry-session"
+          >
+            {t("retrySession")}
+          </Button>
+        ) : null}
+        {canSignIn ? (
+          <Button
+            type="button"
+            size="sm"
+            disabled={!isServedProfile}
+            title={!isServedProfile ? t("signInOtherProfile") : undefined}
+            onClick={signIn}
+            data-testid="cloud-deployment-sign-in"
+          >
+            <LogInIcon data-icon="inline-start" />
+            {t("signIn")}
+          </Button>
+        ) : null}
+        {canSignOut ? (
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            disabled={busy || !isServedProfile}
+            title={!isServedProfile ? t("signInOtherProfile") : undefined}
             onClick={() => void signOut()}
             data-testid="cloud-deployment-sign-out"
           >
             <LogOutIcon data-icon="inline-start" />
             {t("signOut")}
           </Button>
-        ) : (
-          <Button type="button" size="sm" onClick={signIn} data-testid="cloud-deployment-sign-in">
-            <LogInIcon data-icon="inline-start" />
-            {t("signIn")}
-          </Button>
-        )}
+        ) : null}
         <Button
           type="button"
           size="sm"

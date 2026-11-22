@@ -437,6 +437,22 @@ describe("adoptOrganization", () => {
       adoptOrganization(deployment, { ...session, refreshToken: undefined }, target, harness().deps)
     ).rejects.toBeInstanceOf(CloudSignInError)
   })
+
+  it("refuses to adopt an organization for an inactive profile when another profile DB is open", async () => {
+    const { deps, registry } = harness()
+    await expect(
+      adoptOrganization(deployment, session, target, {
+        ...deps,
+        openAccountId: () => "acct_other",
+      })
+    ).rejects.toMatchObject({
+      code: "inactive-profile",
+    })
+    expect(deps.refresh).not.toHaveBeenCalled()
+    expect(deps.save).not.toHaveBeenCalled()
+    expect(deps.complete).not.toHaveBeenCalled()
+    expect(registry.setOrgId).not.toHaveBeenCalled()
+  })
 })
 
 describe("claimDeployment and redeemInvitation", () => {

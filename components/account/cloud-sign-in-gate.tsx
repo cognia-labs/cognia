@@ -50,9 +50,18 @@ import { getWindowRole, isSecondaryOverlayRole } from "@/lib/platform/window-rol
 import { detectHostProfile, type HostProfile } from "@/lib/platform/capabilities"
 import { platformSignInDrivers } from "@/lib/logto/platform-drivers"
 import { LogtoSignInCancelled } from "@/lib/logto/capacitor-drivers"
-import { signOutFromLogto } from "@/lib/logto/app-session"
+import {
+  signOutFromLogto,
+  signOutRevocationWarning,
+  type LogtoSignOutRevocationWarning,
+} from "@/lib/logto/app-session"
+import { tryOpenUrl } from "@/lib/native/opener"
 import { CollabError, type CollabAccountMembership } from "@/lib/collab/client"
-import { readCloudSessionState, type CloudSessionState } from "@/lib/identity/cloud-session"
+import {
+  readCloudSessionState,
+  sessionMatchesDeployment,
+  type CloudSessionState,
+} from "@/lib/identity/cloud-session"
 import { readLogtoIdentity } from "@/lib/identity/logto-claims"
 import { completeSignOut } from "@/lib/identity/complete-sign-in"
 import { UserBindingError } from "@/lib/identity/user-binding"
@@ -84,7 +93,7 @@ import { isShareViewerRoute } from "@/lib/share/viewer-context"
 import { useAccountStore } from "@/stores/account/account-store"
 import { captureAccountScope } from "@/lib/accounts/active-account-id"
 
-import { type LogtoSession, type OidcIssuerKind } from "@/lib/logto/client"
+import { type LogtoDrivers, type LogtoSession, type OidcIssuerKind } from "@/lib/logto/client"
 import type { SocialProvider } from "@/lib/identity/deployment-discovery"
 import type { OfficialDeployment, OfficialSocialProvider } from "@/lib/identity/official-deployment"
 
@@ -92,6 +101,12 @@ import { CloudSignInScreen, type CloudSignInView } from "./cloud-sign-in-screen"
 
 export const CLOUD_OFFLINE_KEY_PREFIX = "cognia.cloud-sign-in.offline"
 const UNGATED_PATHS = ["/logto/callback", "/invite", "/pair", "/onboarding"]
+
+export interface CloudSignOutOutcome {
+  endSessionUrl?: string | null
+  endSessionOpened?: boolean
+  revocationWarning?: LogtoSignOutRevocationWarning | null
+}
 
 export interface CloudSignInGateDeps {
   discover?: () => Promise<DeploymentDiscovery>
@@ -103,7 +118,7 @@ export interface CloudSignInGateDeps {
   adopt?: typeof adoptOrganization
   claim?: typeof claimDeployment
   redeem?: typeof redeemInvitation
-  signOut?: (localAccountId: string) => Promise<void>
+  signOut?: (localAccountId: string) => Promise<CloudSignOutOutcome | void>
   /** Point the desktop host at the deployment. Defaults to the Tauri command. */
   configureHost?: typeof configureHostDeployment
   profile?: HostProfile
@@ -150,11 +165,18 @@ export function forgetOfflineChoice(localAccountId: string): void {
   }
 }
 
-async function defaultSignOut(localAccountId: string): Promise<void> {
-  await signOutFromLogto({
+async function defaultSignOut(localAccountId: string): Promise<CloudSignOutOutcome> {
+  const report = await signOutFromLogto({
     localAccountId,
     afterClear: (context) => completeSignOut({ localAccountId, ...context }),
   })
+  const endSessionUrl = report.endSessionUrl ?? null
+  const endSessionOpened = endSessionUrl ? await tryOpenUrl(endSessionUrl) : true
+  return {
+    endSessionUrl,
+    endSessionOpened,
+    revocationWarning: signOutRevocationWarning(report),
+  }
 }
 
 export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
@@ -194,6 +216,7 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
   const codeRejecter = useRef<((error: Error) => void) | null>(null)
   const pendingState = useRef("")
   const deepLinkWait = useRef<AbortController | null>(null)
+  const activeDriversRef = useRef<LogtoDrivers | null>(null)
 
   // The E2E build walks past the gate, except in the lane that exists to test
   // it: `NEXT_PUBLIC_E2E_CLOUD_GATE=1` keeps the gate live under E2E.
@@ -241,7 +264,9 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
       // invitation" without saying who was asking.
       const identity = readLogtoIdentity(session)
       if (identity) {
-        setPersonName(identity.profile.name ?? identity.profile.email ?? null)
+        setPersonName(
+          identity.profile.name ?? identity.profile.email ?? identity.access.subject ?? null
+        )
       }
       setView({ kind: "settling" })
       setPhase("screen")
@@ -293,24 +318,36 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
       subscribeCloudSignInRequest((request) => {
         if (!localAccountId || request.localAccountId !== localAccountId) return
         void (async () => {
-          if (!officialRef.current && !deploymentRef.current) {
-            const discovery = await (
-              depsRef.current.discover ?? (() => discoverDeployment({ localAccountId }))
-            )()
-            if (discovery.status === "official") officialRef.current = discovery.deployment
-            else if (discovery.status === "ready") deploymentRef.current = discovery
+          try {
+            if (!officialRef.current && !deploymentRef.current) {
+              const discovery = await (
+                depsRef.current.discover ?? (() => discoverDeployment({ localAccountId }))
+              )()
+              if (discovery.status === "official") officialRef.current = discovery.deployment
+              else if (discovery.status === "ready") deploymentRef.current = discovery
+            }
+            const official = officialRef.current
+            const deployment = deploymentRef.current
+            if (!official && !deployment) return
+            setError(null)
+            setView(
+              official
+                ? { kind: "official", deployment: official }
+                : { kind: "sign-in", deployment: deployment!, canContinueOffline: true }
+            )
+            setRequested(true)
+            setPhase("screen")
+          } catch (cause) {
+            setError(null)
+            setView({
+              kind: "unavailable",
+              baseUrl: null,
+              message: cause instanceof Error ? cause.message : String(cause),
+              canContinueOffline: true,
+            })
+            setRequested(true)
+            setPhase("screen")
           }
-          const official = officialRef.current
-          const deployment = deploymentRef.current
-          if (!official && !deployment) return
-          setError(null)
-          setView(
-            official
-              ? { kind: "official", deployment: official }
-              : { kind: "sign-in", deployment: deployment!, canContinueOffline: true }
-          )
-          setRequested(true)
-          setPhase("screen")
         })()
       }),
     [localAccountId]
@@ -327,129 +364,161 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
     let cancelled = false
     queueMicrotask(() => {
       void (async () => {
-        if (discoveryEpoch > 0) {
-          // A deployment chosen after boot: the gate is probably passed, and
-          // must not stay passed against a host it has never asked.
-          setPhase("checking")
-          setView({ kind: "checking" })
-          setError(null)
-        }
-        const discovery = await (
-          depsRef.current.discover ?? (() => discoverDeployment({ localAccountId }))
-        )()
-        if (cancelled) return
-        if (discovery.status === "none") {
-          deploymentRef.current = null
+        try {
+          if (discoveryEpoch > 0) {
+            // A deployment chosen after boot: the gate is probably passed, and
+            // must not stay passed against a host it has never asked.
+            setPhase("checking")
+            setView({ kind: "checking" })
+            setError(null)
+          }
+          const discovery = await (
+            depsRef.current.discover ?? (() => discoverDeployment({ localAccountId }))
+          )()
+          if (cancelled) return
+          if (discovery.status === "none") {
+            deploymentRef.current = null
+            officialRef.current = null
+            setPhase("pass")
+            return
+          }
+          if (discovery.status === "official") {
+            deploymentRef.current = null
+            officialRef.current = discovery.deployment
+            const state = await (
+              depsRef.current.readState ??
+              ((id: string) => readCloudSessionState({ localAccountId: id }))
+            )(localAccountId)
+            if (cancelled) return
+            // An official session (or one kept while the issuer is unreachable)
+            // is enough: the official account has no organization to settle. A
+            // session some other issuer minted (a deployment since forgotten) is
+            // not this account. A lapsed official session still asks for reauth
+            // unless the person chose to stay offline for this tab; without any
+            // official session, the screen is offered once per profile.
+            const issuer =
+              state.status === "active"
+                ? state.session.issuer
+                : state.status === "offline" || state.status === "reauth-required"
+                  ? (state.sessionMetadata?.issuer ?? null)
+                  : null
+            const ours = issuer !== null && isOfficialIssuer(issuer, discovery.deployment)
+            if (ours && (state.status === "active" || state.status === "offline")) {
+              setPhase("pass")
+              return
+            }
+            if (ours && state.status === "reauth-required") {
+              if (hasChosenOffline(localAccountId)) {
+                setPhase("pass")
+                return
+              }
+              setView({
+                kind: "official",
+                deployment: discovery.deployment,
+                reauth: state.reason,
+              })
+              setPhase("screen")
+              return
+            }
+            if (!shouldOfferOfficialSignIn(localAccountId)) {
+              setPhase("pass")
+              return
+            }
+            setView({
+              kind: "official",
+              deployment: discovery.deployment,
+            })
+            setPhase("screen")
+            return
+          }
           officialRef.current = null
-          setPhase("pass")
-          return
-        }
-        if (discovery.status === "official") {
-          deploymentRef.current = null
-          officialRef.current = discovery.deployment
+          if (discovery.status === "unavailable") {
+            if (hasChosenOffline(localAccountId)) {
+              setPhase("pass")
+              return
+            }
+            setView({
+              kind: "unavailable",
+              baseUrl: discovery.baseUrl,
+              message: discovery.message,
+              canContinueOffline: true,
+            })
+            setPhase("screen")
+            return
+          }
+          deploymentRef.current = discovery
+          if ((depsRef.current.profile ?? detectHostProfile()) === "desktop") {
+            // The host verifies every sign-in against a trust anchor of its own.
+            // A desktop has no environment to read one from, so it is pointed at
+            // the same gateway the renderer just discovered, and fetches the
+            // issuer from there itself. Best-effort: a host that refuses (locked,
+            // or a companion server that never ran) leaves sign-in usable and
+            // only the device attribution undone.
+            void (depsRef.current.configureHost ?? configureHostDeployment)({
+              gatewayUrl: discovery.baseUrl,
+              ...(discovery.fingerprint ? { fingerprint: discovery.fingerprint } : {}),
+              replace: true,
+            }).catch((cause: unknown) => {
+              console.warn("[identity] the host could not be pointed at the deployment", cause)
+            })
+          }
           const state = await (
             depsRef.current.readState ??
             ((id: string) => readCloudSessionState({ localAccountId: id }))
           )(localAccountId)
           if (cancelled) return
-          // An official session (or one kept while the issuer is unreachable)
-          // is enough: the official account has no organization to settle. A
-          // session some other issuer minted (a deployment since forgotten) is
-          // not this account. Without one, the screen is offered until the
-          // profile answers it, once.
-          const issuer =
-            state.status === "active"
-              ? state.session.issuer
-              : state.status === "offline" || state.status === "reauth-required"
-                ? (state.sessionMetadata?.issuer ?? null)
-                : null
-          const ours = issuer !== null && isOfficialIssuer(issuer, discovery.deployment)
-          if (
-            (ours && (state.status === "active" || state.status === "offline")) ||
-            !shouldOfferOfficialSignIn(localAccountId)
-          ) {
+          const ours = sessionMatchesDeployment(state, discovery)
+          if (ours && state.status === "active") {
+            setPersonName(
+              state.identity.displayName ?? state.identity.email ?? state.identity.userId
+            )
+            if (state.identity.orgId) {
+              setPhase("pass")
+              return
+            }
+            await settleRef.current(state.session)
+            return
+          }
+          if (ours && state.status === "offline") {
+            // A kept session on an unreachable issuer: the plane refreshes on
+            // its own once the issuer answers. Nothing to ask the person.
             setPhase("pass")
             return
           }
+          if (hasChosenOffline(localAccountId)) {
+            setPhase("pass")
+            return
+          }
+          const reauth =
+            ours && state.status === "reauth-required"
+              ? state.reason
+              : ours && state.status === "error"
+                ? ("expired" as const)
+                : undefined
+          if (ours && state.status === "error") {
+            setError(tRef.current("error.generic", { message: state.reason }))
+          }
           setView({
-            kind: "official",
-            deployment: discovery.deployment,
-            ...(ours && state.status === "reauth-required" ? { reauth: state.reason } : {}),
+            kind: "sign-in",
+            deployment: discovery,
+            ...(reauth ? { reauth } : {}),
+            canContinueOffline: true,
           })
           setPhase("screen")
-          return
-        }
-        officialRef.current = null
-        if (discovery.status === "unavailable") {
+        } catch (cause) {
+          if (cancelled) return
           if (hasChosenOffline(localAccountId)) {
             setPhase("pass")
             return
           }
           setView({
             kind: "unavailable",
-            baseUrl: discovery.baseUrl,
-            message: discovery.message,
+            baseUrl: null,
+            message: cause instanceof Error ? cause.message : String(cause),
             canContinueOffline: true,
           })
           setPhase("screen")
-          return
         }
-        deploymentRef.current = discovery
-        if ((depsRef.current.profile ?? detectHostProfile()) === "desktop") {
-          // The host verifies every sign-in against a trust anchor of its own.
-          // A desktop has no environment to read one from, so it is pointed at
-          // the same gateway the renderer just discovered, and fetches the
-          // issuer from there itself. Best-effort: a host that refuses (locked,
-          // or a companion server that never ran) leaves sign-in usable and
-          // only the device attribution undone.
-          void (depsRef.current.configureHost ?? configureHostDeployment)({
-            gatewayUrl: discovery.baseUrl,
-            ...(discovery.fingerprint ? { fingerprint: discovery.fingerprint } : {}),
-            replace: true,
-          }).catch((cause: unknown) => {
-            console.warn("[identity] the host could not be pointed at the deployment", cause)
-          })
-        }
-        const state = await (
-          depsRef.current.readState ??
-          ((id: string) => readCloudSessionState({ localAccountId: id }))
-        )(localAccountId)
-        if (cancelled) return
-        if (state.status === "active") {
-          setPersonName(state.identity.displayName ?? state.identity.email ?? null)
-          if (state.identity.orgId) {
-            setPhase("pass")
-            return
-          }
-          await settleRef.current(state.session)
-          return
-        }
-        if (state.status === "offline") {
-          // A kept session on an unreachable issuer: the plane refreshes on
-          // its own once the issuer answers. Nothing to ask the person.
-          setPhase("pass")
-          return
-        }
-        if (hasChosenOffline(localAccountId)) {
-          setPhase("pass")
-          return
-        }
-        const reauth =
-          state.status === "reauth-required"
-            ? state.reason
-            : state.status === "error"
-              ? ("expired" as const)
-              : undefined
-        if (state.status === "error") {
-          setError(tRef.current("error.generic", { message: state.reason }))
-        }
-        setView({
-          kind: "sign-in",
-          deployment: discovery,
-          ...(reauth ? { reauth } : {}),
-          canContinueOffline: true,
-        })
-        setPhase("screen")
       })()
     })
     return () => {
@@ -490,6 +559,20 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
     codeRejecter.current = null
     deepLinkWait.current?.abort()
     deepLinkWait.current = null
+    activeDriversRef.current = null
+  }
+
+  const cancelSignIn = () => {
+    const drivers = activeDriversRef.current
+    codeRejecter.current?.(new CloudSignInError("cancelled", "cancelled"))
+    endCodeWait()
+    drivers?.abandon?.()
+    setBusy(false)
+    setError(null)
+    const official = officialRef.current
+    const deployment = deploymentRef.current
+    if (official) setView({ kind: "official", deployment: official })
+    else if (deployment) setView({ kind: "sign-in", deployment, canContinueOffline: true })
   }
 
   const runSignIn = async (method: CloudSignInMethod) => {
@@ -498,7 +581,8 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
     setError(null)
     setBusy(true)
     const { drivers, redirectUri, clientKind } = driversFor(authConfigIssuerKind(deployment.config))
-    setView({ kind: "signing-in" })
+    activeDriversRef.current = drivers
+    setView({ kind: "signing-in", canContinueOffline: true })
     try {
       const assertCurrent = captureAccountScope(localAccountId)
       const session = await (deps.signIn ?? signInWithDeployment)(
@@ -531,7 +615,8 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
     setError(null)
     setBusy(true)
     const { drivers, redirectUri, clientKind } = driversFor(deployment.issuerKind)
-    setView({ kind: "signing-in" })
+    activeDriversRef.current = drivers
+    setView({ kind: "signing-in", canContinueOffline: true })
     try {
       const assertCurrent = captureAccountScope(localAccountId)
       await (deps.signInOfficial ?? signInToOfficialAccount)(
@@ -613,19 +698,25 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
           return
         }
         setError(null)
-        setView({ kind: "signing-in" })
+        setView({ kind: "signing-in", canContinueOffline: true })
         codeResolver.current?.({ code: extracted.code, state: pendingState.current })
       }}
-      onCancelCode={() => {
-        codeRejecter.current?.(new CloudSignInError("cancelled", "cancelled"))
-        const official = officialRef.current
-        const deployment = deploymentRef.current
-        if (official) setView({ kind: "official", deployment: official })
-        else if (deployment) setView({ kind: "sign-in", deployment, canContinueOffline: true })
-      }}
+      onCancelCode={() => cancelSignIn()}
+      onCancelSignIn={() => cancelSignIn()}
+      onRetry={() => setDiscoveryEpoch((epoch) => epoch + 1)}
       onContinueOffline={() => {
-        if (view.kind === "official") recordOfficialPromptDecision(localAccountId, "offline")
-        else rememberOffline(localAccountId)
+        if (view.kind === "signing-in" || view.kind === "awaiting-code") {
+          const drivers = activeDriversRef.current
+          codeRejecter.current?.(new CloudSignInError("cancelled", "cancelled"))
+          endCodeWait()
+          drivers?.abandon?.()
+          setBusy(false)
+        }
+        if (view.kind === "official" && !view.reauth) {
+          recordOfficialPromptDecision(localAccountId, "offline")
+        } else {
+          rememberOffline(localAccountId)
+        }
         setPhase("pass")
       }}
       onChoose={(membership: CollabAccountMembership) =>
@@ -657,11 +748,18 @@ export function CloudSignInGate({ children, deps = {} }: CloudSignInGateProps) {
       }
       onSignOut={() =>
         void act(async () => {
-          await (deps.signOut ?? defaultSignOut)(localAccountId)
+          const outcome = await (deps.signOut ?? defaultSignOut)(localAccountId)
           sessionRef.current = null
           setPersonName(null)
           const deployment = deploymentRef.current
           if (deployment) setView({ kind: "sign-in", deployment, canContinueOffline: true })
+          if (outcome?.revocationWarning === "failed") {
+            setError(t("signOutWarning.revocationFailed"))
+          } else if (outcome?.revocationWarning === "unsupported") {
+            setError(t("signOutWarning.revocationUnsupported"))
+          } else if (outcome?.endSessionUrl && outcome.endSessionOpened === false) {
+            setError(t("signOutWarning.endSessionBlocked"))
+          }
         })
       }
     />

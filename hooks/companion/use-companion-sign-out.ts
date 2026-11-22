@@ -97,7 +97,15 @@ export function useCompanionSignOut(opts: UseCompanionSignOutOptions): UseCompan
       // the on-disk backend leaves the live transport believing it is still
       // paired (stale WS, stale `loadCompanionConfig()`), which then strands
       // the re-pair flow.
-      await clearCompanionConfig()
+      try {
+        await clearCompanionConfig()
+      } catch (cause) {
+        return {
+          kind: "blocked",
+          reason: "error",
+          message: cause instanceof Error ? cause.message : String(cause),
+        }
+      }
 
       router.replace(redirectTo)
       return { kind: "ok" }

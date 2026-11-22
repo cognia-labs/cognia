@@ -13,7 +13,10 @@ jest.mock("next-intl", () => ({
   useFormatter: () => ({ dateTime: (value: Date) => value.toISOString() }),
 }))
 jest.mock("sonner", () => ({ toast: { success: jest.fn(), error: jest.fn(), warning: jest.fn() } }))
-jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn() }))
+jest.mock("@/lib/native/opener", () => ({
+  openUrl: jest.fn(),
+  tryOpenUrl: jest.fn(async () => true),
+}))
 jest.mock("@/lib/logto/app-session", () => ({
   ...jest.requireActual("@/lib/logto/app-session"),
   signOutFromLogto: jest.fn(async (deps: { afterClear?: () => Promise<void> }) => {
@@ -33,7 +36,7 @@ jest.mock("@/lib/identity/complete-sign-in", () => ({
 }))
 
 import { toast } from "sonner"
-import { openUrl } from "@/lib/native/opener"
+import { tryOpenUrl } from "@/lib/native/opener"
 import { signOutFromLogto } from "@/lib/logto/app-session"
 import { completeSignOut } from "@/lib/identity/complete-sign-in"
 import { CLOUD_OFFLINE_KEY_PREFIX } from "@/components/account/cloud-sign-in-gate"
@@ -177,7 +180,51 @@ describe("AccountIdentityTab", () => {
     fireEvent.click(await screen.findByTestId("account-identity-sign-out"))
     await waitFor(() => expect(d.signOut).toHaveBeenCalledWith("acct_a"))
     expect(toast.warning).toHaveBeenCalledWith("revocationFailed")
-    expect(openUrl).toHaveBeenCalledWith("https://logto/end")
+    expect(tryOpenUrl).toHaveBeenCalledWith("https://logto/end")
+  })
+
+  it("offers sign-out when the kept session is offline or in error, and recovers from load errors", async () => {
+    const readState = jest
+      .fn()
+      .mockRejectedValueOnce(new Error("binding db unreadable"))
+      .mockResolvedValueOnce({
+        status: "offline" as const,
+        sessionMetadata: { issuer: "i", clientId: "c", resource: "r", scopes: [] },
+      })
+    const d = deps({
+      readState,
+      signOut: jest.fn(async () => ({
+        endSessionUrl: "https://logto/end",
+        endSessionOpened: false,
+        tokensLive: false,
+        revocationWarning: "unsupported" as const,
+      })),
+    })
+    render(<AccountIdentityTab account={account} deps={d} />)
+    expect(await screen.findByTestId("account-identity-load-error")).toHaveTextContent(
+      "loadFailed(binding db unreadable)"
+    )
+    fireEvent.click(screen.getByTestId("account-identity-retry"))
+    const signOutBtn = await screen.findByTestId("account-identity-sign-out")
+    expect(screen.queryByTestId("account-identity-sign-in")).not.toBeInTheDocument()
+    fireEvent.click(signOutBtn)
+    await waitFor(() => expect(d.signOut).toHaveBeenCalledWith("acct_a"))
+    expect(toast.warning).toHaveBeenCalledWith("revocationUnsupported")
+    expect(toast.warning).toHaveBeenCalledWith("endSessionBlocked")
+  })
+
+  it("fences sign-in, sign-out, and organization switching when inspecting an inactive profile", async () => {
+    mockServed = "acct_other"
+    try {
+      const d = deps()
+      render(<AccountIdentityTab account={account} deps={d} />)
+      expect(await screen.findByTestId("account-identity-inactive-notice")).toBeInTheDocument()
+      expect(screen.getByTestId("account-identity-sign-out")).toBeDisabled()
+      expect(screen.getByTestId("account-identity-switch-org_b")).toBeDisabled()
+      expect(screen.queryByTestId("stub-deployment-card")).not.toBeInTheDocument()
+    } finally {
+      mockServed = "acct_a"
+    }
   })
 
   it("offers sign-in when signed out on a deployment, forgetting the tab's offline choice", async () => {

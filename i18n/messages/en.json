@@ -1457,9 +1457,10 @@
       "callback": {
         "cancelled": "Sign-in was cancelled.",
         "close": "Close this window",
-        "doneBody": "You can return to Cognia. This window closes on its own.",
-        "doneTitle": "Signed in",
+        "doneBody": "Finishing in the main Cognia window. This window closes on its own.",
+        "doneTitle": "Verification sent to Cognia",
         "failedTitle": "Sign-in did not complete",
+        "missingCode": "The sign-in service returned without an authorization code.",
         "orphanedBody": "This window lost its connection to the Cognia page that opened it. Close it and start signing in again from Cognia.",
         "orphanedTitle": "Cognia is no longer waiting here",
         "providerError": "The sign-in service returned an error: {error}",
@@ -1507,6 +1508,7 @@
           "url": "Gateway"
         },
         "description": "The Cognia Cloud this profile signs in to. Enter the gateway address, check what it offers, then use it: the sign-in screen takes over from there.",
+        "endSessionBlocked": "Signed out locally, but the browser blocked opening the identity provider's sign-out page.",
         "error": {
           "invalid": "Enter an http(s) address, and a 64-character hex fingerprint if the host is self-signed."
         },
@@ -1538,16 +1540,21 @@
           },
           "unavailableMessage": "{message}"
         },
+        "retrySession": "Retry",
         "revocationFailed": "The identity provider did not confirm the sign-out. The session may still be valid there.",
+        "revocationUnsupported": "Signed out locally. This identity provider does not advertise token revocation, so the remote session may stay active until it expires.",
         "session": {
           "active": "Signed in",
           "error": "The identity provider answered with an error",
+          "foreign": "Signed in to another provider — sign in to this deployment",
           "loading": "Checking",
           "offline": "Signed in, identity provider unreachable",
+          "readFailed": "Could not read the local session: {message}",
           "reauth-required": "Sign-in needed again",
           "signed-out": "Not signed in"
         },
         "signIn": "Sign in",
+        "signInOtherProfile": "Switch to this profile to sign it in.",
         "signOut": "Sign out",
         "signOutDone": "Signed out of the cloud account.",
         "signOutFailed": "Sign-out failed: {message}",
@@ -1578,9 +1585,6 @@
         "privacy": "Cognia keeps only who you are (your name, email and linked sign-ins), never access to the account you sign in with.",
         "title": "Sign in to your Cognia account"
       },
-      "offline": {
-        "body": "Your last session is kept. You can keep working offline and it will refresh once the provider is reachable."
-      },
       "provider": {
         "apple": "Apple",
         "feishu": "Feishu",
@@ -1597,9 +1601,16 @@
         "expired": "Your session expired.",
         "revoked": "Your session was signed out elsewhere."
       },
+      "retry": "Try again",
       "settling": "Looking up your organizations",
       "signOut": "Sign out",
+      "signOutWarning": {
+        "endSessionBlocked": "Signed out locally, but the browser blocked opening the identity provider's sign-out page.",
+        "revocationFailed": "Signed out locally, but the identity provider could not be reached. The remote session may still be active.",
+        "revocationUnsupported": "Signed out locally. This identity provider does not advertise token revocation, so the remote session may stay active until it expires."
+      },
       "signedInAs": "Signed in as {name}",
+      "signedInNoName": "Signed in",
       "signingIn": "Signing in",
       "submitCode": "Continue",
       "title": "Sign in to {deployment}",
@@ -1717,14 +1728,17 @@
         "cancel": "Cancel deletion",
         "cancelled": "Account deletion cancelled.",
         "confirm": "Sign in again to confirm",
-        "confirmBody": "Your account and its linked sign-ins will be deleted in 7 days. Until then you can sign in and cancel.",
-        "confirmLocal": "Conversations and files on this device are not deleted. Back them up first if you plan to remove this device too.",
+        "confirmBody": "Your account, linked sign-ins, and cloud sync space (including encrypted synced items, sync keys, enrolled devices, and sync log) will be permanently deleted in {days, plural, one {# day} other {# days}}. Until then you can sign in and cancel.",
+        "confirmLocal": "Conversations and files stored locally on this device are not deleted, while everything in your cloud sync space is erased. Back up first if you also plan to remove this device.",
         "delete": "Delete account",
-        "description": "Deletes your Cognia account and its linked sign-ins after 7 days. Everything on this device stays.",
+        "description": "Deletes your Cognia account, linked sign-ins, and cloud sync space (synced items, sync keys, enrolled devices, and sync log) after {days, plural, one {# day} other {# days}}. Data stored on this device stays.",
         "error": {
           "differentPerson": "You confirmed with a different account than the one signed in here. Nothing was deleted.",
           "generic": "Could not reach the account service: {message}",
+          "notScheduled": "Account deletion was not scheduled because the server state changed. Refresh and check your account status.",
+          "nothingToCancel": "There was no pending deletion to cancel. Your account may already have been deleted or cleared.",
           "staleSignIn": "That sign-in was not recent enough. Confirm again.",
+          "stillPending": "Account deletion is still pending. Refresh and try again.",
           "unauthorized": "Your session expired. Sign in again first."
         },
         "loading": "Checking the account",
@@ -1733,11 +1747,16 @@
         "requested": "Account deletion scheduled.",
         "retry": "Try again",
         "stop": "Stop",
+        "submitting": "Scheduling deletion…",
         "title": "Delete account"
       },
+      "deploymentSection": "Cloud deployment",
       "description": "Who this profile is on the shared deployment, and which organization it works in.",
+      "endSessionBlocked": "Signed out locally, but the browser blocked opening the identity provider's sign-out page.",
+      "foreignSession": "This profile holds a session from another provider. Sign in to use the configured deployment, or sign out to clear it.",
       "linked": "Signs in with",
       "linkedNone": "No linked sign-ins reported.",
+      "loadFailed": "Could not read this profile's cloud identity: {message}",
       "loading": "Reading the cloud session",
       "memberships": "Organizations",
       "membershipsEmpty": "No organizations yet.",
@@ -1748,7 +1767,9 @@
       "officialTitle": "Cognia account",
       "organization": "Organization",
       "person": "Person",
+      "retry": "Try again",
       "revocationFailed": "Signed out locally, but the identity provider could not be told.",
+      "revocationUnsupported": "Signed out locally. This identity provider does not advertise token revocation, so the remote session may stay active until it expires.",
       "role": "Role",
       "roleName": {
         "admin": "Admin",
@@ -2064,6 +2085,7 @@
       "pending": "{count, plural, one {# change} other {# changes}} waiting to upload",
       "seeding": "Preparing your data for sync…",
       "seedingProgress": "Preparing your data for sync… {done} of {total}",
+      "spaceCleared": "Your cloud sync space is empty or was cleared on the server. Local data on this device was kept.",
       "starting": "Starting sync…",
       "syncNow": "Sync now",
       "title": "Your data",
@@ -2201,7 +2223,8 @@
       "title": "This device was removed from sync"
     },
     "section": {
-      "integrity": "The sync service showed this device an older or different device list than the one it verified before. Nothing was deleted. Try again later, and contact support if this persists.",
+      "integrity": "The sync service showed this device an older or different device list than the one it verified before. Nothing on this device was deleted. Try again later, and contact support if this persists.",
+      "integrityEmpty": "The sync service returned an empty device list for a space this device had verified before. Your cloud sync space may have been cleared (for example, after account deletion). Nothing on this device was deleted.",
       "integrityTitle": "The device list could not be verified",
       "loading": "Checking sync…",
       "locked": "Unlock this profile to use sync.",
@@ -30348,20 +30371,20 @@
       "sectionFavorites": "Favorites",
       "settingsLink": "App settings",
       "signOut": {
-        "biometricDescription": "Re-prompts before clearing the pairing JWT.",
-        "biometricHelp": "Require face or fingerprint unlock before signing this phone out.",
+        "biometricDescription": "Re-prompts before clearing this device's desktop Host pairing.",
+        "biometricHelp": "Require face or fingerprint unlock before disconnecting this phone from its desktop Host.",
         "biometricLabel": "Confirm before sign-out",
-        "biometricReason": "Confirm to sign out of cognia",
+        "biometricReason": "Confirm to disconnect this device's desktop pairing",
         "biometricTitle": "Sign out",
         "cancel": "Cancel",
         "confirmAction": "Sign out",
-        "confirmDescription": "This clears the Anthropic credential and the desktop pairing JWT on this device. You can pair again at any time.",
-        "confirmTitle": "Sign out of cognia?",
+        "confirmDescription": "This disconnects the current desktop Host pairing on this device. Local data and Cognia Cloud sign-ins stay untouched, and you can pair again at any time.",
+        "confirmTitle": "Disconnect desktop pairing?",
         "cta": "Sign out",
         "errorToast": "Sign-out failed: {reason}",
         "lockoutToast": "Too many attempts. Try again later.",
         "pending": "Signing out…",
-        "successToast": "Signed out — pairing cleared."
+        "successToast": "Disconnected — desktop pairing cleared."
       },
       "skillsRow": "Skills",
       "slashCommandsRow": "Slash commands",

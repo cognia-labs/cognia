@@ -63,6 +63,7 @@ describe("AccountSyncSection", () => {
     [{ kind: "signed-out" }, "section.signedOut"],
     [{ kind: "locked" }, "section.locked"],
     [{ kind: "integrity", reason: "fork" }, "section.integrity"],
+    [{ kind: "integrity", reason: "empty-list" }, "section.integrityEmpty"],
   ] as const)("explains %p", (view, text) => {
     show(view as AccountSyncView)
     expect(screen.getByTestId("account-sync-section")).toHaveTextContent(text)

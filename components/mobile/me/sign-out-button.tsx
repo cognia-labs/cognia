@@ -44,7 +44,16 @@ export function SignOutButton({ className }: SignOutButtonProps) {
   const [open, setOpen] = useState(false)
 
   const onConfirm = useCallback(async () => {
-    const outcome = await signOut()
+    let outcome
+    try {
+      outcome = await signOut()
+    } catch (cause) {
+      setOpen(false)
+      toast.error(
+        t("errorToast", { reason: cause instanceof Error ? cause.message : String(cause) })
+      )
+      return
+    }
     if (outcome.kind === "ok") {
       // The hook already routes us to /pair; the toast is a courtesy.
       toast.success(t("successToast"))

@@ -24,10 +24,11 @@ describe("waitForLogtoDeepLinkCallback", () => {
     await expect(pending).resolves.toEqual({ code: "code-1", state: "state-1" })
   })
 
-  it("rejects a callback minted for another state, with the popup's wording", async () => {
+  it("ignores a stale callback minted for another state and resolves when its own arrives", async () => {
     const pending = waitForLogtoDeepLinkCallback({ state: "state-1" })
-    publishLogtoDeepLinkCallback(route({ state: "other" }))
-    await expect(pending).rejects.toThrow("Logto callback state mismatch")
+    publishLogtoDeepLinkCallback(route({ state: "other", code: "stale-code" }))
+    publishLogtoDeepLinkCallback(route({ state: "state-1", code: "fresh-code" }))
+    await expect(pending).resolves.toEqual({ code: "fresh-code", state: "state-1" })
   })
 
   it("rejects an authorization error and a callback without a code", async () => {

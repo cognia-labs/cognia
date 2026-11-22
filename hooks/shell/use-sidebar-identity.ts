@@ -21,7 +21,14 @@
 
 import { useEffect, useRef, useState } from "react"
 
-import { readCloudSessionState, type CloudSessionState } from "@/lib/identity/cloud-session"
+import { getActiveAccountId } from "@/lib/accounts/active-account-id"
+import {
+  readCloudSessionState,
+  sessionMatchesDeployment,
+  type CloudSessionState,
+} from "@/lib/identity/cloud-session"
+import { discoverDeployment } from "@/lib/identity/deployment-discovery"
+import { loadDeploymentSource, subscribeDeploymentSource } from "@/lib/identity/deployment-source"
 import { useAllConfiguredLimits } from "@/lib/subscription/limits/hooks"
 import { loggers } from "@cognia/logging"
 
@@ -105,19 +112,45 @@ function identityFrom(state: CloudSessionState): SidebarIdentity {
  */
 export function useSidebarIdentity(active: boolean): SidebarIdentity {
   const [identity, setIdentity] = useState<SidebarIdentity>(SIGNED_OUT)
+  const [deploymentEpoch, setDeploymentEpoch] = useState(0)
   const { snapshots, refresh } = useAllConfiguredLimits()
+
+  useEffect(() => subscribeDeploymentSource(() => setDeploymentEpoch((epoch) => epoch + 1)), [])
 
   // `active` is a dependency so an open re-reads, but the first run happens on
   // mount whatever it is. A ref rather than a second state: this decides
   // whether an effect runs, and it must not itself schedule a render.
   const readOnce = useRef(false)
+  const lastEpoch = useRef(0)
   useEffect(() => {
-    if (!active && readOnce.current) return
+    const deploymentChanged = deploymentEpoch !== lastEpoch.current
+    lastEpoch.current = deploymentEpoch
+    if (!active && !deploymentChanged && readOnce.current) return
     readOnce.current = true
     let alive = true
-    void readCloudSessionState()
-      .then((state) => {
-        if (alive) setIdentity(identityFrom(state))
+    const localAccountId = getActiveAccountId()
+    const source = loadDeploymentSource(localAccountId)
+    void Promise.all([
+      readCloudSessionState(),
+      source
+        ? discoverDeployment({
+            localAccountId,
+            deploymentSource: () => source,
+            officialFallback: false,
+          }).catch(() => null)
+        : Promise.resolve(null),
+    ])
+      .then(([state, discovered]) => {
+        if (!alive) return
+        if (
+          state.status !== "signed-out" &&
+          discovered?.status === "ready" &&
+          !sessionMatchesDeployment(state, discovered)
+        ) {
+          setIdentity({ ...SIGNED_OUT, needsReauth: true })
+          return
+        }
+        setIdentity(identityFrom(state))
       })
       .catch((cause: unknown) => {
         // A profile whose binding cannot be read at all is not signed out, but
@@ -128,7 +161,7 @@ export function useSidebarIdentity(active: boolean): SidebarIdentity {
     return () => {
       alive = false
     }
-  }, [active])
+  }, [active, deploymentEpoch])
 
   useEffect(() => {
     if (active) void refresh()

@@ -24,11 +24,14 @@ import {
 } from "./official-account-deletion"
 
 const deployment = officialDeployment({})!
+function token(sub: string): string {
+  return `header.${Buffer.from(JSON.stringify({ sub })).toString("base64url")}.signature`
+}
 const session: LogtoSession = {
   issuer: deployment.issuer,
   clientId: "cognia-app",
   resource: deployment.audience,
-  accessToken: "at",
+  accessToken: token("usr_ada"),
   scopes: [],
   issuerKind: "oidc",
 }
@@ -71,7 +74,8 @@ describe("OfficialAccountDeletion", () => {
       deployment,
       expect.anything(),
       { redirectUri: "cn.cognia.app:/auth/callback", clientKind: "native" },
-      session
+      session,
+      expect.objectContaining({ signal: expect.any(AbortSignal) })
     )
     expect(toast.success).toHaveBeenCalledWith("requested")
   })
@@ -128,16 +132,128 @@ describe("OfficialAccountDeletion", () => {
     expect(toast.error).not.toHaveBeenCalled()
   })
 
-  it("cancels a pending deletion", async () => {
-    const cancel = jest.fn(async () => ({ status: "cancelled" as const }))
-    renderWith({
-      read: jest.fn(async () => ({ status: "pending" as const, purgeAfter: "2026-10-12" })),
-      cancel,
-    })
+  it("cancels a pending deletion and refuses to claim success when the server returns none", async () => {
+    const cancel = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "cancelled" as const })
+      .mockResolvedValueOnce({ status: "none" as const })
+    const read = jest
+      .fn()
+      .mockResolvedValueOnce({ status: "pending" as const, purgeAfter: "2026-10-12" })
+      .mockResolvedValueOnce({ status: "pending" as const, purgeAfter: "2026-10-12" })
+    const first = renderWith({ read, cancel })
     fireEvent.click(await screen.findByTestId("official-account-deletion-cancel"))
     expect(await screen.findByTestId("official-account-deletion-start")).toBeInTheDocument()
     expect(cancel).toHaveBeenCalledWith(session)
     expect(toast.success).toHaveBeenCalledWith("cancelled")
+    first.unmount()
+
+    jest.clearAllMocks()
+    renderWith({ read, cancel })
+    fireEvent.click(await screen.findByTestId("official-account-deletion-cancel"))
+    await waitFor(() => expect(toast.error).toHaveBeenCalledWith("error.nothingToCancel"))
+    expect(toast.success).not.toHaveBeenCalled()
+  })
+
+  it("stops the real Web popup flow on Stop so a delayed callback never POSTs deletion", async () => {
+    const popup = {
+      closed: false,
+      location: { replace: jest.fn() },
+      close: jest.fn(function (this: { closed: boolean }) {
+        this.closed = true
+      }),
+    }
+    const openSpy = jest.spyOn(window, "open").mockReturnValue(popup as unknown as Window)
+    let capturedState = ""
+    popup.location.replace.mockImplementation((url: string) => {
+      capturedState = new URL(url).searchParams.get("state") ?? ""
+    })
+    const postCalls: string[] = []
+    const fetchSpy = jest.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      const url = String(input)
+      const method = init?.method ?? "GET"
+      if (url.endsWith("/.well-known/openid-configuration")) {
+        return new Response(
+          JSON.stringify({
+            issuer: deployment.issuer,
+            authorization_endpoint: `${deployment.issuer}/oauth2/authorize`,
+            token_endpoint: `${deployment.issuer}/oauth2/token`,
+          }),
+          { status: 200 }
+        )
+      }
+      if (url.endsWith("/oauth2/token")) {
+        return new Response(
+          JSON.stringify({
+            access_token: token("usr_ada"),
+            id_token: "fresh.id.token",
+            expires_in: 900,
+          }),
+          { status: 200 }
+        )
+      }
+      if (method === "POST") postCalls.push(url)
+      return new Response(JSON.stringify({ status: "none", coolingOffDays: 10 }), { status: 200 })
+    })
+
+    try {
+      render(<OfficialAccountDeletion deployment={deployment} session={session} />)
+      expect(await screen.findByText("description(10)")).toBeInTheDocument()
+      fireEvent.click(screen.getByTestId("official-account-deletion-start"))
+      expect(screen.getByText("confirmBody(10)")).toBeInTheDocument()
+      fireEvent.click(screen.getByTestId("official-account-deletion-confirm-button"))
+      fireEvent.click(await screen.findByTestId("official-account-deletion-stop"))
+      expect(
+        await screen.findByTestId("official-account-deletion-confirm-button")
+      ).toBeInTheDocument()
+
+      window.dispatchEvent(
+        new MessageEvent("message", {
+          origin: window.location.origin,
+          source: window,
+          data: {
+            __cogniaLogto: true,
+            code: "late-code",
+            state: capturedState,
+            error: null,
+          },
+        })
+      )
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(postCalls).toHaveLength(0)
+      expect(toast.success).not.toHaveBeenCalled()
+    } finally {
+      openSpy.mockRestore()
+      fetchSpy.mockRestore()
+    }
+  })
+
+  it("resolves a refreshed session on retry, cancel, and window focus", async () => {
+    const refreshed: LogtoSession = { ...session, accessToken: token("usr_ada") }
+    let calls = 0
+    const resolveSession = jest.fn(async () => {
+      calls += 1
+      return calls === 1 ? session : refreshed
+    })
+    const read = jest
+      .fn()
+      .mockRejectedValueOnce(new AccountDeletionError("unauthorized", "expired"))
+      .mockResolvedValueOnce({ status: "none" as const })
+      .mockResolvedValueOnce({ status: "pending" as const, purgeAfter: "2026-10-12" })
+    render(
+      <OfficialAccountDeletion
+        deployment={deployment}
+        session={session}
+        deps={{ drivers, read, resolveSession }}
+      />
+    )
+    expect(await screen.findByRole("alert")).toHaveTextContent("error.unauthorized")
+    fireEvent.click(screen.getByTestId("official-account-deletion-retry"))
+    expect(await screen.findByTestId("official-account-deletion-start")).toBeInTheDocument()
+    expect(read).toHaveBeenLastCalledWith(refreshed)
+
+    fireEvent(window, new Event("focus"))
+    expect(await screen.findByTestId("official-account-deletion-pending")).toBeInTheDocument()
   })
 
   it("names a failed read and retries it", async () => {

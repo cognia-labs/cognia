@@ -24,17 +24,21 @@ import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
+import { captureAccountScope } from "@/lib/accounts/active-account-id"
+import { readCloudSessionState } from "@/lib/identity/cloud-session"
 import {
   AccountDeletionError,
+  DEFAULT_DELETION_COOLING_OFF_DAYS,
   cancelAccountDeletion,
   confirmAccountDeletion,
   readAccountDeletion,
   type OfficialDeletionState,
 } from "@/lib/identity/official-account-deletion"
+import { isOfficialIssuer, type OfficialDeployment } from "@/lib/identity/official-deployment"
 import { platformSignInDrivers } from "@/lib/logto/platform-drivers"
 import { LogtoSignInCancelled } from "@/lib/logto/capacitor-drivers"
+import { decodeJwtPayload, stringClaim } from "@/lib/security/jwt-payload"
 
-import type { OfficialDeployment } from "@/lib/identity/official-deployment"
 import type { LogtoSession } from "@/lib/logto/client"
 
 export interface OfficialAccountDeletionDeps {
@@ -42,12 +46,16 @@ export interface OfficialAccountDeletionDeps {
   cancel?: typeof cancelAccountDeletion
   confirm?: typeof confirmAccountDeletion
   drivers?: typeof platformSignInDrivers
+  /** Resolve a fresh bearer session for this profile before API calls. */
+  resolveSession?: () => Promise<LogtoSession | null>
 }
 
 export interface OfficialAccountDeletionProps {
   deployment: OfficialDeployment
   /** The profile's active official session. */
   session: LogtoSession
+  /** Profile owning this session; enables automatic token refresh and scope fencing. */
+  localAccountId?: string
   deps?: OfficialAccountDeletionDeps
 }
 
@@ -62,6 +70,7 @@ function isCancel(cause: unknown): boolean {
 export function OfficialAccountDeletion({
   deployment,
   session,
+  localAccountId,
   deps = {},
 }: OfficialAccountDeletionProps) {
   const t = useTranslations("account.identity.deletion")
@@ -69,10 +78,30 @@ export function OfficialAccountDeletion({
   const [readError, setReadError] = useState<string | null>(null)
   const [phase, setPhase] = useState<Phase>("idle")
   const signInWait = useRef<AbortController | null>(null)
+  const mountedRef = useRef(true)
+  const phaseRef = useRef<Phase>("idle")
   const depsRef = useRef(deps)
   useEffect(() => {
     depsRef.current = deps
+    phaseRef.current = phase
   })
+
+  const resolveActiveSession = useCallback(async (): Promise<LogtoSession> => {
+    if (depsRef.current.resolveSession) {
+      const fresh = await depsRef.current.resolveSession()
+      if (!fresh) throw new AccountDeletionError("unauthorized", "session expired")
+      return fresh
+    }
+    if (!localAccountId) return session
+    const currentState = await readCloudSessionState({ localAccountId })
+    if (
+      currentState.status === "active" &&
+      isOfficialIssuer(currentState.session.issuer, deployment)
+    ) {
+      return currentState.session
+    }
+    throw new AccountDeletionError("unauthorized", "session expired")
+  }, [deployment, localAccountId, session])
 
   const explain = useCallback(
     (cause: unknown): string => {
@@ -95,54 +124,122 @@ export function OfficialAccountDeletion({
   const load = useCallback(async () => {
     setReadError(null)
     try {
-      setState(await (depsRef.current.read ?? readAccountDeletion)(session))
+      const activeSession = await resolveActiveSession()
+      const next = await (depsRef.current.read ?? readAccountDeletion)(activeSession)
+      if (!mountedRef.current) return
+      setState(next)
     } catch (cause) {
+      if (!mountedRef.current) return
       setState(null)
       setReadError(explainRef.current(cause))
     }
-  }, [session])
+  }, [resolveActiveSession])
 
   useEffect(() => {
+    mountedRef.current = true
     queueMicrotask(() => void load())
-    return () => signInWait.current?.abort()
+    const refreshOnFocus = () => {
+      if (document.visibilityState === "hidden") return
+      if (phaseRef.current === "awaiting-sign-in" || phaseRef.current === "working") return
+      void load()
+    }
+    window.addEventListener("focus", refreshOnFocus)
+    document.addEventListener("visibilitychange", refreshOnFocus)
+    return () => {
+      mountedRef.current = false
+      window.removeEventListener("focus", refreshOnFocus)
+      document.removeEventListener("visibilitychange", refreshOnFocus)
+      signInWait.current?.abort()
+    }
   }, [load])
+
+  const stopSignInWait = () => {
+    const active = signInWait.current
+    signInWait.current = null
+    active?.abort()
+    setPhase("confirming")
+  }
 
   const confirm = async () => {
     const controller = new AbortController()
     signInWait.current = controller
+    const assertProfileScope = localAccountId ? captureAccountScope(localAccountId) : null
     const { drivers, redirectUri, clientKind } = (depsRef.current.drivers ?? platformSignInDrivers)(
       { issuerKind: deployment.issuerKind, signal: controller.signal }
     )
     setPhase("awaiting-sign-in")
     try {
+      const activeSession = await resolveActiveSession()
       const next = await (depsRef.current.confirm ?? confirmAccountDeletion)(
         deployment,
         drivers,
         { redirectUri, clientKind },
-        session
+        activeSession,
+        {
+          signal: controller.signal,
+          assertActive: async (expectedSub) => {
+            assertProfileScope?.()
+            if (!mountedRef.current) {
+              const aborted = new Error("Account deletion confirmation unmounted")
+              aborted.name = "AbortError"
+              throw aborted
+            }
+            const latest = await resolveActiveSession()
+            if (stringClaim(decodeJwtPayload(latest.accessToken), "sub") !== expectedSub) {
+              throw new AccountDeletionError(
+                "unauthorized",
+                "the profile session changed while confirming deletion"
+              )
+            }
+          },
+          onSubmitting: () => {
+            if (mountedRef.current) setPhase("working")
+          },
+        }
       )
+      if (!mountedRef.current) return
       setState(next)
       setPhase("idle")
-      toast.success(t("requested"))
+      if (next.status === "pending") {
+        toast.success(t("requested"))
+      } else {
+        toast.error(t("error.notScheduled"))
+      }
     } catch (cause) {
+      drivers.abandon?.()
+      if (!mountedRef.current) return
       setPhase("confirming")
       if (!isCancel(cause)) toast.error(explain(cause))
     } finally {
-      signInWait.current = null
+      if (signInWait.current === controller) {
+        signInWait.current = null
+      }
     }
   }
 
   const cancelDeletion = async () => {
     setPhase("working")
     try {
-      setState(await (depsRef.current.cancel ?? cancelAccountDeletion)(session))
-      toast.success(t("cancelled"))
+      const activeSession = await resolveActiveSession()
+      const next = await (depsRef.current.cancel ?? cancelAccountDeletion)(activeSession)
+      if (!mountedRef.current) return
+      setState(next)
+      if (next.status === "cancelled") {
+        toast.success(t("cancelled"))
+      } else if (next.status === "none") {
+        toast.error(t("error.nothingToCancel"))
+      } else {
+        toast.error(t("error.stillPending"))
+      }
     } catch (cause) {
+      if (!mountedRef.current) return
       toast.error(explain(cause))
     } finally {
-      setPhase("idle")
+      if (mountedRef.current) setPhase("idle")
     }
   }
+
+  const coolingOffDays = state?.coolingOffDays ?? DEFAULT_DELETION_COOLING_OFF_DAYS
 
   return (
     <section
@@ -195,7 +292,9 @@ export function OfficialAccountDeletion({
         </div>
       ) : phase === "idle" ? (
         <div className="flex flex-col gap-2">
-          <p className="text-xs text-muted-foreground">{t("description")}</p>
+          <p className="text-xs text-muted-foreground">
+            {t("description", { days: coolingOffDays })}
+          </p>
           <Button
             type="button"
             size="sm"
@@ -210,7 +309,7 @@ export function OfficialAccountDeletion({
         </div>
       ) : (
         <div className="flex flex-col gap-2" data-testid="official-account-deletion-confirm">
-          <p className="text-sm">{t("confirmBody")}</p>
+          <p className="text-sm">{t("confirmBody", { days: coolingOffDays })}</p>
           <p className="text-xs text-muted-foreground">{t("confirmLocal")}</p>
           <Button asChild size="sm" variant="outline" className="self-start">
             <Link href="/me/backup" data-testid="official-account-deletion-backup">
@@ -226,11 +325,20 @@ export function OfficialAccountDeletion({
                 type="button"
                 size="sm"
                 variant="ghost"
-                onClick={() => signInWait.current?.abort()}
+                onClick={stopSignInWait}
                 data-testid="official-account-deletion-stop"
               >
                 {t("stop")}
               </Button>
+            </div>
+          ) : phase === "working" ? (
+            <div
+              className="flex items-center gap-2 text-xs text-muted-foreground"
+              role="status"
+              data-testid="official-account-deletion-submitting"
+            >
+              <Spinner className="size-3" />
+              {t("submitting")}
             </div>
           ) : (
             <div className="flex gap-2">

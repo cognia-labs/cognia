@@ -568,12 +568,22 @@ export interface LogtoSignOutReport {
   endSessionUrl: string | null
 }
 
+export type LogtoSignOutRevocationWarning = "failed" | "unsupported"
+
+/** Why the issuer could not revoke every token during sign-out, when a session existed. */
+export function signOutRevocationWarning(
+  report: LogtoSignOutReport
+): LogtoSignOutRevocationWarning | null {
+  if (!report.hadSession) return null
+  const outcomes = [report.refreshTokenRevocation, report.accessTokenRevocation]
+  if (outcomes.some((outcome) => outcome?.status === "failed")) return "failed"
+  if (outcomes.some((outcome) => outcome?.status === "unsupported")) return "unsupported"
+  return null
+}
+
 /** True when the issuer may still consider a token live after this sign-out. */
 export function signOutLeftTokensLive(report: LogtoSignOutReport): boolean {
-  if (!report.hadSession) return false
-  return [report.refreshTokenRevocation, report.accessTokenRevocation].some(
-    (outcome) => outcome?.status === "failed"
-  )
+  return signOutRevocationWarning(report) === "failed"
 }
 
 /**

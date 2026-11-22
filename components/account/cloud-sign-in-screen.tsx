@@ -34,7 +34,7 @@ export type CloudSignInView =
       kind: "sign-in"
       deployment: ReadyDeployment
       /** Why a previous session is not enough, when there was one. */
-      reauth?: CloudSessionReauthReason | "offline"
+      reauth?: CloudSessionReauthReason
       canContinueOffline: boolean
     }
   | {
@@ -44,7 +44,7 @@ export type CloudSignInView =
       reauth?: CloudSessionReauthReason
     }
   | { kind: "awaiting-code" }
-  | { kind: "signing-in" }
+  | { kind: "signing-in"; canContinueOffline?: boolean }
   | { kind: "settling" }
   | {
       kind: "choose"
@@ -66,6 +66,8 @@ export interface CloudSignInScreenProps {
   onManual: (config: LogtoClientConfig) => void
   onSubmitCode: (pasted: string) => void
   onCancelCode: () => void
+  onCancelSignIn?: () => void
+  onRetry?: () => void
   onContinueOffline: () => void
   onChoose: (membership: CollabAccountMembership) => void
   onRedeem: (token: string) => void
@@ -85,15 +87,36 @@ export function CloudSignInScreen(props: CloudSignInScreenProps) {
     >
       <section className="flex w-full max-w-md flex-col gap-4">
         {view.kind === "checking" || view.kind === "signing-in" || view.kind === "settling" ? (
-          <Pending
-            label={t(
-              view.kind === "checking"
-                ? "checking"
-                : view.kind === "signing-in"
-                  ? "signingIn"
-                  : "settling"
-            )}
-          />
+          <div className="flex flex-col gap-3">
+            <Pending
+              label={t(
+                view.kind === "checking"
+                  ? "checking"
+                  : view.kind === "signing-in"
+                    ? "signingIn"
+                    : "settling"
+              )}
+            />
+            {view.kind === "signing-in" && (props.onCancelSignIn || view.canContinueOffline) ? (
+              <div className="flex flex-col gap-2">
+                {props.onCancelSignIn ? (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    className="self-start"
+                    onClick={props.onCancelSignIn}
+                    data-testid="cloud-sign-in-cancel"
+                  >
+                    {t("cancel")}
+                  </Button>
+                ) : null}
+                {view.canContinueOffline ? (
+                  <OfflineButton onClick={props.onContinueOffline} />
+                ) : null}
+              </div>
+            ) : null}
+          </div>
         ) : null}
 
         {view.kind === "sign-in" ? <SignInBody {...props} view={view} /> : null}
@@ -127,6 +150,16 @@ export function CloudSignInScreen(props: CloudSignInScreenProps) {
                 ? t("unavailable.body", { baseUrl: view.baseUrl, message: view.message })
                 : t("unavailable.discoveryFailed", { message: view.message })}
             </p>
+            {props.onRetry ? (
+              <Button
+                type="button"
+                variant="secondary"
+                onClick={props.onRetry}
+                data-testid="cloud-sign-in-retry"
+              >
+                {t("retry")}
+              </Button>
+            ) : null}
             {view.canContinueOffline ? <OfflineButton onClick={props.onContinueOffline} /> : null}
           </div>
         ) : null}
@@ -143,22 +176,27 @@ export function CloudSignInScreen(props: CloudSignInScreenProps) {
           </Surface>
         ) : null}
 
-        {props.personName && (view.kind === "choose" || view.kind === "unaffiliated") ? (
-          <div className="flex items-center justify-between text-xs text-muted-foreground">
-            <span data-testid="cloud-sign-in-person">
-              {t("signedInAs", { name: props.personName })}
-            </span>
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              disabled={busy}
-              onClick={props.onSignOut}
-              data-testid="cloud-sign-in-sign-out"
-            >
-              <LogOutIcon data-icon="inline-start" />
-              {t("signOut")}
-            </Button>
+        {view.kind === "choose" || view.kind === "unaffiliated" ? (
+          <div className="flex flex-col gap-3">
+            <OfflineButton onClick={props.onContinueOffline} />
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span data-testid="cloud-sign-in-person">
+                {props.personName
+                  ? t("signedInAs", { name: props.personName })
+                  : t("signedInNoName")}
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                disabled={busy}
+                onClick={props.onSignOut}
+                data-testid="cloud-sign-in-sign-out"
+              >
+                <LogOutIcon data-icon="inline-start" />
+                {t("signOut")}
+              </Button>
+            </div>
           </div>
         ) : null}
       </section>
@@ -230,7 +268,7 @@ function SignInBody({
       </Heading>
       {view.reauth ? (
         <p className="text-sm" data-testid={`cloud-sign-in-reauth-${view.reauth}`}>
-          {view.reauth === "offline" ? t("offline.body") : t(`reauth.${view.reauth}`)}
+          {t(`reauth.${view.reauth}`)}
         </p>
       ) : (
         <p className="text-sm text-muted-foreground">{t("description")}</p>

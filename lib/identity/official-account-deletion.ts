@@ -20,7 +20,12 @@
  * Cognia, not what is on this device.
  */
 
-import { loginToLogto, type LogtoDrivers, type LogtoSession } from "@/lib/logto/client"
+import {
+  loginToLogto,
+  revokeLogtoToken,
+  type LogtoDrivers,
+  type LogtoSession,
+} from "@/lib/logto/client"
 import { createPlatformFetch } from "@/lib/network/platform-fetch"
 import { decodeJwtPayload, stringClaim } from "@/lib/security/jwt-payload"
 
@@ -30,11 +35,15 @@ import {
   type OfficialDeployment,
 } from "./official-deployment"
 
+export const DEFAULT_DELETION_COOLING_OFF_DAYS = 7
+
 export interface OfficialDeletionState {
   status: "none" | "pending" | "cancelled"
   /** ISO timestamps, present while `pending`. */
   requestedAt?: string
   purgeAfter?: string
+  /** Server-configured cooling-off window in days, when advertised. */
+  coolingOffDays?: number
 }
 
 export type AccountDeletionErrorCode =
@@ -58,6 +67,7 @@ export class AccountDeletionError extends Error {
 
 export interface AccountDeletionDeps {
   fetchImpl?: typeof fetch
+  signal?: AbortSignal
 }
 
 type Credentials = Pick<LogtoSession, "issuer" | "accessToken">
@@ -68,13 +78,27 @@ export function accountDeletionUrl(issuer: string): string {
 }
 
 function readState(body: unknown): OfficialDeletionState {
-  const record = (body ?? {}) as Record<string, unknown>
-  const status =
-    record.status === "pending" || record.status === "cancelled" ? record.status : "none"
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new AccountDeletionError("failed", "Malformed account deletion response")
+  }
+  const record = body as Record<string, unknown>
+  if (record.status !== "none" && record.status !== "pending" && record.status !== "cancelled") {
+    throw new AccountDeletionError(
+      "failed",
+      `Unexpected account deletion status: ${String(record.status)}`
+    )
+  }
+  const coolingOffDays =
+    typeof record.coolingOffDays === "number" &&
+    Number.isFinite(record.coolingOffDays) &&
+    record.coolingOffDays >= 1
+      ? Math.trunc(record.coolingOffDays)
+      : undefined
   return {
-    status,
+    status: record.status,
     ...(typeof record.requestedAt === "string" ? { requestedAt: record.requestedAt } : {}),
     ...(typeof record.purgeAfter === "string" ? { purgeAfter: record.purgeAfter } : {}),
+    ...(coolingOffDays !== undefined ? { coolingOffDays } : {}),
   }
 }
 
@@ -84,6 +108,7 @@ async function call(
   deps: AccountDeletionDeps,
   body?: unknown
 ): Promise<OfficialDeletionState> {
+  deps.signal?.throwIfAborted()
   const fetchImpl = deps.fetchImpl ?? (createPlatformFetch() as unknown as typeof fetch)
   const response = await fetchImpl(accountDeletionUrl(credentials.issuer), {
     method,
@@ -93,6 +118,7 @@ async function call(
       ...(body === undefined ? {} : { "content-type": "application/json" }),
     },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    ...(deps.signal ? { signal: deps.signal } : {}),
   })
   const payload = (await response.json().catch(() => null)) as Record<string, unknown> | null
   if (response.ok) return readState(payload)
@@ -134,6 +160,15 @@ export function requestAccountDeletion(
 
 export interface ConfirmAccountDeletionDeps extends AccountDeletionDeps {
   login?: typeof loginToLogto
+  revoke?: typeof revokeLogtoToken
+  /**
+   * Final fence evaluated right after interactive re-authentication completes
+   * and immediately before `POST /api/account/deletion`. Rejects if the local
+   * profile switched or signed out while the browser was open.
+   */
+  assertActive?: (expectedSub: string) => void | Promise<void>
+  /** Notifies the caller right before `POST` starts so "Stop" UI can settle. */
+  onSubmitting?: () => void
 }
 
 /**
@@ -151,15 +186,39 @@ export async function confirmAccountDeletion(
   if (!expected) {
     throw new AccountDeletionError("unauthorized", "this profile's session names no person")
   }
+  deps.signal?.throwIfAborted()
   const fresh = await (deps.login ?? loginToLogto)(
-    officialLogtoConfig(deployment, { ...options, freshLogin: true }),
+    {
+      ...officialLogtoConfig(deployment, { ...options, freshLogin: true }),
+      ...(deps.signal ? { signal: deps.signal } : {}),
+    },
     drivers
   )
-  if (stringClaim(decodeJwtPayload(fresh.accessToken), "sub") !== expected) {
-    throw new AccountDeletionError(
-      "different-person",
-      "the confirming sign-in is a different account than the one signed in here"
-    )
+  const disposeFreshRefreshToken = () => {
+    if (!fresh.refreshToken) return
+    void (deps.revoke ?? revokeLogtoToken)(
+      { issuer: fresh.issuer, clientId: fresh.clientId },
+      fresh.refreshToken,
+      "refresh_token",
+      deps.fetchImpl ?? drivers.fetchImpl
+    ).catch(() => undefined)
   }
-  return requestAccountDeletion(fresh, deps)
+  try {
+    deps.signal?.throwIfAborted()
+    await deps.assertActive?.(expected)
+    deps.signal?.throwIfAborted()
+    if (stringClaim(decodeJwtPayload(fresh.accessToken), "sub") !== expected) {
+      throw new AccountDeletionError(
+        "different-person",
+        "the confirming sign-in is a different account than the one signed in here"
+      )
+    }
+    deps.onSubmitting?.()
+    // Once POST begins, do not pass the interactive-wait signal: cancelling the
+    // HTTP read after the Worker accepted the request would falsely report the
+    // scheduled deletion as cancelled.
+    return await requestAccountDeletion(fresh, { fetchImpl: deps.fetchImpl })
+  } finally {
+    disposeFreshRefreshToken()
+  }
 }

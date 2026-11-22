@@ -41,7 +41,10 @@ import { keepOpenWhileNestedDialogFocused } from "@/components/shared/confirm-di
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { Separator } from "@/components/ui/separator"
 import { Kbd } from "@/components/ui/kbd"
-import { AccountManageDialog } from "@/components/account/account-manage-dialog"
+import {
+  AccountManageDialog,
+  type AccountManageDialogProps,
+} from "@/components/account/account-manage-dialog"
 import { RuntimeTargetMenuSection } from "@/components/account/runtime-target-menu-section"
 import { SidebarOrgSection } from "@/components/shell/sidebar-org-section"
 import { unlocksWithoutPrompt } from "@/lib/accounts/desktop-local-account"
@@ -99,6 +102,7 @@ export function SidebarUserCard({ className }: { className?: string }) {
   const activeAccount = useAccountStore(selectActiveAccount)
   const [open, setOpen] = useState(false)
   const [manageOpen, setManageOpen] = useState(false)
+  const [manageTab, setManageTab] = useState<AccountManageDialogProps["initialTab"]>(undefined)
   const identity = useSidebarIdentity(open)
   // The chord the dispatcher actually fires, in this platform's notation —
   // `⌘,` on a Mac, `Ctrl+,` elsewhere, the user's own chord once rebound.
@@ -264,7 +268,11 @@ export function SidebarUserCard({ className }: { className?: string }) {
             <MenuRow
               icon={<CloudIcon className="size-4" />}
               label={t("signIn")}
-              onClick={() => go("/settings?section=companion")}
+              onClick={() => {
+                setOpen(false)
+                setManageTab("identity")
+                setManageOpen(true)
+              }}
               testId="sidebar-user-sign-in"
             />
           ) : null}
@@ -273,6 +281,7 @@ export function SidebarUserCard({ className }: { className?: string }) {
             label={t("manageAccounts")}
             onClick={() => {
               setOpen(false)
+              setManageTab(undefined)
               setManageOpen(true)
             }}
             testId="sidebar-user-manage"
@@ -319,7 +328,14 @@ export function SidebarUserCard({ className }: { className?: string }) {
           )}
         </PopoverContent>
       </Popover>
-      <AccountManageDialog open={manageOpen} onOpenChange={setManageOpen} />
+      <AccountManageDialog
+        open={manageOpen}
+        onOpenChange={(next) => {
+          setManageOpen(next)
+          if (!next) setManageTab(undefined)
+        }}
+        initialTab={manageTab}
+      />
     </>
   )
 }

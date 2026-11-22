@@ -89,6 +89,24 @@ describe("loadOrgSwitchSnapshot", () => {
     expect(snapshot.memberships).toBeNull()
     expect(snapshot.membershipsError).toBe("unreachable")
   })
+
+  it("never sends an active token from another deployment's issuer to a replaced gateway", async () => {
+    const listMemberships = jest.fn()
+    const snapshot = await loadOrgSwitchSnapshot(
+      "acct_1",
+      deps({
+        listMemberships,
+        discover: async () =>
+          ({
+            status: "ready",
+            collaborationServiceUrl: "https://collab-b.example",
+            config: { oidc: { issuer: "https://id-b.example" } },
+          }) as unknown as DeploymentDiscovery,
+      })
+    )
+    expect(snapshot.memberships).toBeNull()
+    expect(listMemberships).not.toHaveBeenCalled()
+  })
 })
 
 describe("switchOrganization", () => {
@@ -131,5 +149,26 @@ describe("switchOrganization", () => {
       OrgSwitchUnavailableError
     )
     expect(d.adopt).not.toHaveBeenCalled()
+  })
+
+  it("refuses to switch organizations on a mismatched deployment or an inactive local profile", async () => {
+    const foreignDiscovery = {
+      status: "ready",
+      collaborationServiceUrl: "https://collab-b.example",
+      config: { oidc: { issuer: "https://id-b.example" } },
+    } as unknown as DeploymentDiscovery
+    const foreign = deps({ discover: async () => foreignDiscovery })
+    const foreignSnapshot = await loadOrgSwitchSnapshot("acct_1", foreign)
+    await expect(
+      switchOrganization(foreignSnapshot, beta, "acct_1", foreign)
+    ).rejects.toBeInstanceOf(OrgSwitchUnavailableError)
+    expect(foreign.adopt).not.toHaveBeenCalled()
+
+    const inactive = deps({ servedAccountId: () => "acct_other" })
+    const snapshot = await loadOrgSwitchSnapshot("acct_1", inactive)
+    await expect(switchOrganization(snapshot, beta, "acct_1", inactive)).rejects.toBeInstanceOf(
+      OrgSwitchUnavailableError
+    )
+    expect(inactive.adopt).not.toHaveBeenCalled()
   })
 })

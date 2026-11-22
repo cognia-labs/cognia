@@ -2,7 +2,7 @@
 
 import { fireEvent, render, screen } from "@testing-library/react"
 import LogtoCallbackPage from "./page"
-import { LOGTO_CALLBACK_STATE_KEY } from "@/lib/logto/web-popup"
+import { rememberLogtoCallbackState } from "@/lib/logto/web-popup"
 
 jest.mock("next-intl", () => ({
   useTranslations: () => (key: string, values?: Record<string, unknown>) =>
@@ -11,7 +11,8 @@ jest.mock("next-intl", () => ({
 
 function landOn(search: string, opener: { postMessage: jest.Mock } | null, state = "state-a") {
   Object.defineProperty(window, "opener", { value: opener, configurable: true })
-  window.localStorage.setItem(LOGTO_CALLBACK_STATE_KEY, state)
+  window.localStorage.clear()
+  rememberLogtoCallbackState(state)
   window.history.replaceState({}, "", `/logto/callback${search}`)
 }
 
@@ -72,5 +73,14 @@ it("explains a window with nobody to hand the code to", async () => {
   render(<LogtoCallbackPage />)
   expect(await screen.findByText("orphanedTitle")).toBeInTheDocument()
   expect(screen.getByTestId("mobile-spot-icon-diagnostics")).toBeInTheDocument()
+  expect(close).not.toHaveBeenCalled()
+})
+
+it("reports a callback missing code as failed instead of done, without closing", async () => {
+  const postMessage = jest.fn()
+  landOn("?state=state-a", { postMessage })
+  render(<LogtoCallbackPage />)
+  expect(await screen.findByText("failedTitle")).toBeInTheDocument()
+  expect(screen.getByTestId("logto-callback-reason")).toHaveTextContent("missingCode")
   expect(close).not.toHaveBeenCalled()
 })

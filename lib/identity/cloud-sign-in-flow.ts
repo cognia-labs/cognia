@@ -45,7 +45,7 @@ import {
 } from "@/lib/collab/client"
 import { saveCollabConnection } from "@/lib/collab/connection"
 import { refreshCollabPlaneQuietly } from "@/lib/collab/refresh"
-import { getActiveAccountId } from "@/lib/accounts/active-account-id"
+import { getActiveAccountId, getOpenAccountDatabaseId } from "@/lib/accounts/active-account-id"
 import {
   ORGANIZATIONS_SCOPE,
   refreshLogtoToken,
@@ -76,6 +76,7 @@ export type CloudSignInErrorCode =
   | "reauth-required"
   | "not-invited"
   | "invalid-invitation"
+  | "inactive-profile"
   | "cancelled"
 
 export class CloudSignInError extends Error {
@@ -90,6 +91,7 @@ export class CloudSignInError extends Error {
 
 export interface CloudSignInDeps {
   localAccountId?: string
+  openAccountId?: () => string | null
   signIn?: typeof signInToLogto
   complete?: (session: LogtoSession, deps: CompleteSignInDeps) => Promise<unknown>
   validate?: typeof assertSignedInIdentityOwner
@@ -284,6 +286,13 @@ export async function adoptOrganization(
   deps: CloudSignInDeps = {}
 ): Promise<AdoptedOrganization> {
   const localAccountId = deps.localAccountId ?? getActiveAccountId()
+  const openAccountId = (deps.openAccountId ?? getOpenAccountDatabaseId)()
+  if (openAccountId !== null && openAccountId !== localAccountId) {
+    throw new CloudSignInError(
+      "inactive-profile",
+      "switch to this local profile before adopting or changing its organization"
+    )
+  }
   if (!deployment.collaborationServiceUrl) {
     throw new CloudSignInError(
       "no-collaboration-service",

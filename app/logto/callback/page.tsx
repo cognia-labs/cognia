@@ -39,6 +39,7 @@ export default function LogtoCallbackPage() {
     if (opener) opener.postMessage(payload, window.location.origin)
     let next: Outcome
     if (payload.error) next = { kind: "failed", error: payload.error }
+    else if (!payload.code) next = { kind: "failed", error: "missing_code" }
     else if (!opener) next = { kind: "orphaned" }
     else next = { kind: "done" }
     queueMicrotask(() => setOutcome(next))
@@ -92,7 +93,9 @@ export default function LogtoCallbackPage() {
                   ? t("cancelled")
                   : outcome.error === "state_mismatch"
                     ? t("stateMismatch")
-                    : t("providerError", { error: outcome.error })}
+                    : outcome.error === "missing_code"
+                      ? t("missingCode")
+                      : t("providerError", { error: outcome.error })}
               </p>
               <p className="text-xs text-muted-foreground">{t("tryAgain")}</p>
               <CloseButton onClick={close}>{t("close")}</CloseButton>

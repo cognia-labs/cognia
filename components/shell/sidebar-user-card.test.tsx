@@ -74,8 +74,8 @@ let mockPlatform: "tauri" | "web" | "mobile" = "tauri"
 jest.mock("@/hooks/use-platform", () => ({ usePlatform: () => mockPlatform }))
 
 jest.mock("@/components/account/account-manage-dialog", () => ({
-  AccountManageDialog: ({ open }: { open: boolean }) =>
-    open ? <div data-testid="manage-dialog" /> : null,
+  AccountManageDialog: ({ open, initialTab }: { open: boolean; initialTab?: string }) =>
+    open ? <div data-testid="manage-dialog" data-initial-tab={initialTab ?? "default"} /> : null,
 }))
 jest.mock("@/components/account/runtime-target-menu-section", () => ({
   RuntimeTargetMenuSection: () => <div data-testid="runtime-targets" />,
@@ -174,9 +174,12 @@ describe("SidebarUserCard", () => {
     expect(screen.queryByTestId("sidebar-user-usage")).toBeNull()
   })
 
-  it("offers the way into the cloud only while the profile is local", async () => {
+  it("offers the way into the cloud only while the profile is local, opening Identity directly", async () => {
     await open()
-    expect(screen.getByTestId("sidebar-user-sign-in")).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("sidebar-user-sign-in"))
+    const dialog = await screen.findByTestId("manage-dialog")
+    expect(dialog).toHaveAttribute("data-initial-tab", "identity")
+    expect(routerPush).not.toHaveBeenCalled()
   })
 
   it("drops the sign-in row once the profile is bound", async () => {

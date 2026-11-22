@@ -77,6 +77,8 @@ export interface LogtoClientConfig {
    * Account deletion needs this proof (ADR-0215 §10). Non-Logto issuers only.
    */
   freshLogin?: boolean
+  /** Cancel discovery, interactive wait, and token exchange. */
+  signal?: AbortSignal
 }
 
 /** Logto only mints organization tokens for a session that asked for this. */
@@ -286,8 +288,10 @@ export async function loginToLogto(
 }
 
 async function runLogin(config: LogtoClientConfig, drivers: LogtoDrivers): Promise<LogtoSession> {
+  config.signal?.throwIfAborted()
   const fetchImpl = drivers.fetchImpl ?? fetch
-  const endpoints = await discoverLogtoEndpoints(config.issuer, fetchImpl)
+  const endpoints = await discoverLogtoEndpoints(config.issuer, fetchImpl, config.signal)
+  config.signal?.throwIfAborted()
   const logto = isLogto(config)
   const scopes = mergeScopes(config.scopes, logto)
 
@@ -316,9 +320,18 @@ async function runLogin(config: LogtoClientConfig, drivers: LogtoDrivers): Promi
     clientId: config.clientId,
     scopes,
     redirectUri: config.redirectUri,
-    openUrl: drivers.openUrl,
-    waitForCode: drivers.waitForCode,
+    openUrl: async (url) => {
+      config.signal?.throwIfAborted()
+      await drivers.openUrl(url)
+    },
+    waitForCode: async (params) => {
+      config.signal?.throwIfAborted()
+      const delivered = await drivers.waitForCode(params)
+      config.signal?.throwIfAborted()
+      return delivered
+    },
     fetchImpl,
+    signal: config.signal,
     extraAuthParams,
     extraTokenParams,
   })

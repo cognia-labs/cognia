@@ -65,6 +65,27 @@ describe("readEnrollmentStatus", () => {
       space: "ready",
     })
   })
+
+  it("distinguishes an empty server list on a pinned device as empty-list integrity", async () => {
+    const server = testServer()
+    const { context } = await spaceWithFirstDevice(server)
+    const wiped = testServer()
+    const afterPurge = createAccountSyncContext(
+      {
+        localAccountId: "l",
+        issuer: "https://id.test/api/auth",
+        userId: "usr_1",
+        spaceId: TEST_SPACE,
+        syncUrl: "https://sync.test",
+        accessToken: async () => "t",
+      },
+      { fetchImpl: wiped.fetch, vault: context.vault }
+    )
+    await expect(readEnrollmentStatus(afterPurge)).resolves.toEqual({
+      kind: "integrity",
+      reason: "empty-list",
+    })
+  })
 })
 
 describe("isActiveDevice", () => {

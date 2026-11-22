@@ -45,8 +45,9 @@ function abortError(): Error {
 
 /**
  * Resolve with the authorization code the next time a callback for `state`
- * arrives. A callback for another state rejects (a mismatch is an answer, not
- * something to keep waiting through), and so does one carrying an `error`.
+ * arrives. Callbacks carrying another `state` are ignored so a delayed return
+ * from an abandoned browser tab cannot abort a newer sign-in attempt; an
+ * authorization error on the matching `state` rejects immediately.
  */
 export function waitForLogtoDeepLinkCallback(
   options: WaitForLogtoDeepLinkOptions
@@ -71,10 +72,9 @@ export function waitForLogtoDeepLinkCallback(
     const onCallback = (event: Event) => {
       const route = (event as CustomEvent<LogtoDeepLinkCallback>).detail
       if (!route || route.kind !== "logto_callback") return
+      if (route.state !== options.state) return
       cleanup()
-      if (route.state !== options.state) {
-        reject(new Error("Logto callback state mismatch"))
-      } else if (route.error) {
+      if (route.error) {
         reject(new Error(`Logto authorization failed: ${route.error}`))
       } else if (!route.code) {
         reject(new Error("Logto callback is missing code"))

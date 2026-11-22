@@ -17,6 +17,7 @@ jest.mock("@/lib/db/schema", () => ({
 import {
   DEFAULT_LOCAL_ACCOUNT_ID,
   getActiveAccountId,
+  getOpenAccountDatabaseId,
   captureAccountScope,
 } from "./active-account-id"
 
@@ -74,6 +75,7 @@ describe("getActiveAccountId", () => {
   it("falls back to the default for a pre-multi-account database name", () => {
     mockDbName = "cognia"
     delete process.env.COGNIA_LOCAL_ACCOUNT_ID
+    expect(getOpenAccountDatabaseId()).toBeNull()
     expect(getActiveAccountId()).toBe(DEFAULT_LOCAL_ACCOUNT_ID)
   })
 

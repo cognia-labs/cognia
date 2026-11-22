@@ -26,7 +26,10 @@ jest.mock("sonner", () => ({
   toast: { success: jest.fn(), warning: jest.fn(), error: jest.fn() },
 }))
 jest.mock("@/lib/accounts/active-account-id", () => ({ getActiveAccountId: () => "acct_active" }))
-jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn() }))
+jest.mock("@/lib/native/opener", () => ({
+  openUrl: jest.fn(),
+  tryOpenUrl: jest.fn(async () => true),
+}))
 // The default check path; tests that inject `discover` never reach it.
 const mockDiscoverDeployment = jest.fn()
 jest.mock("@/lib/identity/deployment-discovery", () => ({
@@ -34,11 +37,15 @@ jest.mock("@/lib/identity/deployment-discovery", () => ({
   discoverDeployment: (...args: unknown[]) => mockDiscoverDeployment(...args),
 }))
 jest.mock("@/lib/logto/app-session", () => ({
+  ...jest.requireActual("@/lib/logto/app-session"),
   signOutFromLogto: jest.fn(),
   signOutLeftTokensLive: () => false,
 }))
 jest.mock("@/lib/identity/complete-sign-in", () => ({ completeSignOut: jest.fn() }))
-jest.mock("@/lib/identity/cloud-session", () => ({ readCloudSessionState: jest.fn() }))
+jest.mock("@/lib/identity/cloud-session", () => ({
+  ...jest.requireActual("@/lib/identity/cloud-session"),
+  readCloudSessionState: jest.fn(),
+}))
 jest.mock("@/stores/account/account-store", () => ({
   useAccountStore: (selector: (state: unknown) => unknown) =>
     selector({ loaded: true, locked: false, unlockedAccountId: null, activeAccountId: null }),
@@ -443,7 +450,7 @@ describe("CloudDeploymentCard", () => {
   })
 
   it("warns when revocation did not land, opens the end-session URL, and reports a failed sign-out", async () => {
-    const { openUrl } = jest.requireMock("@/lib/native/opener") as { openUrl: jest.Mock }
+    const { tryOpenUrl } = jest.requireMock("@/lib/native/opener") as { tryOpenUrl: jest.Mock }
     const local = memory()
     local.setItem(
       "cognia.cloud.deployment.acct_a",
@@ -471,9 +478,69 @@ describe("CloudDeploymentCard", () => {
     )
     fireEvent.click(screen.getByTestId("cloud-deployment-sign-out"))
     await waitFor(() => expect(toast.warning).toHaveBeenCalled())
-    expect(openUrl).toHaveBeenCalledWith("https://logto.example/end")
+    expect(tryOpenUrl).toHaveBeenCalledWith("https://logto.example/end")
     fireEvent.click(screen.getByTestId("cloud-deployment-sign-out"))
     await waitFor(() => expect(toast.error).toHaveBeenCalled())
     expect((toast.error as jest.Mock).mock.calls[0][0]).toContain("network down")
+  })
+
+  it("flags a foreign issuer session, allows offline sign-out, and recovers from session read errors", async () => {
+    const local = memory()
+    local.setItem(
+      "cognia.cloud.deployment.acct_a",
+      JSON.stringify({ baseUrl: "https://b.example" })
+    )
+    const readState = jest
+      .fn<Promise<CloudSessionState>, [string]>()
+      .mockRejectedValueOnce(new Error("keyring error"))
+      .mockResolvedValueOnce({
+        status: "active",
+        session: { issuer: "https://a.example/oidc" } as never,
+        identity: { userId: "usr_a", logtoSubject: "s", displayName: "Ada" },
+      })
+      .mockResolvedValueOnce({
+        status: "offline",
+        sessionMetadata: {
+          issuer: "https://b.example/oidc",
+          clientId: "w",
+          resource: "r",
+          scopes: [],
+        },
+      })
+    const d = deps({
+      storage: { local },
+      discover: jest.fn(
+        async () =>
+          ({
+            ...ready,
+            config: { oidc: { issuer: "https://b.example/oidc", webClientId: "w", audience: "r" } },
+          }) as unknown as DeploymentDiscovery
+      ),
+      readState,
+      signOut: jest.fn(async () => ({
+        endSessionUrl: "https://b.example/logout",
+        endSessionOpened: false,
+        tokensLive: false,
+        revocationWarning: "unsupported" as const,
+      })),
+    })
+    render(<CloudDeploymentCard deps={d} />)
+    expect(await screen.findByTestId("cloud-deployment-session")).toHaveTextContent(
+      "session.readFailed(keyring error)"
+    )
+    fireEvent.click(screen.getByTestId("cloud-deployment-retry-session"))
+    expect(await screen.findByTestId("cloud-deployment-session")).toHaveTextContent(
+      "session.foreign"
+    )
+    expect(screen.getByTestId("cloud-deployment-sign-in")).toBeInTheDocument()
+    expect(screen.getByTestId("cloud-deployment-sign-out")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("cloud-deployment-sign-out"))
+    await waitFor(() =>
+      expect(screen.getByTestId("cloud-deployment-session")).toHaveTextContent("session.offline")
+    )
+    expect(screen.getByTestId("cloud-deployment-sign-out")).toBeInTheDocument()
+    expect(toast.warning).toHaveBeenCalledWith("account.cloud.deployment.revocationUnsupported")
+    expect(toast.warning).toHaveBeenCalledWith("account.cloud.deployment.endSessionBlocked")
   })
 })

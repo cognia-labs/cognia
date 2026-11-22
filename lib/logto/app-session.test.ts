@@ -12,6 +12,7 @@ import {
   signInToLogto,
   signOutFromLogto,
   signOutLeftTokensLive,
+  signOutRevocationWarning,
   updateLogtoSession,
   type LogtoAppSessionDeps,
   type LogtoAuthCommitContext,
@@ -964,5 +965,36 @@ describe("signOutFromLogto", () => {
     )
     expect(revoke).not.toHaveBeenCalled()
     expect(report.refreshTokenRevocation).toBeNull()
+    expect(signOutRevocationWarning(report)).toBeNull()
+  })
+
+  it("distinguishes unsupported issuer revocation from network failure", () => {
+    expect(
+      signOutRevocationWarning({
+        hadSession: true,
+        cleared: true,
+        refreshTokenRevocation: { status: "unsupported" },
+        accessTokenRevocation: { status: "unsupported" },
+        endSessionUrl: null,
+      })
+    ).toBe("unsupported")
+    expect(
+      signOutRevocationWarning({
+        hadSession: true,
+        cleared: true,
+        refreshTokenRevocation: { status: "unsupported" },
+        accessTokenRevocation: { status: "failed", reason: "down" },
+        endSessionUrl: null,
+      })
+    ).toBe("failed")
+    expect(
+      signOutRevocationWarning({
+        hadSession: false,
+        cleared: true,
+        refreshTokenRevocation: { status: "unsupported" },
+        accessTokenRevocation: null,
+        endSessionUrl: null,
+      })
+    ).toBeNull()
   })
 })

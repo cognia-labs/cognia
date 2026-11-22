@@ -29,7 +29,10 @@ jest.mock("@/lib/logto/web-popup", () => ({
     abandon: () => abandonPopup(),
   }),
 }))
-jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn() }))
+jest.mock("@/lib/native/opener", () => ({
+  openUrl: jest.fn(),
+  tryOpenUrl: jest.fn(async () => true),
+}))
 jest.mock("@/lib/logto/app-session", () => ({
   ...jest.requireActual("@/lib/logto/app-session"),
   signOutFromLogto: jest.fn(async (deps: { afterClear?: () => Promise<void> }) => {
@@ -442,7 +445,12 @@ describe("CloudSignInGate", () => {
         deps={deps({
           readState: jest.fn(async () => ({
             status: "offline" as const,
-            sessionMetadata: { issuer: "i", clientId: "c", resource: "r", scopes: [] },
+            sessionMetadata: {
+              issuer: session.issuer,
+              clientId: "c",
+              resource: "r",
+              scopes: [],
+            },
           })),
         })}
       >
@@ -478,7 +486,7 @@ describe("CloudSignInGate", () => {
     expect(signIn).toHaveBeenCalledTimes(1)
   })
 
-  it("on the desktop, a deep link for another state is refused and the person can retry", async () => {
+  it("on the desktop, ignores a deep link for another state and keeps waiting for the active one", async () => {
     const signIn = jest.fn(
       async (
         _deployment: unknown,
@@ -494,13 +502,22 @@ describe("CloudSignInGate", () => {
     await screen.findByTestId("cloud-sign-in-code")
     publishLogtoDeepLinkCallback({
       kind: "logto_callback",
-      code: "c-1",
+      code: "c-other",
       state: "someone-else",
       error: null,
-      raw: "cognia://logto/callback?code=c-1&state=someone-else",
+      raw: "cognia://logto/callback?code=c-other&state=someone-else",
     })
-    expect(await screen.findByTestId("cloud-sign-in-error")).toHaveTextContent("state mismatch")
     expect(screen.queryByTestId("app")).not.toBeInTheDocument()
+    expect(screen.getByTestId("cloud-sign-in-code")).toBeInTheDocument()
+
+    publishLogtoDeepLinkCallback({
+      kind: "logto_callback",
+      code: "c-1",
+      state: "st-1",
+      error: null,
+      raw: "cognia://logto/callback?code=c-1&state=st-1",
+    })
+    expect(await screen.findByTestId("app")).toBeInTheDocument()
   })
 
   /** G4: a WebView cannot pop a window, so Capacitor takes the native path. */
@@ -643,6 +660,108 @@ describe("CloudSignInGate", () => {
     expect(hasChosenOffline("acct_a")).toBe(true)
     forgetOfflineChoice("acct_a")
     expect(hasChosenOffline("acct_a")).toBe(false)
+  })
+
+  it("rejects an active or offline session from a previous deployment without sending its token to the new host", async () => {
+    const settle = jest.fn()
+    const foreignOrg = renderGate(
+      deps({
+        settle,
+        readState: jest.fn(async () => ({
+          status: "active" as const,
+          session: { ...session, issuer: "https://old-deployment.example/oidc" },
+          identity: { userId: "usr_1", logtoSubject: "s", orgId: "org_old" },
+        })),
+      })
+    )
+    expect(await screen.findByTestId("cloud-sign-in-social-github")).toBeInTheDocument()
+    expect(screen.queryByTestId("app")).not.toBeInTheDocument()
+    expect(settle).not.toHaveBeenCalled()
+    foreignOrg.unmount()
+
+    const foreignPlain = renderGate(
+      deps({
+        settle,
+        readState: jest.fn(async () => ({
+          status: "active" as const,
+          session: { ...session, issuer: "https://old-deployment.example/oidc" },
+          identity: { userId: "usr_1", logtoSubject: "s" },
+        })),
+      })
+    )
+    expect(await screen.findByTestId("cloud-sign-in-social-github")).toBeInTheDocument()
+    expect(settle).not.toHaveBeenCalled()
+    foreignPlain.unmount()
+
+    renderGate(
+      deps({
+        readState: jest.fn(async () => ({
+          status: "offline" as const,
+          sessionMetadata: {
+            issuer: "https://old-deployment.example/oidc",
+            clientId: "w",
+            resource: "a",
+            scopes: [],
+          },
+        })),
+      })
+    )
+    expect(await screen.findByTestId("cloud-sign-in-social-github")).toBeInTheDocument()
+  })
+
+  it("recovers from a local identity store read failure with an unavailable screen and retry", async () => {
+    const readState = jest
+      .fn<Promise<Awaited<ReturnType<NonNullable<CloudSignInGateDeps["readState"]>>>>, [string]>()
+      .mockRejectedValueOnce(new Error("IndexedDB corrupted"))
+      .mockResolvedValueOnce({
+        status: "active",
+        session,
+        identity: { userId: "usr_1", logtoSubject: "s", orgId: "org_1" },
+      })
+    renderGate(deps({ readState }))
+    expect(await screen.findByTestId("cloud-sign-in-unavailable")).toHaveTextContent(
+      "IndexedDB corrupted"
+    )
+    fireEvent.click(screen.getByTestId("cloud-sign-in-retry"))
+    expect(await screen.findByTestId("app")).toBeInTheDocument()
+  })
+
+  it("allows cancelling an in-flight web sign-in and surfaces remote logout warnings", async () => {
+    let rejectLogin!: (error: Error) => void
+    const signIn = jest.fn(
+      () =>
+        new Promise<LogtoSession>((_resolve, reject) => {
+          rejectLogin = reject
+        })
+    )
+    abandonPopup.mockClear()
+    const first = renderGate(deps({ profile: "web-standalone", signIn: signIn as never }))
+    fireEvent.click(await screen.findByTestId("cloud-sign-in-social-github"))
+    fireEvent.click(await screen.findByTestId("cloud-sign-in-cancel"))
+    expect(abandonPopup).toHaveBeenCalled()
+    expect(await screen.findByTestId("cloud-sign-in-social-github")).toBeInTheDocument()
+    rejectLogin(new Error("cancelled"))
+    first.unmount()
+
+    renderGate(
+      deps({
+        signOut: jest.fn(async () => ({ revocationWarning: "unsupported" as const })),
+        readState: async () => ({
+          status: "active",
+          session: {
+            ...session,
+            accessToken: `h.${Buffer.from(JSON.stringify({ sub: "sub_only" })).toString("base64url")}.s`,
+          },
+          identity: { userId: "usr_no_name", logtoSubject: "sub_only" },
+        }),
+        settle: async () => ({ outcome: "unaffiliated" as const }),
+      })
+    )
+    expect(await screen.findByTestId("cloud-sign-in-person")).toHaveTextContent("sub_only")
+    fireEvent.click(screen.getByTestId("cloud-sign-in-sign-out"))
+    expect(await screen.findByTestId("cloud-sign-in-error")).toHaveTextContent(
+      "signOutWarning.revocationUnsupported"
+    )
   })
 })
 
@@ -877,7 +996,8 @@ describe("CloudSignInGate with the official account", () => {
     expect(await screen.findByTestId("app")).toBeInTheDocument()
   })
 
-  it("names the reason a previous session is not enough", async () => {
+  it("names the reason a previous session is not enough, even after the first-run prompt was answered", async () => {
+    recordOfficialPromptDecision("acct_a", "signed-in")
     renderGate(
       deps({
         discover: discoverOfficial(),
@@ -894,5 +1014,8 @@ describe("CloudSignInGate with the official account", () => {
       })
     )
     expect(await screen.findByTestId("cloud-sign-in-reauth-expired")).toBeInTheDocument()
+    fireEvent.click(screen.getByTestId("cloud-sign-in-offline"))
+    expect(await screen.findByTestId("app")).toBeInTheDocument()
+    expect(readOfficialPromptDecision("acct_a")).toBe("signed-in")
   })
 })

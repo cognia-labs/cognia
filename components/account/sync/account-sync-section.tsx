@@ -110,7 +110,9 @@ export function AccountSyncSection({ account }: AccountSyncSectionProps) {
       body = (
         <Alert variant="destructive" data-testid="account-sync-integrity">
           <AlertTitle>{t("section.integrityTitle")}</AlertTitle>
-          <AlertDescription>{t("section.integrity")}</AlertDescription>
+          <AlertDescription>
+            {view.reason === "empty-list" ? t("section.integrityEmpty") : t("section.integrity")}
+          </AlertDescription>
         </Alert>
       )
       break

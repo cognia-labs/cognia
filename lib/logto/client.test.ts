@@ -130,6 +130,28 @@ describe("loginToLogto", () => {
     expect(abandon).not.toHaveBeenCalled()
   })
 
+  it("aborts before token exchange and abandons drivers when signal is aborted after waitForCode", async () => {
+    const controller = new AbortController()
+    const abandon = jest.fn()
+    const fetchImpl = routingFetch()
+    await expect(
+      loginToLogto(baseConfig({ signal: controller.signal }), {
+        openUrl: jest.fn(),
+        waitForCode: jest.fn(async ({ state }: { state: string }) => {
+          controller.abort()
+          return { code: "c", state }
+        }),
+        fetchImpl,
+        abandon,
+      })
+    ).rejects.toMatchObject({ name: "AbortError" })
+    expect(abandon).toHaveBeenCalledTimes(1)
+    const tokenCalls = (fetchImpl as jest.Mock).mock.calls.filter((c) =>
+      String(c[0]).endsWith("/token")
+    )
+    expect(tokenCalls).toHaveLength(0)
+  })
+
   it("passes direct_sign_in on the authorize request only, when a social provider is chosen", async () => {
     const fetchImpl = routingFetch()
     const openUrl = jest.fn()

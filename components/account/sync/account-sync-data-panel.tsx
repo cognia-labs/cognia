@@ -132,7 +132,9 @@ function RunningState({ status, onSyncNow }: { status: Running; onSyncNow: () =>
       </div>
       {status.error ? (
         <p role="alert" className="text-xs text-destructive" data-testid="account-sync-data-error">
-          {t("error", { message: status.error })}
+          {/empty device list/i.test(status.error)
+            ? t("spaceCleared")
+            : t("error", { message: status.error })}
         </p>
       ) : null}
       {status.parked.schema > 0 ? (

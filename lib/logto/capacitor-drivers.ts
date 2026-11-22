@@ -36,6 +36,8 @@ export interface LogtoCapacitorDriverDeps {
   /** Override the in-app browser timeout. Defaults to the flow's five minutes. */
   timeoutMs?: number
   fetchImpl?: typeof fetch
+  /** Cancel waiting and close the in-app browser when the caller aborts. */
+  signal?: AbortSignal
   /** The provider app that can run this authorize request, if any. Tests swap it. */
   appHandoff?: (authorizeUrl: string, pickup?: AppReturnPickup) => AppHandoff | undefined
 }
@@ -45,6 +47,7 @@ export interface AppReturnPickup {
   state: string
   codeVerifier: string
   fetchImpl?: typeof fetch
+  signal?: AbortSignal
 }
 
 /** The issuer's app-return claim (cognia-services/services/identity-server/src/app-return.ts). */
@@ -66,6 +69,7 @@ export async function claimAppReturn(
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
       body: JSON.stringify({ state: pickup.state, code_verifier: pickup.codeVerifier }),
+      ...(pickup.signal ? { signal: pickup.signal } : {}),
     }
   )
   if (!response.ok) return null
@@ -104,30 +108,54 @@ export function createLogtoCapacitorDrivers(deps: LogtoCapacitorDriverDeps = {})
       authorizeUrl = url
     },
     waitForCode: async ({ state, codeVerifier }) => {
+      if (deps.signal?.aborted) {
+        authorizeUrl = null
+        const aborted = new Error("Logto mobile sign-in aborted")
+        aborted.name = "AbortError"
+        throw aborted
+      }
       if (!authorizeUrl) throw new Error("Logto authorize URL was never opened")
       const outcome = await (deps.runOAuth ?? defaultRunOAuth)({
         authorizeUrl,
         provider: "logto",
         timeoutMs: deps.timeoutMs,
+        ...(deps.signal ? { signal: deps.signal } : {}),
         appHandoff: (deps.appHandoff ?? providerAppHandoff)(
           authorizeUrl,
-          codeVerifier ? { state, codeVerifier, fetchImpl: deps.fetchImpl } : undefined
+          codeVerifier
+            ? {
+                state,
+                codeVerifier,
+                fetchImpl: deps.fetchImpl,
+                ...(deps.signal ? { signal: deps.signal } : {}),
+              }
+            : undefined
         ),
         accept: (route) => {
           if (route.kind !== "logto_callback") return null
-          if (route.state !== state) return "mismatch"
+          // Ignore stale callbacks from an abandoned earlier attempt so they
+          // cannot close the active browser sheet or kill the current login.
+          if (route.state !== state) return null
           if (route.error) return { error: route.error }
-          if (!route.code) return "mismatch"
+          if (!route.code) return { error: "missing_code" }
           return { code: route.code, state }
         },
       })
       authorizeUrl = null
+      if (deps.signal?.aborted) {
+        const aborted = new Error("Logto mobile sign-in aborted")
+        aborted.name = "AbortError"
+        throw aborted
+      }
       switch (outcome.kind) {
         case "ok":
           return { code: outcome.result.code, state }
         case "mismatch":
           throw new Error("Logto callback state mismatch")
         case "error":
+          if (outcome.error === "missing_code") {
+            throw new Error("Logto callback is missing code")
+          }
           throw new Error(`Logto authorization failed: ${outcome.error}`)
         case "timeout":
           throw new LogtoSignInCancelled("Logto sign-in timed out")

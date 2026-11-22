@@ -64,6 +64,7 @@ import {
   SettingsStack,
 } from "@/components/settings/common/settings-block"
 import { unlocksWithoutPrompt } from "@/lib/accounts/desktop-local-account"
+import { isCapacitor } from "@/lib/platform/detect"
 import { isTauri } from "@/lib/tauri"
 import { writeClipboardText } from "@/lib/tauri/clipboard"
 import { useActiveAnthropicCredential, useAnthropicUsage } from "@/lib/subscription/anthropic/hooks"
@@ -162,11 +163,16 @@ export function AccountOverviewSection() {
     if (!open) setManageTab(undefined)
   }
   const [busy, setBusy] = useState<"refresh" | "signOut" | null>(null)
-  // Local accounts are a Tauri-only concept; resolve post-hydration to keep the
-  // server + first client render in agreement (mirrors settings-sidebar.tsx).
+  // Local accounts & the Identity/Sync dialog run on both Tauri and Web (mobile
+  // uses `/me/cloud-account`); resolve post-hydration so SSR and first client
+  // render agree. Security settings remain Tauri-scoped (`desktopReady`).
   const [desktopReady, setDesktopReady] = useState(false)
+  const [localAccountsReady, setLocalAccountsReady] = useState(false)
   useEffect(() => {
-    const timer = setTimeout(() => setDesktopReady(isTauri()), 0)
+    const timer = setTimeout(() => {
+      setDesktopReady(isTauri())
+      setLocalAccountsReady(!isCapacitor())
+    }, 0)
     return () => clearTimeout(timer)
   }, [])
   // Ticking clock for the usage countdown — set post-mount, refreshed each
@@ -368,8 +374,8 @@ export function AccountOverviewSection() {
           ) : null}
         </SettingsBlock>
 
-        {/* ── Local accounts (desktop only) ──────────────────────────────── */}
-        {desktopReady ? (
+        {/* ── Local accounts (desktop & web) ─────────────────────────────── */}
+        {localAccountsReady ? (
           <SettingsBlock
             icon={<UsersRoundIcon />}
             title={t("localAccountsTitle")}
@@ -512,7 +518,7 @@ export function AccountOverviewSection() {
         </SettingsBlock>
       </SettingsStack>
 
-      {desktopReady ? (
+      {localAccountsReady ? (
         <AccountManageDialog
           open={manageOpen}
           onOpenChange={onManageOpenChange}

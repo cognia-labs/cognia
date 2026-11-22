@@ -67,21 +67,32 @@ describe("createLogtoCapacitorDrivers", () => {
     expect(
       accept({ kind: "oauth_callback", provider: "claude", code: "c", state: "st", raw: "" })
     ).toBeNull()
-    expect(accept(route({ state: "other" }))).toBe("mismatch")
-    expect(accept(route({ code: null }))).toBe("mismatch")
+    expect(accept(route({ state: "other" }))).toBeNull()
+    expect(accept(route({ code: null }))).toEqual({ error: "missing_code" })
     expect(accept(route({ error: "access_denied" }))).toEqual({ error: "access_denied" })
     expect(accept(route({}))).toEqual({ code: "c", state: "st" })
   })
 
-  it("maps the flow outcomes to the errors the gate understands", async () => {
+  it("maps the flow outcomes to the errors the gate understands and forwards abort signals", async () => {
     for (const [outcome, expected] of [
       [{ kind: "mismatch" }, "Logto callback state mismatch"],
+      [{ kind: "error", error: "missing_code" }, "Logto callback is missing code"],
       [{ kind: "error", error: "access_denied" }, "Logto authorization failed: access_denied"],
     ] as const) {
       const { drivers } = driversWith(outcome as CallbackOutcome)
       await drivers.openUrl("https://logto.example/oidc/auth")
       await expect(drivers.waitForCode({ state: "st", redirectUri: "x" })).rejects.toThrow(expected)
     }
+    const controller = new AbortController()
+    const runOAuth = jest.fn(async (_opts: RunOAuthOptions) => ({
+      kind: "cancelled" as const,
+    }))
+    const abortable = createLogtoCapacitorDrivers({ runOAuth, signal: controller.signal })
+    await abortable.openUrl("https://logto.example/oidc/auth")
+    controller.abort()
+    await expect(abortable.waitForCode({ state: "st", redirectUri: "x" })).rejects.toMatchObject({
+      name: "AbortError",
+    })
     for (const outcome of [{ kind: "cancelled" }, { kind: "timeout" }] as const) {
       const { drivers } = driversWith(outcome as CallbackOutcome)
       await drivers.openUrl("https://logto.example/oidc/auth")

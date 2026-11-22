@@ -11,10 +11,15 @@
  * Changed` tells them to re-resolve; reloading the window is not required.
  */
 
+import { getOpenAccountDatabaseId } from "@/lib/accounts/active-account-id"
 import { CollabClient, type CollabAccountMembership } from "@/lib/collab/client"
 import { notifyCollabScopeChanged } from "@/lib/collab/scope-events"
 import { adoptOrganization, type AdoptedOrganization } from "@/lib/identity/cloud-sign-in-flow"
-import { readCloudSessionState, type CloudSessionState } from "@/lib/identity/cloud-session"
+import {
+  readCloudSessionState,
+  sessionMatchesDeployment,
+  type CloudSessionState,
+} from "@/lib/identity/cloud-session"
 import { discoverDeployment, type DeploymentDiscovery } from "@/lib/identity/deployment-discovery"
 import { createPlatformFetch } from "@/lib/network/platform-fetch"
 
@@ -28,6 +33,8 @@ export interface OrgSwitchDeps {
   adopt?: typeof adoptOrganization
   /** Defaults to the in-process scope bus. */
   notifyScopeChanged?: () => void
+  /** Override which profile is currently mounted by the runtime. */
+  servedAccountId?: () => string | null
 }
 
 export interface OrgSwitchSnapshot {
@@ -60,7 +67,8 @@ export async function loadOrgSwitchSnapshot(
   if (
     state.status !== "active" ||
     discovery.status !== "ready" ||
-    !discovery.collaborationServiceUrl
+    !discovery.collaborationServiceUrl ||
+    !sessionMatchesDeployment(state, discovery)
   ) {
     return { state, discovery, memberships: null, membershipsError: null }
   }
@@ -104,7 +112,13 @@ export async function switchOrganization(
   localAccountId: string,
   deps: OrgSwitchDeps = {}
 ): Promise<AdoptedOrganization> {
-  if (snapshot.state.status !== "active" || snapshot.discovery.status !== "ready") {
+  const served = (deps.servedAccountId ?? getOpenAccountDatabaseId)()
+  if (
+    snapshot.state.status !== "active" ||
+    snapshot.discovery.status !== "ready" ||
+    !sessionMatchesDeployment(snapshot.state, snapshot.discovery) ||
+    (served !== null && served !== localAccountId)
+  ) {
     throw new OrgSwitchUnavailableError()
   }
   const adopted = await (deps.adopt ?? adoptOrganization)(

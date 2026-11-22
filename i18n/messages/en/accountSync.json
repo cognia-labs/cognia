@@ -7,7 +7,8 @@
     "locked": "Unlock this profile to use sync.",
     "signedOut": "Sign in to your Cognia account to use sync.",
     "integrityTitle": "The device list could not be verified",
-    "integrity": "The sync service showed this device an older or different device list than the one it verified before. Nothing was deleted. Try again later, and contact support if this persists.",
+    "integrity": "The sync service showed this device an older or different device list than the one it verified before. Nothing on this device was deleted. Try again later, and contact support if this persists.",
+    "integrityEmpty": "The sync service returned an empty device list for a space this device had verified before. Your cloud sync space may have been cleared (for example, after account deletion). Nothing on this device was deleted.",
     "pollError": "Could not reach the sync service: {message}",
     "retry": "Try again",
     "working": "Working…"
@@ -166,6 +167,7 @@
     "pending": "{count, plural, one {# change} other {# changes}} waiting to upload",
     "lastSynced": "Last synced at {time}",
     "error": "Sync is having trouble: {message}",
+    "spaceCleared": "Your cloud sync space is empty or was cleared on the server. Local data on this device was kept.",
     "syncNow": "Sync now",
     "parkedSchema": "{count, plural, one {# change} other {# changes}} from your other devices need a newer version of Cognia. Update Cognia to see them.",
     "parkedKey": "{count, plural, one {# change is} other {# changes are}} waiting for a key this device does not have yet. They apply after the next device list update.",

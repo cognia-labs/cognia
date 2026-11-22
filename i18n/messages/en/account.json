@@ -351,9 +351,7 @@
       "binding-missing": "This profile is signed in, but not yet bound to a person.",
       "binding-mismatch": "This sign-in does not match the person who owns this profile. Sign in with the original account or use another profile."
     },
-    "offline": {
-      "body": "Your last session is kept. You can keep working offline and it will refresh once the provider is reachable."
-    },
+    "retry": "Try again",
     "unavailable": {
       "title": "Sign-in is not available right now",
       "body": "The host at {baseUrl} did not answer with a sign-in configuration: {message}",
@@ -412,7 +410,13 @@
       "stateMismatch": "The callback belongs to a different sign-in attempt. Start again."
     },
     "signedInAs": "Signed in as {name}",
+    "signedInNoName": "Signed in",
     "signOut": "Sign out",
+    "signOutWarning": {
+      "revocationFailed": "Signed out locally, but the identity provider could not be reached. The remote session may still be active.",
+      "revocationUnsupported": "Signed out locally. This identity provider does not advertise token revocation, so the remote session may stay active until it expires.",
+      "endSessionBlocked": "Signed out locally, but the browser blocked opening the identity provider's sign-out page."
+    },
     "deployment": {
       "title": "Cloud deployment",
       "description": "The Cognia Cloud this profile signs in to. Enter the gateway address, check what it offers, then use it: the sign-in screen takes over from there.",
@@ -434,6 +438,10 @@
       "signOutDone": "Signed out of the cloud account.",
       "signOutFailed": "Sign-out failed: {message}",
       "revocationFailed": "The identity provider did not confirm the sign-out. The session may still be valid there.",
+      "revocationUnsupported": "Signed out locally. This identity provider does not advertise token revocation, so the remote session may stay active until it expires.",
+      "endSessionBlocked": "Signed out locally, but the browser blocked opening the identity provider's sign-out page.",
+      "retrySession": "Retry",
+      "signInOtherProfile": "Switch to this profile to sign it in.",
       "error": {
         "invalid": "Enter an http(s) address, and a 64-character hex fingerprint if the host is self-signed."
       },
@@ -448,7 +456,9 @@
         "signed-out": "Not signed in",
         "reauth-required": "Sign-in needed again",
         "offline": "Signed in, identity provider unreachable",
-        "error": "The identity provider answered with an error"
+        "error": "The identity provider answered with an error",
+        "foreign": "Signed in to another provider — sign in to this deployment",
+        "readFailed": "Could not read the local session: {message}"
       },
       "result": {
         "status": {
@@ -480,12 +490,13 @@
     },
     "callback": {
       "working": "Completing sign-in…",
-      "doneTitle": "Signed in",
-      "doneBody": "You can return to Cognia. This window closes on its own.",
+      "doneTitle": "Verification sent to Cognia",
+      "doneBody": "Finishing in the main Cognia window. This window closes on its own.",
       "close": "Close this window",
       "failedTitle": "Sign-in did not complete",
       "cancelled": "Sign-in was cancelled.",
       "stateMismatch": "This response does not belong to the sign-in Cognia started, so it was not used.",
+      "missingCode": "The sign-in service returned without an authorization code.",
       "providerError": "The sign-in service returned an error: {error}",
       "tryAgain": "Close this window and sign in again from Cognia.",
       "orphanedTitle": "Cognia is no longer waiting here",
@@ -522,6 +533,12 @@
     "signOutDone": "Signed out.",
     "signOutFailed": "Sign-out failed: {message}",
     "revocationFailed": "Signed out locally, but the identity provider could not be told.",
+    "revocationUnsupported": "Signed out locally. This identity provider does not advertise token revocation, so the remote session may stay active until it expires.",
+    "endSessionBlocked": "Signed out locally, but the browser blocked opening the identity provider's sign-out page.",
+    "loadFailed": "Could not read this profile's cloud identity: {message}",
+    "retry": "Try again",
+    "foreignSession": "This profile holds a session from another provider. Sign in to use the configured deployment, or sign out to clear it.",
+    "deploymentSection": "Cloud deployment",
     "noDeployment": "No cloud deployment is configured for this profile.",
     "signOut": "Sign out",
     "roleName": {
@@ -537,14 +554,15 @@
     "deletion": {
       "title": "Delete account",
       "loading": "Checking the account",
-      "description": "Deletes your Cognia account and its linked sign-ins after 7 days. Everything on this device stays.",
+      "description": "Deletes your Cognia account, linked sign-ins, and cloud sync space (synced items, sync keys, enrolled devices, and sync log) after {days, plural, one {# day} other {# days}}. Data stored on this device stays.",
       "delete": "Delete account",
-      "confirmBody": "Your account and its linked sign-ins will be deleted in 7 days. Until then you can sign in and cancel.",
-      "confirmLocal": "Conversations and files on this device are not deleted. Back them up first if you plan to remove this device too.",
+      "confirmBody": "Your account, linked sign-ins, and cloud sync space (including encrypted synced items, sync keys, enrolled devices, and sync log) will be permanently deleted in {days, plural, one {# day} other {# days}}. Until then you can sign in and cancel.",
+      "confirmLocal": "Conversations and files stored locally on this device are not deleted, while everything in your cloud sync space is erased. Back up first if you also plan to remove this device.",
       "backupFirst": "Back up first",
       "confirm": "Sign in again to confirm",
       "back": "Back",
       "awaitingSignIn": "Confirm in your browser",
+      "submitting": "Scheduling deletion…",
       "stop": "Stop",
       "pending": "Your account will be deleted after {date}.",
       "pendingNoDate": "Your account is scheduled for deletion.",
@@ -556,6 +574,9 @@
         "differentPerson": "You confirmed with a different account than the one signed in here. Nothing was deleted.",
         "staleSignIn": "That sign-in was not recent enough. Confirm again.",
         "unauthorized": "Your session expired. Sign in again first.",
+        "nothingToCancel": "There was no pending deletion to cancel. Your account may already have been deleted or cleared.",
+        "stillPending": "Account deletion is still pending. Refresh and try again.",
+        "notScheduled": "Account deletion was not scheduled because the server state changed. Refresh and check your account status.",
         "generic": "Could not reach the account service: {message}"
       }
     },

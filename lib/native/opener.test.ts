@@ -14,7 +14,7 @@ jest.mock(
 )
 
 import { isTauri } from "@/lib/tauri"
-import { openPath, openUrl, revealItemInDir } from "./opener"
+import { openPath, openUrl, revealItemInDir, tryOpenUrl } from "./opener"
 import {
   openUrl as pluginOpenUrl,
   openPath as pluginOpenPath,
@@ -106,6 +106,20 @@ describe("openUrl", () => {
       )
     } finally {
       delete w.Capacitor
+      open.mockRestore()
+    }
+  })
+
+  test("tryOpenUrl reports false when a web popup blocker suppresses window.open", async () => {
+    mockIsTauri.mockReturnValue(false)
+    const open = jest
+      .spyOn(window, "open")
+      .mockReturnValueOnce(null)
+      .mockReturnValueOnce({} as Window)
+    try {
+      expect(await tryOpenUrl("https://example.com/logout")).toBe(false)
+      expect(await tryOpenUrl("https://example.com/logout")).toBe(true)
+    } finally {
       open.mockRestore()
     }
   })

@@ -45,6 +45,7 @@ import { readLogtoIdentity } from "./logto-claims"
 import { UserBindingRegistry } from "./user-binding"
 
 import type { UserBindingRow } from "@/lib/accounts/account-db"
+import type { ReadyDeployment } from "./deployment-discovery"
 import type { OrgRole } from "@/types/identity"
 
 /** Who this profile is signed in as, for display. Not an authorization input. */
@@ -179,4 +180,56 @@ export function cloudSessionNeedsReauth(
   state: CloudSessionState
 ): state is Extract<CloudSessionState, { status: "reauth-required" }> {
   return state.status === "reauth-required"
+}
+
+function normalizeIssuer(issuer: string): string {
+  return issuer.trim().replace(/\/+$/, "")
+}
+
+/**
+ * Whether `state` belongs to `deployment`'s announced OIDC authority.
+ *
+ * Changing a profile's self-hosted gateway leaves the previous deployment's
+ * (or official account's) session in the keyring until the person signs out or
+ * signs in to the new host. Treating that foreign session as valid for the new
+ * deployment would both bypass the sign-in gate and present the old bearer
+ * token to the new collaboration service.
+ */
+export function sessionMatchesDeployment(
+  state: CloudSessionState,
+  deployment: Pick<ReadyDeployment, "config">
+): boolean {
+  const expectedIssuer = deployment.config?.oidc?.issuer
+  if (!expectedIssuer) return state.status !== "signed-out"
+  const normalizedExpected = normalizeIssuer(expectedIssuer)
+  const expectedAudience = deployment.config?.oidc?.audience
+
+  switch (state.status) {
+    case "signed-out":
+      return false
+    case "active": {
+      if (!state.session?.issuer) return false
+      if (normalizeIssuer(state.session.issuer) !== normalizedExpected) return false
+      if (
+        expectedAudience &&
+        state.session.resource &&
+        state.session.resource !== expectedAudience
+      ) {
+        return false
+      }
+      return true
+    }
+    case "offline": {
+      const issuer = state.sessionMetadata?.issuer
+      return Boolean(issuer && normalizeIssuer(issuer) === normalizedExpected)
+    }
+    case "reauth-required":
+    case "error": {
+      if (!state.sessionMetadata) return true
+      return Boolean(
+        state.sessionMetadata.issuer &&
+        normalizeIssuer(state.sessionMetadata.issuer) === normalizedExpected
+      )
+    }
+  }
 }

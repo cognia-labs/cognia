@@ -351,9 +351,7 @@
       "binding-missing": "此配置文件已登录，但尚未绑定到某个人。",
       "binding-mismatch": "此登录身份与配置文件的所有者不一致。请使用原账号登录，或使用另一个配置文件。"
     },
-    "offline": {
-      "body": "上一次的会话已保留。你可以继续离线工作，连上以后会自动刷新。"
-    },
+    "retry": "重试",
     "unavailable": {
       "title": "现在无法登录",
       "body": "{baseUrl} 上的宿主没有返回登录配置：{message}",
@@ -412,7 +410,13 @@
       "stateMismatch": "该回调属于另一次登录尝试，请重新开始。"
     },
     "signedInAs": "已以 {name} 登录",
+    "signedInNoName": "已登录",
     "signOut": "退出登录",
+    "signOutWarning": {
+      "revocationFailed": "已在本地退出，但无法连接身份提供方，远端会话可能仍然有效。",
+      "revocationUnsupported": "已在本地退出。该身份提供方不支持令牌撤销，远端会话在过期前可能仍然有效。",
+      "endSessionBlocked": "已在本地退出，但浏览器拦截了身份提供方的退出页面。"
+    },
     "deployment": {
       "title": "云端部署",
       "description": "此账户登录的 Cognia Cloud。填写网关地址，先检查它提供什么，再使用它：之后由登录页面接管。",
@@ -434,6 +438,10 @@
       "signOutDone": "已退出云账号。",
       "signOutFailed": "退出失败：{message}",
       "revocationFailed": "身份提供方未确认退出，那边的会话可能仍然有效。",
+      "revocationUnsupported": "已在本地退出。该身份提供方不支持令牌撤销，远端会话在过期前可能仍然有效。",
+      "endSessionBlocked": "已在本地退出，但浏览器拦截了身份提供方的退出页面。",
+      "retrySession": "重试",
+      "signInOtherProfile": "请先切换到此配置文件再登录。",
       "error": {
         "invalid": "请输入 http(s) 地址；若主机为自签名，再填 64 位十六进制指纹。"
       },
@@ -448,7 +456,9 @@
         "signed-out": "未登录",
         "reauth-required": "需要重新登录",
         "offline": "已登录，身份提供方不可达",
-        "error": "身份提供方返回错误"
+        "error": "身份提供方返回错误",
+        "foreign": "当前登录的是另一处账号，请登录此部署",
+        "readFailed": "无法读取本地会话：{message}"
       },
       "result": {
         "status": {
@@ -480,12 +490,13 @@
     },
     "callback": {
       "working": "正在完成登录…",
-      "doneTitle": "已登录",
-      "doneBody": "可以回到 Cognia 了，此窗口会自动关闭。",
+      "doneTitle": "已将验证结果返回给 Cognia",
+      "doneBody": "正在 Cognia 主窗口中完成后续验证，此窗口会自动关闭。",
       "close": "关闭此窗口",
       "failedTitle": "登录未完成",
       "cancelled": "登录已取消。",
       "stateMismatch": "此响应不属于 Cognia 发起的这次登录，已忽略。",
+      "missingCode": "登录服务返回时未携带授权码。",
       "providerError": "登录服务返回了错误：{error}",
       "tryAgain": "请关闭此窗口，回到 Cognia 重新登录。",
       "orphanedTitle": "Cognia 已不在此等待",
@@ -522,6 +533,12 @@
     "signOutDone": "已退出登录。",
     "signOutFailed": "退出登录失败：{message}",
     "revocationFailed": "已在本地退出，但无法通知身份提供方。",
+    "revocationUnsupported": "已在本地退出。该身份提供方不支持令牌撤销，远端会话在过期前可能仍然有效。",
+    "endSessionBlocked": "已在本地退出，但浏览器拦截了身份提供方的退出页面。",
+    "loadFailed": "无法读取此配置文件的云端身份：{message}",
+    "retry": "重试",
+    "foreignSession": "此配置文件持有来自另一处身份服务的会话。请登录以使用当前配置的部署，或退出登录以清除旧会话。",
+    "deploymentSection": "云端部署",
     "noDeployment": "此配置文件没有配置云端部署。",
     "signOut": "退出登录",
     "roleName": {
@@ -537,14 +554,15 @@
     "deletion": {
       "title": "注销账号",
       "loading": "正在检查账号",
-      "description": "7 天后删除你的 Cognia 账号及其关联的登录方式。本设备上的内容全部保留。",
+      "description": "{days} 天后永久删除你的 Cognia 账号、已关联的登录方式以及云端同步空间（同步数据、同步密钥、已登记设备及操作日志）。本设备上的本地内容保留。",
       "delete": "注销账号",
-      "confirmBody": "你的账号及其关联的登录方式将在 7 天后删除。在此之前，你可以登录并撤销。",
-      "confirmLocal": "本设备上的对话和文件不会被删除。如果你也打算移除这台设备，请先备份。",
+      "confirmBody": "你的账号、已关联的登录方式以及云端同步空间（含加密同步数据、同步密钥、已登记设备及操作日志）将在 {days} 天后永久删除。在此之前，你可以登录并撤销。",
+      "confirmLocal": "本设备本地保存的对话和文件不会被删除，但云端同步空间中的全部内容会被清除。如果你也打算移除这台设备，请先备份。",
       "backupFirst": "先备份",
       "confirm": "重新登录以确认",
       "back": "返回",
       "awaitingSignIn": "请在浏览器中确认",
+      "submitting": "正在提交注销请求…",
       "stop": "停止",
       "pending": "你的账号将在 {date} 之后删除。",
       "pendingNoDate": "你的账号已安排注销。",
@@ -556,6 +574,9 @@
         "differentPerson": "你确认时使用的账号与此处登录的账号不同。未删除任何内容。",
         "staleSignIn": "该次登录不够新，请再次确认。",
         "unauthorized": "会话已过期，请先重新登录。",
+        "nothingToCancel": "没有可撤销的待处理注销请求，账号可能已被删除或已清除。",
+        "stillPending": "账号仍处于待注销状态，请刷新后重试。",
+        "notScheduled": "服务端状态已变化，本次注销请求未生效。请刷新并检查账号状态。",
         "generic": "无法连接账号服务：{message}"
       }
     },

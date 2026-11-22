@@ -84,4 +84,11 @@ describe("<SignOutButton />", () => {
     render(<SignOutButton />)
     expect(screen.getByTestId("me-sign-out")).toBeDisabled()
   })
+
+  it("catches an unexpected signOut rejection and surfaces errorToast", async () => {
+    signOutMock.mockRejectedValueOnce(new Error("storage unavailable"))
+    render(<SignOutButton />)
+    await openAndConfirm()
+    await waitFor(() => expect(toastMock.error).toHaveBeenCalled())
+  })
 })

@@ -49,7 +49,13 @@ export async function readEnrollmentStatus(context: AccountSyncContext): Promise
     return { kind: "enrolled", device, registry }
   } catch (error) {
     if (error instanceof AccountSyncVaultLockedError) return { kind: "locked" }
-    if (error instanceof RegistryIntegrityError) return { kind: "integrity", reason: error.reason }
+    if (error instanceof RegistryIntegrityError) {
+      const reason =
+        error.reason === "rollback" && /empty device list/i.test(error.message)
+          ? "empty-list"
+          : error.reason
+      return { kind: "integrity", reason }
+    }
     throw error
   }
 }

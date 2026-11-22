@@ -2,11 +2,12 @@
 
 jest.mock("@/lib/native/opener", () => ({ openUrl: jest.fn() }))
 const createPopupDrivers = jest.fn((..._args: unknown[]) => ({ flavour: "popup" }))
+const createCapacitorDrivers = jest.fn((..._args: unknown[]) => ({ flavour: "capacitor" }))
 jest.mock("./web-popup", () => ({
   createLogtoWebPopupDrivers: (...args: unknown[]) => createPopupDrivers(...args),
 }))
 jest.mock("./capacitor-drivers", () => ({
-  createLogtoCapacitorDrivers: () => ({ flavour: "capacitor" }),
+  createLogtoCapacitorDrivers: (...args: unknown[]) => createCapacitorDrivers(...args),
 }))
 
 import { openUrl } from "@/lib/native/opener"
@@ -24,20 +25,28 @@ const callback = (state: string) => ({
 })
 
 describe("platformSignInDrivers", () => {
-  it("sends Capacitor to the in-app browser with the issuer's native callback", () => {
-    const result = platformSignInDrivers({ issuerKind: "oidc", isCapacitor: () => true })
+  it("sends Capacitor to the in-app browser with the issuer's native callback and abort signal", () => {
+    const controller = new AbortController()
+    const result = platformSignInDrivers({
+      issuerKind: "oidc",
+      isCapacitor: () => true,
+      signal: controller.signal,
+    })
     expect(result).toEqual({
       drivers: { flavour: "capacitor" },
       redirectUri: OIDC_NATIVE_CALLBACK_URI,
       clientKind: "native",
     })
+    expect(createCapacitorDrivers).toHaveBeenCalledWith({ signal: controller.signal })
   })
 
-  it("uses a popup on this origin's callback in a browser", () => {
+  it("uses a popup on this origin's callback in a browser and forwards abort signal", () => {
+    const controller = new AbortController()
     const result = platformSignInDrivers({
       issuerKind: "logto",
       isCapacitor: () => false,
       profile: "web-standalone",
+      signal: controller.signal,
     })
     expect(result).toEqual({
       drivers: { flavour: "popup" },
@@ -45,7 +54,10 @@ describe("platformSignInDrivers", () => {
       clientKind: "web",
     })
     // Reserved now, while the sign-in click still lets the page open a window.
-    expect(createPopupDrivers).toHaveBeenCalledWith(undefined, { reserveWindow: true })
+    expect(createPopupDrivers).toHaveBeenCalledWith(undefined, {
+      reserveWindow: true,
+      signal: controller.signal,
+    })
   })
 
   it("opens the system browser on the desktop and resolves from the deep link", async () => {
@@ -78,7 +90,7 @@ describe("platformSignInDrivers", () => {
     expect(pasted).toHaveBeenCalledWith("st")
   })
 
-  it("stops waiting for the deep link when the caller gives up", async () => {
+  it("stops waiting for the deep link when the caller gives up, including before waitForCode starts", async () => {
     const controller = new AbortController()
     const { drivers } = platformSignInDrivers({
       issuerKind: "oidc",
@@ -89,5 +101,22 @@ describe("platformSignInDrivers", () => {
     const pending = drivers.waitForCode({ state: "st", redirectUri: "x" })
     controller.abort()
     await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+
+    const preAborted = new AbortController()
+    preAborted.abort()
+    const early = platformSignInDrivers({
+      issuerKind: "oidc",
+      isCapacitor: () => false,
+      profile: "desktop",
+      signal: preAborted.signal,
+    })
+    ;(openUrl as jest.Mock).mockClear()
+    early.drivers.openUrl("https://issuer/authorize")
+    expect(openUrl).not.toHaveBeenCalled()
+    await expect(
+      early.drivers.waitForCode({ state: "st", redirectUri: "x" })
+    ).rejects.toMatchObject({
+      name: "AbortError",
+    })
   })
 })

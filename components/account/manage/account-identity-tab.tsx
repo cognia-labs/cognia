@@ -27,7 +27,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { type CollabAccountMembership } from "@/lib/collab/client"
-import { type CloudSessionState } from "@/lib/identity/cloud-session"
+import { sessionMatchesDeployment, type CloudSessionState } from "@/lib/identity/cloud-session"
 import { completeSignOut } from "@/lib/identity/complete-sign-in"
 import { type DeploymentDiscovery } from "@/lib/identity/deployment-discovery"
 import { issuerIdentities } from "@/lib/identity/issuer-identities"
@@ -40,8 +40,13 @@ import {
   type OrgSwitchSnapshot,
 } from "@/lib/identity/org-switch"
 import { requestCloudSignIn } from "@/lib/identity/sign-in-request"
-import { signOutFromLogto, signOutLeftTokensLive } from "@/lib/logto/app-session"
-import { openUrl } from "@/lib/native/opener"
+import {
+  signOutFromLogto,
+  signOutLeftTokensLive,
+  signOutRevocationWarning,
+  type LogtoSignOutRevocationWarning,
+} from "@/lib/logto/app-session"
+import { tryOpenUrl } from "@/lib/native/opener"
 import { forgetOfflineChoice } from "@/components/account/cloud-sign-in-gate"
 import { CloudDeploymentCard } from "@/components/settings/companion/cloud-deployment-card"
 import { OfficialAccountDeletion } from "@/components/account/manage/official-account-deletion"
@@ -51,9 +56,12 @@ import { useAccountStore } from "@/stores/account/account-store"
 import type { LocalAccountRecord } from "@/lib/accounts/account-types"
 
 export interface AccountIdentityTabDeps extends OrgSwitchDeps {
-  signOut?: (
-    localAccountId: string
-  ) => Promise<{ endSessionUrl?: string | null; tokensLive: boolean }>
+  signOut?: (localAccountId: string) => Promise<{
+    endSessionUrl?: string | null
+    endSessionOpened?: boolean
+    tokensLive: boolean
+    revocationWarning?: LogtoSignOutRevocationWarning | null
+  }>
   reload?: () => void
   /** Ask the gate for its sign-in screen. Defaults to the request bus. */
   requestSignIn?: (localAccountId: string) => void
@@ -69,7 +77,11 @@ async function defaultSignOut(localAccountId: string) {
     localAccountId,
     afterClear: (context) => completeSignOut({ localAccountId, ...context }),
   })
-  return { endSessionUrl: report.endSessionUrl ?? null, tokensLive: signOutLeftTokensLive(report) }
+  return {
+    endSessionUrl: report.endSessionUrl ?? null,
+    tokensLive: signOutLeftTokensLive(report),
+    revocationWarning: signOutRevocationWarning(report),
+  }
 }
 
 export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabProps) {
@@ -83,7 +95,9 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
   const [discovery, setDiscovery] = useState<DeploymentDiscovery | null>(null)
   const [memberships, setMemberships] = useState<CollabAccountMembership[] | null>(null)
   const [membershipsError, setMembershipsError] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const isServedProfile = !servedAccountId || account.id === servedAccountId
   const depsRef = useRef(deps)
   const snapshotRef = useRef<OrgSwitchSnapshot | null>(null)
   useEffect(() => {
@@ -91,12 +105,17 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
   })
 
   const load = useCallback(async () => {
-    const snapshot = await loadOrgSwitchSnapshot(account.id, depsRef.current)
-    snapshotRef.current = snapshot
-    setState(snapshot.state)
-    setDiscovery(snapshot.discovery)
-    setMemberships(snapshot.memberships)
-    setMembershipsError(snapshot.membershipsError)
+    setLoadError(null)
+    try {
+      const snapshot = await loadOrgSwitchSnapshot(account.id, depsRef.current)
+      snapshotRef.current = snapshot
+      setState(snapshot.state)
+      setDiscovery(snapshot.discovery)
+      setMemberships(snapshot.memberships)
+      setMembershipsError(snapshot.membershipsError)
+    } catch (cause) {
+      setLoadError(cause instanceof Error ? cause.message : String(cause))
+    }
   }, [account.id])
 
   useEffect(() => {
@@ -104,11 +123,18 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
   }, [load])
 
   const switchTo = async (membership: CollabAccountMembership) => {
+    if (!isServedProfile) {
+      toast.error(t("signInOtherProfile"))
+      return
+    }
     const snapshot = snapshotRef.current
     if (snapshot?.state.status !== "active" || snapshot.discovery.status !== "ready") return
     setBusy(true)
     try {
-      await switchOrganization(snapshot, membership, account.id, depsRef.current)
+      await switchOrganization(snapshot, membership, account.id, {
+        ...depsRef.current,
+        servedAccountId: () => servedAccountId ?? account.id,
+      })
       toast.success(t("switched", { org: membership.orgName }))
       await load()
     } catch (cause) {
@@ -121,12 +147,21 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
   }
 
   const signOut = async () => {
+    if (!isServedProfile) {
+      toast.error(t("signInOtherProfile"))
+      return
+    }
     setBusy(true)
     try {
       const report = await (depsRef.current.signOut ?? defaultSignOut)(account.id)
       toast.success(t("signOutDone"))
-      if (report.tokensLive) toast.warning(t("revocationFailed"))
-      if (report.endSessionUrl) void openUrl(report.endSessionUrl)
+      const warning = report.revocationWarning ?? (report.tokensLive ? "failed" : null)
+      if (warning === "failed") toast.warning(t("revocationFailed"))
+      else if (warning === "unsupported") toast.warning(t("revocationUnsupported"))
+      if (report.endSessionUrl) {
+        const opened = report.endSessionOpened ?? (await tryOpenUrl(report.endSessionUrl))
+        if (!opened) toast.warning(t("endSessionBlocked"))
+      }
       await load()
     } catch (cause) {
       toast.error(
@@ -140,6 +175,10 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
   }
 
   const signIn = () => {
+    if (!isServedProfile) {
+      toast.error(t("signInOtherProfile"))
+      return
+    }
     if (discovery?.status === "official") {
       ;(depsRef.current.requestSignIn ?? requestCloudSignIn)(account.id)
       return
@@ -147,6 +186,24 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
     // The gate decides at boot. Forget the tab's offline choice and let it.
     forgetOfflineChoice(account.id)
     ;(depsRef.current.reload ?? (() => window.location.reload()))()
+  }
+
+  if (loadError) {
+    return (
+      <div className="flex flex-col gap-2" role="alert" data-testid="account-identity-load-error">
+        <p className="text-xs text-destructive">{t("loadFailed", { message: loadError })}</p>
+        <Button
+          type="button"
+          size="sm"
+          variant="outline"
+          className="self-start"
+          onClick={() => void load()}
+          data-testid="account-identity-retry"
+        >
+          {t("retry")}
+        </Button>
+      </div>
+    )
   }
 
   if (!state || !discovery) {
@@ -160,12 +217,26 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
 
   const currentOrgId = state.status === "active" ? state.identity.orgId : undefined
   const official = discovery.status === "official" ? discovery.deployment : null
+  const readyMatchesSession =
+    discovery.status === "ready" ? sessionMatchesDeployment(state, discovery) : true
   // A session another issuer minted (a deployment since forgotten) is not the
   // official account: no linked sign-ins, and no deletion sent its token.
   const officialSession =
     official && state.status === "active" && isOfficialIssuer(state.session.issuer, official)
       ? state.session
       : null
+  const foreignActiveSession =
+    state.status === "active" &&
+    ((official !== null && officialSession === null) ||
+      (discovery.status === "ready" && !readyMatchesSession))
+  const canSignOut =
+    state.status === "active" || state.status === "offline" || state.status === "error"
+  const canSignIn =
+    (discovery.status === "ready" || official !== null) &&
+    (state.status === "signed-out" ||
+      state.status === "reauth-required" ||
+      state.status === "error" ||
+      foreignActiveSession)
   const linked = officialSession
     ? issuerIdentities(officialSession).map((identity) => {
         const provider = externalProviderFor(identity.provider) ?? identity.provider
@@ -241,7 +312,19 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
         </p>
       )}
 
-      {state.status === "active" && !official ? (
+      {!isServedProfile ? (
+        <p className="text-xs text-muted-foreground" data-testid="account-identity-inactive-notice">
+          {t("signInOtherProfile")}
+        </p>
+      ) : null}
+
+      {foreignActiveSession ? (
+        <p className="text-xs text-muted-foreground" data-testid="account-identity-foreign-session">
+          {t("foreignSession")}
+        </p>
+      ) : null}
+
+      {state.status === "active" && !official && readyMatchesSession ? (
         <section className="flex flex-col gap-2">
           <h4 className="text-xs font-medium text-muted-foreground">{t("memberships")}</h4>
           {membershipsError ? (
@@ -274,7 +357,8 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
                         type="button"
                         size="sm"
                         variant="outline"
-                        disabled={busy}
+                        disabled={busy || !isServedProfile}
+                        title={!isServedProfile ? t("signInOtherProfile") : undefined}
                         onClick={() => void switchTo(membership)}
                         data-testid={`account-identity-switch-${membership.orgId}`}
                       >
@@ -289,53 +373,62 @@ export function AccountIdentityTab({ account, deps = {} }: AccountIdentityTabPro
         </section>
       ) : null}
 
-      <div className="flex gap-2">
-        {state.status === "active" ? (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            disabled={busy}
-            onClick={() => void signOut()}
-            data-testid="account-identity-sign-out"
-          >
-            <LogOutIcon data-icon="inline-start" />
-            {t("signOut")}
-          </Button>
-        ) : discovery.status === "ready" || official ? (
+      <div className="flex flex-wrap gap-2">
+        {canSignIn ? (
           <Button
             type="button"
             size="sm"
             onClick={signIn}
-            // The official screen is the gate's, and the gate serves one profile.
-            disabled={!!official && account.id !== servedAccountId}
-            title={official && account.id !== servedAccountId ? t("signInOtherProfile") : undefined}
+            disabled={busy || !isServedProfile}
+            title={!isServedProfile ? t("signInOtherProfile") : undefined}
             data-testid="account-identity-sign-in"
           >
             <LogInIcon data-icon="inline-start" />
             {t("signIn")}
           </Button>
         ) : null}
+        {canSignOut ? (
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={busy || !isServedProfile}
+            title={!isServedProfile ? t("signInOtherProfile") : undefined}
+            onClick={() => void signOut()}
+            data-testid="account-identity-sign-out"
+          >
+            <LogOutIcon data-icon="inline-start" />
+            {t("signOut")}
+          </Button>
+        ) : null}
       </div>
 
-      {official && officialSession && state.status === "active" ? (
+      {isServedProfile && official && officialSession && state.status === "active" ? (
         <AccountSyncSection
           account={state.identity.email ?? state.identity.displayName ?? state.identity.userId}
         />
       ) : null}
 
-      {official && officialSession ? (
-        <OfficialAccountDeletion deployment={official} session={officialSession} />
+      {isServedProfile && official && officialSession ? (
+        <OfficialAccountDeletion
+          deployment={official}
+          session={officialSession}
+          localAccountId={account.id}
+        />
       ) : null}
 
-      {discovery.status !== "ready" ? (
-        // No deployment to sign in to: the only useful control is naming one.
-        // A desktop or a phone cannot discover a cloud deployment any other
-        // way, and the card's own explanation replaces the bare notice. With
-        // the official account, the card is how a self-hosted one replaces it.
+      {isServedProfile ? (
+        // Naming, changing, or forgetting a self-hosted gateway lives right
+        // here for all discovery states so mobile (/me/cloud-account), web, and
+        // desktop users can switch between Official and Self-Hosted without
+        // hunting another settings page.
         <section className="flex flex-col gap-2" data-testid="account-identity-deployment">
           <h4 className="text-xs font-medium text-muted-foreground">
-            {official ? t("selfHosted") : t("noDeployment")}
+            {official
+              ? t("selfHosted")
+              : discovery.status === "ready"
+                ? t("deploymentSection")
+                : t("noDeployment")}
           </h4>
           <CloudDeploymentCard frame="plain" deps={{ localAccountId: account.id }} />
         </section>

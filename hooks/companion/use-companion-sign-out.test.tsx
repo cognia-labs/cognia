@@ -220,4 +220,19 @@ describe("useCompanionSignOut", () => {
     })
     expect(result.current.pending).toBe(false)
   })
+
+  it("blocks and skips redirect when clearing the pairing fails", async () => {
+    clearMock.mockRejectedValueOnce(new Error("secure storage locked"))
+    const { result } = renderHook(() => useCompanionSignOut({ prompt: PROMPT }))
+    let outcome: Awaited<ReturnType<typeof result.current.signOut>> | null = null
+    await act(async () => {
+      outcome = await result.current.signOut()
+    })
+    expect(outcome).toEqual({
+      kind: "blocked",
+      reason: "error",
+      message: "secure storage locked",
+    })
+    expect(routerMock.replace).not.toHaveBeenCalled()
+  })
 })

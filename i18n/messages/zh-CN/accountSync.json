@@ -7,7 +7,8 @@
     "locked": "请先解锁此配置文件再使用同步。",
     "signedOut": "登录你的 Cognia 账号后才能使用同步。",
     "integrityTitle": "无法验证设备列表",
-    "integrity": "同步服务向此设备展示的设备列表比它之前验证过的更旧或不同。没有删除任何内容。请稍后重试，如持续出现请联系支持。",
+    "integrity": "同步服务向此设备展示的设备列表比它之前验证过的更旧或不同。本设备上的本地数据未被删除。请稍后重试，如持续出现请联系支持。",
+    "integrityEmpty": "同步服务为此设备之前验证过的空间返回了空的设备列表。你的云端同步空间可能已被清除（例如账号已完成注销）。本设备上的本地数据未被删除。",
     "pollError": "无法连接同步服务：{message}",
     "retry": "重试",
     "working": "处理中…"
@@ -166,6 +167,7 @@
     "pending": "{count, plural, other {# 项变更}}等待上传",
     "lastSynced": "上次同步于 {time}",
     "error": "同步遇到问题：{message}",
+    "spaceCleared": "服务端同步空间为空或已被清除。本设备上的本地数据已保留。",
     "syncNow": "立即同步",
     "parkedSchema": "来自你其他设备的 {count, plural, other {# 项变更}}需要更新版本的 Cognia。更新 Cognia 后即可看到。",
     "parkedKey": "{count, plural, other {# 项变更}}正在等待此设备尚未持有的密钥，将在下次设备列表更新后应用。",

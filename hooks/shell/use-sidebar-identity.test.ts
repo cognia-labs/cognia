@@ -6,7 +6,14 @@ import { renderHook, waitFor } from "@testing-library/react"
 
 const readCloudSessionState = jest.fn()
 jest.mock("@/lib/identity/cloud-session", () => ({
+  ...jest.requireActual("@/lib/identity/cloud-session"),
   readCloudSessionState: (...args: unknown[]) => readCloudSessionState(...args),
+}))
+
+const discoverDeployment = jest.fn()
+jest.mock("@/lib/identity/deployment-discovery", () => ({
+  ...jest.requireActual("@/lib/identity/deployment-discovery"),
+  discoverDeployment: (...args: unknown[]) => discoverDeployment(...args),
 }))
 
 const refresh = jest.fn(async () => {})
@@ -33,10 +40,13 @@ jest.mock("@cognia/logging", () => {
   return { loggers: new Proxy({}, { get: () => stub }), createLogger: () => stub }
 })
 
+import { saveDeploymentSource } from "@/lib/identity/deployment-source"
 import { useSidebarIdentity } from "./use-sidebar-identity"
 
 beforeEach(() => {
+  localStorage.clear()
   readCloudSessionState.mockReset()
+  discoverDeployment.mockReset()
   refresh.mockClear()
   snapshots = []
   readCloudSessionState.mockResolvedValue({ status: "signed-out" })
@@ -157,5 +167,26 @@ describe("useSidebarIdentity", () => {
     rerender({ active: false })
     rerender({ active: true })
     await waitFor(() => expect(readCloudSessionState).toHaveBeenCalledTimes(2))
+  })
+
+  it("does not report an old organization session as active after switching to another deployment", async () => {
+    saveDeploymentSource("local_acct_a", { baseUrl: "https://b.example" })
+    discoverDeployment.mockResolvedValue({
+      status: "ready",
+      baseUrl: "https://b.example",
+      config: { oidc: { issuer: "https://auth-b.example/oidc", webClientId: "w", audience: "a" } },
+      social: [],
+      collaborationServiceUrl: "https://collab-b.example",
+      registrationPolicy: null,
+      webOrigin: null,
+    })
+    readCloudSessionState.mockResolvedValue({
+      status: "active",
+      session: { issuer: "https://auth-a.example/oidc", resource: "a" },
+      identity: { userId: "usr_1", logtoSubject: "s", displayName: "Ada", orgId: "org_a" },
+    })
+    const { result } = renderHook(() => useSidebarIdentity(true))
+    await waitFor(() => expect(result.current.needsReauth).toBe(true))
+    expect(result.current.standing).toBe("local")
   })
 })

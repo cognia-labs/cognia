@@ -328,12 +328,27 @@ describe("AccountOverviewSection", () => {
     expect(pushMock).toHaveBeenCalledWith("/settings?section=companion")
   })
 
-  it("hides the local accounts and security blocks off Tauri", async () => {
+  it("shows local accounts on Web while keeping desktop security Tauri-only, and hides both on Capacitor", async () => {
     mockIsTauri = false
-    render(<AccountOverviewSection />)
-    await Promise.resolve()
-    expect(screen.queryByTestId("account-overview-manage-local")).not.toBeInTheDocument()
+    mockAccounts = [{ id: "acct_web", displayName: "Web" }]
+    mockActiveAccountId = "acct_web"
+    const web = render(<AccountOverviewSection />)
+    expect(await screen.findByTestId("account-overview-manage-local")).toBeInTheDocument()
     expect(screen.queryByTestId("account-overview-manage-security")).not.toBeInTheDocument()
+    web.unmount()
+
+    const w = window as unknown as Record<string, unknown>
+    w.Capacitor = { isNativePlatform: () => true }
+    try {
+      render(<AccountOverviewSection />)
+      await act(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0))
+      })
+      expect(screen.queryByTestId("account-overview-manage-local")).not.toBeInTheDocument()
+      expect(screen.queryByTestId("account-overview-manage-security")).not.toBeInTheDocument()
+    } finally {
+      delete w.Capacitor
+    }
   })
 
   it("shows the local accounts block on Tauri and opens the manage dialog", async () => {

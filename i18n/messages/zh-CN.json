@@ -1457,9 +1457,10 @@
       "callback": {
         "cancelled": "登录已取消。",
         "close": "关闭此窗口",
-        "doneBody": "可以回到 Cognia 了，此窗口会自动关闭。",
-        "doneTitle": "已登录",
+        "doneBody": "正在 Cognia 主窗口中完成后续验证，此窗口会自动关闭。",
+        "doneTitle": "已将验证结果返回给 Cognia",
         "failedTitle": "登录未完成",
+        "missingCode": "登录服务返回时未携带授权码。",
         "orphanedBody": "此窗口与打开它的 Cognia 页面失去了联系。请关闭它，回到 Cognia 重新登录。",
         "orphanedTitle": "Cognia 已不在此等待",
         "providerError": "登录服务返回了错误：{error}",
@@ -1507,6 +1508,7 @@
           "url": "网关"
         },
         "description": "此账户登录的 Cognia Cloud。填写网关地址，先检查它提供什么，再使用它：之后由登录页面接管。",
+        "endSessionBlocked": "已在本地退出，但浏览器拦截了身份提供方的退出页面。",
         "error": {
           "invalid": "请输入 http(s) 地址；若主机为自签名，再填 64 位十六进制指纹。"
         },
@@ -1538,16 +1540,21 @@
           },
           "unavailableMessage": "{message}"
         },
+        "retrySession": "重试",
         "revocationFailed": "身份提供方未确认退出，那边的会话可能仍然有效。",
+        "revocationUnsupported": "已在本地退出。该身份提供方不支持令牌撤销，远端会话在过期前可能仍然有效。",
         "session": {
           "active": "已登录",
           "error": "身份提供方返回错误",
+          "foreign": "当前登录的是另一处账号，请登录此部署",
           "loading": "检查中",
           "offline": "已登录，身份提供方不可达",
+          "readFailed": "无法读取本地会话：{message}",
           "reauth-required": "需要重新登录",
           "signed-out": "未登录"
         },
         "signIn": "登录",
+        "signInOtherProfile": "请先切换到此配置文件再登录。",
         "signOut": "退出登录",
         "signOutDone": "已退出云账号。",
         "signOutFailed": "退出失败：{message}",
@@ -1578,9 +1585,6 @@
         "privacy": "Cognia 只保存你是谁（姓名、邮箱和已关联的登录方式），不会获得你所用登录账号的访问权限。",
         "title": "登录你的 Cognia 账号"
       },
-      "offline": {
-        "body": "上一次的会话已保留。你可以继续离线工作，连上以后会自动刷新。"
-      },
       "provider": {
         "apple": "Apple",
         "feishu": "飞书",
@@ -1597,9 +1601,16 @@
         "expired": "你的会话已过期。",
         "revoked": "你的会话已在别处退出。"
       },
+      "retry": "重试",
       "settling": "正在查找你的组织",
       "signOut": "退出登录",
+      "signOutWarning": {
+        "endSessionBlocked": "已在本地退出，但浏览器拦截了身份提供方的退出页面。",
+        "revocationFailed": "已在本地退出，但无法连接身份提供方，远端会话可能仍然有效。",
+        "revocationUnsupported": "已在本地退出。该身份提供方不支持令牌撤销，远端会话在过期前可能仍然有效。"
+      },
       "signedInAs": "已以 {name} 登录",
+      "signedInNoName": "已登录",
       "signingIn": "正在登录",
       "submitCode": "继续",
       "title": "登录 {deployment}",
@@ -1717,14 +1728,17 @@
         "cancel": "撤销注销",
         "cancelled": "已撤销注销。",
         "confirm": "重新登录以确认",
-        "confirmBody": "你的账号及其关联的登录方式将在 7 天后删除。在此之前，你可以登录并撤销。",
-        "confirmLocal": "本设备上的对话和文件不会被删除。如果你也打算移除这台设备，请先备份。",
+        "confirmBody": "你的账号、已关联的登录方式以及云端同步空间（含加密同步数据、同步密钥、已登记设备及操作日志）将在 {days} 天后永久删除。在此之前，你可以登录并撤销。",
+        "confirmLocal": "本设备本地保存的对话和文件不会被删除，但云端同步空间中的全部内容会被清除。如果你也打算移除这台设备，请先备份。",
         "delete": "注销账号",
-        "description": "7 天后删除你的 Cognia 账号及其关联的登录方式。本设备上的内容全部保留。",
+        "description": "{days} 天后永久删除你的 Cognia 账号、已关联的登录方式以及云端同步空间（同步数据、同步密钥、已登记设备及操作日志）。本设备上的本地内容保留。",
         "error": {
           "differentPerson": "你确认时使用的账号与此处登录的账号不同。未删除任何内容。",
           "generic": "无法连接账号服务：{message}",
+          "notScheduled": "服务端状态已变化，本次注销请求未生效。请刷新并检查账号状态。",
+          "nothingToCancel": "没有可撤销的待处理注销请求，账号可能已被删除或已清除。",
           "staleSignIn": "该次登录不够新，请再次确认。",
+          "stillPending": "账号仍处于待注销状态，请刷新后重试。",
           "unauthorized": "会话已过期，请先重新登录。"
         },
         "loading": "正在检查账号",
@@ -1733,11 +1747,16 @@
         "requested": "已安排注销账号。",
         "retry": "重试",
         "stop": "停止",
+        "submitting": "正在提交注销请求…",
         "title": "注销账号"
       },
+      "deploymentSection": "云端部署",
       "description": "此配置文件在共享部署上是谁，以及它在哪个组织中工作。",
+      "endSessionBlocked": "已在本地退出，但浏览器拦截了身份提供方的退出页面。",
+      "foreignSession": "此配置文件持有来自另一处身份服务的会话。请登录以使用当前配置的部署，或退出登录以清除旧会话。",
       "linked": "登录方式",
       "linkedNone": "未报告已关联的登录方式。",
+      "loadFailed": "无法读取此配置文件的云端身份：{message}",
       "loading": "正在读取云端会话",
       "memberships": "组织",
       "membershipsEmpty": "还没有加入任何组织。",
@@ -1748,7 +1767,9 @@
       "officialTitle": "Cognia 账号",
       "organization": "组织",
       "person": "人",
+      "retry": "重试",
       "revocationFailed": "已在本地退出，但无法通知身份提供方。",
+      "revocationUnsupported": "已在本地退出。该身份提供方不支持令牌撤销，远端会话在过期前可能仍然有效。",
       "role": "角色",
       "roleName": {
         "admin": "管理员",
@@ -2064,6 +2085,7 @@
       "pending": "{count, plural, other {# 项变更}}等待上传",
       "seeding": "正在为同步准备你的数据…",
       "seedingProgress": "正在为同步准备你的数据…{done} / {total}",
+      "spaceCleared": "服务端同步空间为空或已被清除。本设备上的本地数据已保留。",
       "starting": "正在启动同步…",
       "syncNow": "立即同步",
       "title": "你的数据",
@@ -2201,7 +2223,8 @@
       "title": "此设备已从同步中移除"
     },
     "section": {
-      "integrity": "同步服务向此设备展示的设备列表比它之前验证过的更旧或不同。没有删除任何内容。请稍后重试，如持续出现请联系支持。",
+      "integrity": "同步服务向此设备展示的设备列表比它之前验证过的更旧或不同。本设备上的本地数据未被删除。请稍后重试，如持续出现请联系支持。",
+      "integrityEmpty": "同步服务为此设备之前验证过的空间返回了空的设备列表。你的云端同步空间可能已被清除（例如账号已完成注销）。本设备上的本地数据未被删除。",
       "integrityTitle": "无法验证设备列表",
       "loading": "正在检查同步…",
       "locked": "请先解锁此配置文件再使用同步。",
@@ -30348,20 +30371,20 @@
       "sectionFavorites": "常用",
       "settingsLink": "应用设置",
       "signOut": {
-        "biometricDescription": "清除配对前重新验证身份。",
-        "biometricHelp": "退出本机登录前要求面部或指纹验证。",
+        "biometricDescription": "断开桌面宿主配对前重新验证身份。",
+        "biometricHelp": "断开本机与桌面宿主的配对前要求面部或指纹验证。",
         "biometricLabel": "退出前要求生物识别",
-        "biometricReason": "请验证以退出 cognia",
+        "biometricReason": "请验证以断开本设备的桌面配对",
         "biometricTitle": "退出登录",
         "cancel": "取消",
         "confirmAction": "退出",
-        "confirmDescription": "将清除本设备上的 Anthropic 凭据和与桌面的配对 JWT。可随时重新配对。",
-        "confirmTitle": "确认退出 cognia？",
+        "confirmDescription": "将断开并清除本设备与当前桌面宿主的配对凭据。本机数据与 Cognia 云账号登录状态会保留，可随时重新配对。",
+        "confirmTitle": "断开桌面配对？",
         "cta": "退出登录",
         "errorToast": "退出失败：{reason}",
         "lockoutToast": "尝试次数过多，请稍后再试。",
         "pending": "正在退出…",
-        "successToast": "已退出，配对已清除。"
+        "successToast": "已断开，桌面配对已清除。"
       },
       "skillsRow": "技能",
       "slashCommandsRow": "斜杠命令",

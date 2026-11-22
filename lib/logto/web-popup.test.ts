@@ -1,16 +1,18 @@
 /** @jest-environment jsdom */
 
+import { LogtoSignInCancelled } from "./capacitor-drivers"
 import {
   createLogtoWebPopupDrivers,
-  LOGTO_CALLBACK_STATE_KEY,
+  hasPendingLogtoCallbackState,
   readValidatedLogtoCallback,
+  rememberLogtoCallbackState,
 } from "./web-popup"
 
 describe("Logto web popup", () => {
   afterEach(() => window.localStorage.clear())
 
   it("consumes a matching state exactly once", () => {
-    window.localStorage.setItem(LOGTO_CALLBACK_STATE_KEY, "expected")
+    rememberLogtoCallbackState("expected")
     expect(readValidatedLogtoCallback("?code=code-a&state=expected")).toEqual({
       __cogniaLogto: true,
       code: "code-a",
@@ -20,11 +22,23 @@ describe("Logto web popup", () => {
     expect(readValidatedLogtoCallback("?code=replay&state=expected").error).toBe("state_mismatch")
   })
 
-  it("rejects mismatched state without forwarding the code", () => {
-    window.localStorage.setItem(LOGTO_CALLBACK_STATE_KEY, "expected")
+  it("rejects mismatched state without consuming or clobbering active pending states", () => {
+    rememberLogtoCallbackState("expected")
+    rememberLogtoCallbackState("parallel-tab")
     expect(readValidatedLogtoCallback("?code=stolen&state=other")).toMatchObject({
       code: null,
       error: "state_mismatch",
+    })
+    // Neither active flow was wiped by the stale/foreign callback.
+    expect(readValidatedLogtoCallback("?code=code-a&state=expected")).toMatchObject({
+      code: "code-a",
+      state: "expected",
+      error: null,
+    })
+    expect(readValidatedLogtoCallback("?code=code-b&state=parallel-tab")).toMatchObject({
+      code: "code-b",
+      state: "parallel-tab",
+      error: null,
     })
   })
 
@@ -32,7 +46,7 @@ describe("Logto web popup", () => {
     const AUTHORIZE = "https://id.test/authorize?state=s1"
     let open: jest.SpyInstance
 
-    function fakeWindow(closed = false): Window & { replaced: string[] } {
+    function fakeWindow(closed = false): Window & { replaced: string[]; closed: boolean } {
       const replaced: string[] = []
       const win = {
         closed,
@@ -42,7 +56,7 @@ describe("Logto web popup", () => {
           win.closed = true
         }),
       }
-      return win as unknown as Window & { replaced: string[] }
+      return win as unknown as Window & { replaced: string[]; closed: boolean }
     }
 
     beforeEach(() => {
@@ -57,21 +71,43 @@ describe("Logto web popup", () => {
       expect(open).not.toHaveBeenCalled()
       drivers.openUrl(AUTHORIZE)
       expect(open).toHaveBeenCalledWith(AUTHORIZE, "cognia-logto", "popup,width=520,height=720")
-      expect(window.localStorage.getItem(LOGTO_CALLBACK_STATE_KEY)).toBe("s1")
+      expect(hasPendingLogtoCallbackState("s1")).toBe(true)
     })
 
-    it("is reserved blank at creation and then pointed at the authorize URL", () => {
+    it("is reserved blank at creation, pointed at authorize URL, and closed on abandon or signal abort", async () => {
       const popup = fakeWindow()
       open.mockReturnValue(popup)
-      const drivers = createLogtoWebPopupDrivers(undefined, { reserveWindow: true })
+      const controller = new AbortController()
+      const drivers = createLogtoWebPopupDrivers(undefined, {
+        reserveWindow: true,
+        signal: controller.signal,
+        closePollMs: 0,
+      })
       expect(open).toHaveBeenCalledTimes(1)
       expect(open).toHaveBeenCalledWith("about:blank", "cognia-logto", "popup,width=520,height=720")
       drivers.openUrl(AUTHORIZE)
       expect(open).toHaveBeenCalledTimes(1)
       expect(popup.replaced).toEqual([AUTHORIZE])
-      // The sign-in window is now the person's; abandoning no longer closes it.
-      drivers.abandon?.()
-      expect(popup.close).not.toHaveBeenCalled()
+
+      const pending = drivers.waitForCode({ redirectUri: "/logto/callback", state: "s1" })
+      controller.abort()
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" })
+      expect(popup.close).toHaveBeenCalledTimes(1)
+      expect(hasPendingLogtoCallbackState("s1")).toBe(false)
+    })
+
+    it("settles with LogtoSignInCancelled when the user closes the popup window", async () => {
+      const popup = fakeWindow()
+      open.mockReturnValue(popup)
+      const drivers = createLogtoWebPopupDrivers(undefined, {
+        closePollMs: 10,
+        closeGraceMs: 10,
+      })
+      drivers.openUrl(AUTHORIZE)
+      const pending = drivers.waitForCode({ redirectUri: "/logto/callback", state: "s1" })
+      popup.closed = true
+      await expect(pending).rejects.toBeInstanceOf(LogtoSignInCancelled)
+      expect(hasPendingLogtoCallbackState("s1")).toBe(false)
     })
 
     it("opens afresh when the reservation was refused or closed", () => {
@@ -95,7 +131,7 @@ describe("Logto web popup", () => {
       open.mockReturnValue(null)
       const drivers = createLogtoWebPopupDrivers(undefined, { reserveWindow: true })
       expect(() => drivers.openUrl(AUTHORIZE)).toThrow("Logto popup was blocked")
-      expect(window.localStorage.getItem(LOGTO_CALLBACK_STATE_KEY)).toBeNull()
+      expect(hasPendingLogtoCallbackState("s1")).toBe(false)
     })
 
     it("closes the reserved window when the sign-in is abandoned first", () => {
@@ -108,9 +144,16 @@ describe("Logto web popup", () => {
     })
   })
 
-  it("pins messages to the current origin and expected state", async () => {
-    const drivers = createLogtoWebPopupDrivers()
+  it("ignores messages for another state and resolves when the expected state arrives", async () => {
+    const drivers = createLogtoWebPopupDrivers(undefined, { closePollMs: 0 })
     const pending = drivers.waitForCode({ redirectUri: "/logto/callback", state: "expected" })
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        origin: window.location.origin,
+        source: window,
+        data: { __cogniaLogto: true, code: null, state: "stale-attempt", error: "state_mismatch" },
+      })
+    )
     window.dispatchEvent(
       new MessageEvent("message", {
         origin: window.location.origin,

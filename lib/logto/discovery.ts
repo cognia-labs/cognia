@@ -28,11 +28,16 @@ export interface LogtoEndpoints {
  */
 export async function discoverLogtoEndpoints(
   issuer: string,
-  fetchImpl: typeof fetch = fetch
+  fetchImpl: typeof fetch = fetch,
+  signal?: AbortSignal
 ): Promise<LogtoEndpoints> {
+  signal?.throwIfAborted()
   const base = issuer.replace(/\/+$/, "")
   const url = `${base}/.well-known/openid-configuration`
-  const res = await fetchImpl(url, { headers: { Accept: "application/json" } })
+  const res = await fetchImpl(url, {
+    headers: { Accept: "application/json" },
+    ...(signal ? { signal } : {}),
+  })
   if (!res.ok) {
     throw new Error(`Logto OIDC discovery failed: ${res.status} ${res.statusText}`)
   }
