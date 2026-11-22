@@ -60,6 +60,12 @@ export interface VisualOutputChannels {
    * fenced `chart` block draws inline. Absent means false.
    */
   inlineCharts?: boolean
+  /**
+   * Whether fenced `mermaid` blocks render as diagrams on this channel.
+   * Defaults to `true` when omitted; `false` when the user turned Mermaid
+   * rendering off in `messageDisplay.markdown.mermaid`.
+   */
+  mermaid?: boolean
 }
 
 const VISUAL_OUTPUT_SHARED = {
@@ -83,23 +89,53 @@ export const VISUAL_OUTPUT_FRAME_PROMPT = definePrompt({
   id: "chat.visual-output.frame",
   risk: "ordinary",
   maxChars: 8_000,
-  variables: [{ name: "channelRules", required: true, maxChars: 50_000 }],
+  variables: [
+    { name: "structuralRule", required: false, maxChars: 4_000 },
+    { name: "channelRules", required: true, maxChars: 50_000 },
+  ],
   outputContract:
-    "Appended to the system prompt on every send. {{channelRules}} is the host-chosen set of routes this channel can render, one rule per line.",
+    "Appended to the system prompt on every send. {{structuralRule}} is the structural-diagram rule for this channel and {{channelRules}} is the host-chosen set of quantitative/document/interactive routes, one rule per line.",
   defaultBody: [
     "## Choosing how to show something",
     "",
     "Route by what the thing IS, then by what this channel can render.",
     "",
+    "{{structuralRule}}",
+    "{{channelRules}}",
+    "- **Precise values** the reader will read off or copy: a markdown table. Three",
+    "  numbers are a sentence, not a chart.",
+  ].join("\n"),
+})
+
+/** Mermaid rendering is enabled on this channel. */
+export const VISUAL_OUTPUT_MERMAID_PROMPT = definePrompt({
+  ...VISUAL_OUTPUT_SHARED,
+  id: "chat.visual-output.mermaid",
+  risk: "ordinary",
+  outputContract: "Included as {{structuralRule}} when Mermaid fences render on this channel.",
+  defaultBody: [
     "- **Structural** — architecture, a flow, a sequence, a state machine, a data",
     "  model, a timeline: a fenced `mermaid` block inline in the reply. It renders",
     "  in place and needs no dock. Quote any label containing punctuation",
     '  (`A["Auth (v2)"]`), and set no colours and no `%%{init}%%` — Cognia',
     "  re-themes the diagram on a light/dark flip. For a presentation-quality",
     "  figure instead, load the `diagram-design` skill.",
-    "{{channelRules}}",
-    "- **Precise values** the reader will read off or copy: a markdown table. Three",
-    "  numbers are a sentence, not a chart.",
+  ].join("\n"),
+})
+
+/** Mermaid rendering is disabled by display settings on this channel. */
+export const VISUAL_OUTPUT_NO_MERMAID_PROMPT = definePrompt({
+  ...VISUAL_OUTPUT_SHARED,
+  id: "chat.visual-output.no-mermaid",
+  risk: "ordinary",
+  outputContract:
+    "Included as {{structuralRule}} when Mermaid diagram rendering is turned off in display settings.",
+  defaultBody: [
+    "- **Structural** — architecture, a flow, a sequence, a state machine, a data",
+    "  model, a timeline: Mermaid rendering is disabled in display settings, so a",
+    "  `mermaid` fence stays raw code instead of rendering in place. Load the",
+    "  `diagram-design` skill when artifact tools are available, otherwise use a",
+    "  concise structured outline or markdown table.",
   ].join("\n"),
 })
 
@@ -212,6 +248,8 @@ export const VISUAL_OUTPUT_INTERACTIVE_PROMPT = definePrompt({
 /** Every definition this section draws from, for the catalog. */
 export const VISUAL_OUTPUT_PROMPTS: readonly PromptDefinitionV1[] = [
   VISUAL_OUTPUT_FRAME_PROMPT,
+  VISUAL_OUTPUT_MERMAID_PROMPT,
+  VISUAL_OUTPUT_NO_MERMAID_PROMPT,
   VISUAL_OUTPUT_DOCK_PROMPT,
   VISUAL_OUTPUT_FENCED_PROMPT,
   VISUAL_OUTPUT_INLINE_CHART_PROMPT,
@@ -267,7 +305,11 @@ export function buildVisualOutputSection(
   if (channels.a2ui) rules.push(VISUAL_OUTPUT_INTERACTIVE_PROMPT)
 
   if (rules.length === 0) return null
+  const structuralRule = render(
+    channels.mermaid === false ? VISUAL_OUTPUT_NO_MERMAID_PROMPT : VISUAL_OUTPUT_MERMAID_PROMPT
+  )
   return render(VISUAL_OUTPUT_FRAME_PROMPT, {
+    structuralRule,
     channelRules: rules.map((def) => render(def)).join("\n"),
   })
 }

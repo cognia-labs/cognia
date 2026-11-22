@@ -7,8 +7,8 @@
 // no A2UI section.
 
 export interface A2UISystemPromptPort {
-  /** The section for an agent whose surfaces render with `catalogId`. */
-  systemSection(input: { catalogId?: string }): string
+  /** The section for an agent whose surfaces render with `catalogId` or app `configuredCatalogId`. */
+  systemSection(input: { catalogId?: string; configuredCatalogId?: string }): string
 }
 
 declare module "@/lib/modules/ports" {

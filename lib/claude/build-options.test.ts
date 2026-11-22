@@ -3209,9 +3209,12 @@ describe("resolveSendOptions — character + skills", () => {
       session: makeSession({ id: "s1", trialSkillId: "rec-1" }),
     })
 
-    expect(mRender).toHaveBeenCalledWith(
-      expect.arrayContaining([expect.objectContaining({ id: "rec-1" })]),
-      expect.objectContaining({ maxTokens: 4000 })
+    // Trial skills are explicit for the turn and delivered whole outside the
+    // 4,000-token implicit ceiling, while the character's skills are withheld.
+    expect(mRender).toHaveBeenCalledWith([expect.objectContaining({ id: "rec-1" })])
+    expect(mRender).toHaveBeenCalledWith([], expect.objectContaining({ maxTokens: 4000 }))
+    expect(mRender).not.toHaveBeenCalledWith(
+      expect.arrayContaining([expect.objectContaining({ id: "sk1" })])
     )
     expect(mRender).not.toHaveBeenCalledWith(
       expect.arrayContaining([expect.objectContaining({ id: "sk1" })]),
@@ -5378,35 +5381,37 @@ describe("resolveSendOptions — brief mode", () => {
     }
   })
 
-  it("resolves a built-in mode's prompt through its Prompt Center entry (ADR-0236)", async () => {
+  it("resolves every built-in mode's prompt through its Prompt Center entry (ADR-0236)", async () => {
     const { __setPromptOverrideSnapshotForTests, buildPromptOverrideSnapshot } =
       await import("@/lib/prompts/snapshot")
     const { BUILT_IN_MODE_PROMPTS, getAgentMode } = await import("@/lib/agent/modes/built-ins")
-    const research = getAgentMode("research")!
-    const def = BUILT_IN_MODE_PROMPTS.get("research")!
     __setPromptOverrideSnapshotForTests(
-      buildPromptOverrideSnapshot("test-db", [
-        {
-          bindingId: "pob",
+      buildPromptOverrideSnapshot(
+        "test-db",
+        [...BUILT_IN_MODE_PROMPTS.values()].map((def, idx) => ({
+          bindingId: `pob-${idx}`,
           promptId: def.id,
-          scope: "account",
+          scope: "account" as const,
           targetId: "",
-          revisionId: "por",
-          body: "Edited {{mode_name}} brief.",
+          revisionId: `por-${idx}`,
+          body: sentinelBody(def),
           contractVersion: def.contractVersion,
-        },
-      ])
+        }))
+      )
     )
     try {
-      const shipped = await resolveSendOptions({ agentMode: research })
-      expect(shipped.systemPrompt).toContain(`Edited ${research.name} brief.`)
-      expect(shipped.systemPrompt).not.toContain(research.systemPrompt!.slice(0, 40))
-      // A custom mode reusing the id owns its own text.
+      for (const [modeId, def] of BUILT_IN_MODE_PROMPTS) {
+        const mode = getAgentMode(modeId)!
+        const shipped = await resolveSendOptions({ agentMode: mode })
+        expect(shipped.systemPrompt).toContain(`SENTINEL-${def.id}`)
+      }
+      // A custom mode reusing a built-in id owns its own text.
+      const research = getAgentMode("research")!
       const custom = await resolveSendOptions({
         agentMode: { ...research, systemPrompt: "My own research rules." },
       })
       expect(custom.systemPrompt).toContain("My own research rules.")
-      expect(custom.systemPrompt).not.toContain("Edited")
+      expect(custom.systemPrompt).not.toContain("SENTINEL-")
     } finally {
       __setPromptOverrideSnapshotForTests(null)
     }
@@ -5432,6 +5437,22 @@ describe("resolveSendOptions — brief mode", () => {
       })
       expect(opts.appendSystemPrompt).toContain('"financial" component catalog')
       expect(opts.appendSystemPrompt).toContain("StockTicker")
+    } finally {
+      clearRegistry()
+    }
+  })
+
+  it("projects appSettings.a2uiDefaultCatalogId into A2UI guidance when the agent leaves catalog unset (T09)", async () => {
+    const { registerComponent, clearRegistry } = await import("@/lib/a2ui/catalog")
+    registerComponent("KanbanLane" as never, (() => null) as never, { catalogId: "ops-catalog" })
+    try {
+      const opts = await resolveSendOptions({
+        session: makeSession({ id: "s1" }),
+        character: makeChar({ a2uiEnabled: true }),
+        appSettings: { id: "singleton", a2uiDefaultCatalogId: "ops-catalog" } as AppSettings,
+      })
+      expect(opts.appendSystemPrompt).toContain('"ops-catalog" component catalog')
+      expect(opts.appendSystemPrompt).toContain("KanbanLane")
     } finally {
       clearRegistry()
     }
@@ -10401,4 +10422,61 @@ it("starts personally marked turns fenced and excludes opaque builtin read claim
   } finally {
     mockEgressTaint.mockResolvedValue({ verified: true, marks: [] })
   }
+})
+
+it("keeps dynamicSystemPrompt as the suffix of appendSystemPrompt when contextual skills are injected (T05)", async () => {
+  const chartId = builtinSkillId(BUILT_IN_SKILL_CATALOG.find((e) => e.id === "chart-design")!)
+  mListSkillsByIds.mockResolvedValueOnce([
+    {
+      id: chartId,
+      name: "chart-design",
+      content: "Choose bars for comparisons.",
+      enabled: true,
+    } as unknown as Skill,
+  ])
+  mRender.mockImplementation((list: Skill[]) =>
+    list.map((s) => `### ${s.name}\n\n${s.content}`).join("\n\n")
+  )
+  try {
+    const opts = await resolveSendOptions({
+      character: makeChar({ id: "c1" }),
+      session: makeSession({ id: "s-chart", projectId: "ws1", projectRole: "coordinator" }),
+      activeProject: {
+        ...makeProject([{ path: "/repo", isPrimary: true }]),
+        coordinator: { enabled: true },
+      },
+      skillIntents: ["chart"],
+    })
+    expect(opts.appendSystemPrompt).toContain("## Contextual skills")
+    expect(opts.dynamicSystemPrompt).toBeTruthy()
+    expect(opts.appendSystemPrompt?.endsWith(opts.dynamicSystemPrompt!)).toBe(true)
+  } finally {
+    mRender.mockReset()
+  }
+})
+
+it("withdraws inline mermaid rendering claims when messageDisplay or session override disables mermaid (T10)", async () => {
+  const fromSettings = await resolveSendOptions({
+    character: makeChar({ id: "c1" }),
+    appSettings: {
+      id: "singleton",
+      messageDisplay: { preset: "balanced", overrides: { markdown: { mermaid: false } } },
+    } as unknown as AppSettings,
+  })
+  expect(fromSettings.appendSystemPrompt ?? "").not.toContain("fenced `mermaid` block")
+  expect(fromSettings.appendSystemPrompt).toContain(
+    "Mermaid rendering is disabled in display settings"
+  )
+
+  const fromSession = await resolveSendOptions({
+    character: makeChar({ id: "c1" }),
+    session: makeSession({
+      id: "s-no-mermaid",
+      messageDisplayOverride: { preset: "balanced", overrides: { markdown: { mermaid: false } } },
+    }),
+  })
+  expect(fromSession.appendSystemPrompt ?? "").not.toContain("fenced `mermaid` block")
+  expect(fromSession.appendSystemPrompt).toContain(
+    "Mermaid rendering is disabled in display settings"
+  )
 })

@@ -359,6 +359,14 @@
     "title": "Visual output: interactive surfaces",
     "description": "Tells the model to use an A2UI surface when you need to choose, confirm, filter, or submit something."
   },
+  "chat__visual-output__mermaid": {
+    "title": "Visual output: Mermaid diagrams",
+    "description": "Tells the model to emit fenced Mermaid diagrams when Mermaid rendering is enabled."
+  },
+  "chat__visual-output__no-mermaid": {
+    "title": "Visual output: Mermaid disabled",
+    "description": "When Mermaid rendering is turned off in display settings, tells the model not to emit raw Mermaid fences as rendered diagrams."
+  },
   "chat__visual-output__no-canvas": {
     "title": "Visual output: no Canvas",
     "description": "When documents cannot be created, tells the model to answer inline instead of producing a Canvas."

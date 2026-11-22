@@ -359,6 +359,14 @@
     "title": "可视化输出：交互界面",
     "description": "当你需要选择、确认、筛选或提交时，要求模型使用 A2UI 界面。"
   },
+  "chat__visual-output__mermaid": {
+    "title": "可视化输出：Mermaid 图表",
+    "description": "在开启 Mermaid 渲染时，指导模型用 Mermaid 代码块原地展示结构图。"
+  },
+  "chat__visual-output__no-mermaid": {
+    "title": "可视化输出：已关闭 Mermaid",
+    "description": "当显示设置关闭 Mermaid 渲染时，告知模型 Mermaid 代码块不会原地渲染，改用图表技能或结构化文本。"
+  },
   "chat__visual-output__no-canvas": {
     "title": "可视化输出：无 Canvas",
     "description": "无法创建文档时，要求模型直接在回复中作答，不输出 Canvas。"

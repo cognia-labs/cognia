@@ -400,7 +400,11 @@ export async function resumeCommand(args: ParsedArgs, deps: ResumeDeps = {}): Pr
                 signal: options?.abortSignal,
                 timeoutMs: 120_000,
                 resolveOptions: async (context) => {
-                  const { appendSystemPrompt: _append, ...base } = await resolveSendOptions(context)
+                  const {
+                    appendSystemPrompt: _append,
+                    dynamicSystemPrompt: _dynamic,
+                    ...base
+                  } = await resolveSendOptions(context)
                   return {
                     ...base,
                     systemPrompt:

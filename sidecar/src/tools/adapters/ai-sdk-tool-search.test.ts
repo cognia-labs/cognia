@@ -375,3 +375,58 @@ test("deferredToolsPrompt names every deferred tool and the cap", () => {
   assert.equal(uncapped!.maxActiveTools(), null)
   assert.match(uncapped!.deferredToolsPrompt()!, /not loaded into this conversation up front/)
 })
+
+test("free-text discovery recalls tools for Chinese queries via CJK phrase and bigram scoring", async () => {
+  const controller = createAiSdkToolSearchController({
+    tools: {
+      query_order_history: fakeTool("查询用户的历史订单与物流状态"),
+      cancel_order: fakeTool("取消未发货的订单"),
+      weather_now: fakeTool("查询城市实时天气预报"),
+    },
+    sendOptions: { toolSearchEnabled: true },
+  })
+
+  const exactPhrase = await search(controller, { query: "历史订单", limit: 2 })
+  assert.equal(exactPhrase.matches[0]!.name, "query_order_history")
+  assert.ok(exactPhrase.activated.includes("query_order_history"))
+  assert.ok(!exactPhrase.activated.includes("weather_now"))
+
+  const mixedQuery = await search(controller, { query: "查找历史订单", limit: 1 })
+  assert.equal(mixedQuery.matches[0]!.name, "query_order_history")
+})
+
+test("under a tight cap, multi-match discovery keeps the highest-ranked match active", async () => {
+  const controller = createAiSdkToolSearchController({
+    tools: {
+      order: fakeTool("Order management"),
+      order_archive: fakeTool("Archive old order records"),
+      order_export: fakeTool("Export order CSV"),
+    },
+    force: true,
+    maxActiveTools: 2,
+  })
+
+  const output = (await search(controller, { query: "order", limit: 5 })) as SearchOutput & {
+    unloaded?: string[]
+  }
+  assert.equal(output.matches[0]!.name, "order")
+  assert.deepEqual(output.activated, ["order"])
+  assert.equal(output.unloaded, undefined)
+  assert.deepEqual(controller!.prepareStep().activeTools, [AI_SDK_TOOL_SEARCH_NAME, "order"])
+})
+
+test("under cap=1, ToolSearch yields the single active slot to the top discovered tool", async () => {
+  const controller = createAiSdkToolSearchController({
+    tools: {
+      write: fakeTool("Create or replace a file"),
+      read: fakeTool("Read a file"),
+    },
+    force: true,
+    maxActiveTools: 1,
+  })
+
+  assert.deepEqual(controller!.prepareStep().activeTools, [AI_SDK_TOOL_SEARCH_NAME])
+  const output = await search(controller, { query: "write file", limit: 2 })
+  assert.deepEqual(output.activated, ["write"])
+  assert.deepEqual(controller!.prepareStep().activeTools, ["write"])
+})

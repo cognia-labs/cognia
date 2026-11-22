@@ -2538,9 +2538,18 @@ export function installRuntime(bus: ReturnType<typeof getBus>, opts: RuntimeOpti
           // connector's PII gate walks before anything is sent.
           const roomSection = member ? member.section : plainRoomSection
           if (roomSection) {
-            sendOptions.appendSystemPrompt = [sendOptions.appendSystemPrompt?.trim(), roomSection]
-              .filter(Boolean)
-              .join("\n\n---\n\n")
+            const existingAppend = sendOptions.appendSystemPrompt ?? ""
+            const dynTail = sendOptions.dynamicSystemPrompt
+            if (dynTail && existingAppend.endsWith(dynTail)) {
+              const head = existingAppend.slice(0, existingAppend.length - dynTail.length).trim()
+              sendOptions.appendSystemPrompt = head
+                ? `${head}\n\n---\n\n${roomSection}\n\n${dynTail}`
+                : `${roomSection}\n\n${dynTail}`
+            } else {
+              sendOptions.appendSystemPrompt = [existingAppend.trim(), roomSection]
+                .filter(Boolean)
+                .join("\n\n---\n\n")
+            }
           }
 
           let recoveryExecution: AgentExecutionSendSpec

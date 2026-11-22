@@ -1858,6 +1858,108 @@ test("anthropic + cacheOptimizationEnabled splits appendSystemPrompt at the dyna
   assert.equal(systems[2]!.providerOptions, undefined)
 })
 
+test("anthropic + cacheOptimizationEnabled without base systemPrompt never caches dynamicSystemPrompt", async () => {
+  for (const sendOptions of [
+    {
+      model: "claude-x",
+      providerCredentials: { apiKey: "k", protocol: "anthropic" as const },
+      appendSystemPrompt: "DYN_ONLY",
+      dynamicSystemPrompt: "DYN_ONLY",
+      cacheOptimizationEnabled: true,
+    },
+    {
+      model: "claude-x",
+      providerCredentials: { apiKey: "k", protocol: "anthropic" as const },
+      appendSystemPrompt: "STABLE_HEAD\n\nDYN_TAIL",
+      dynamicSystemPrompt: "DYN_TAIL",
+      cacheOptimizationEnabled: true,
+    },
+  ]) {
+    const { events, emit } = captureEmit()
+    let captured: TestStreamArgs = {} as TestStreamArgs
+    dispatchAiSdk({
+      provider: "my-claude-proxy",
+      sessionId: "s-no-base",
+      firstPrompt: "hi",
+      sendOptions,
+      emit,
+      log: () => {},
+      streamText: (args: Record<string, unknown>) => {
+        captured = streamArgs(args)
+        return makeFakeStream([{ type: "finish", finishReason: "stop" }])()
+      },
+    })
+    await new Promise<void>((resolve) => {
+      const tick = () => {
+        if (events.some((e) => e.type === "session_ended")) return resolve()
+        setTimeout(tick, 10)
+      }
+      tick()
+    })
+    const systems = captured.instructions
+    if (sendOptions.appendSystemPrompt === "DYN_ONLY") {
+      assert.equal(systems.length, 1)
+      assert.equal(systems[0]!.content, "DYN_ONLY")
+      assert.equal(systems[0]!.providerOptions, undefined)
+    } else {
+      assert.equal(systems.length, 2)
+      assert.equal(systems[0]!.content, "STABLE_HEAD")
+      assert.deepEqual(systems[0]!.providerOptions, {
+        anthropic: { cacheControl: { type: "ephemeral" } },
+      })
+      assert.equal(systems[1]!.content, "DYN_TAIL")
+      assert.equal(systems[1]!.providerOptions, undefined)
+    }
+  }
+})
+
+test("anthropic + cacheOptimizationEnabled places base cacheControl at the end of @agent + systemPrompt prefix", async () => {
+  const { events, emit } = captureEmit()
+  let captured: TestStreamArgs = {} as TestStreamArgs
+  dispatchAiSdk({
+    provider: "my-claude-proxy",
+    sessionId: "s-agent-prefix",
+    firstPrompt: "hi",
+    sendOptions: {
+      model: "claude-x",
+      providerCredentials: { apiKey: "k", protocol: "anthropic" },
+      agent: "reviewer",
+      agents: { reviewer: { prompt: "AGENT_ROLE" } },
+      systemPrompt: "CHAR_BASE",
+      appendSystemPrompt: "STABLE_APPEND\n\nDYN_TAIL",
+      dynamicSystemPrompt: "DYN_TAIL",
+      cacheOptimizationEnabled: true,
+    },
+    emit,
+    log: () => {},
+    streamText: (args: Record<string, unknown>) => {
+      captured = streamArgs(args)
+      return makeFakeStream([{ type: "finish", finishReason: "stop" }])()
+    },
+  })
+  await new Promise<void>((resolve) => {
+    const tick = () => {
+      if (events.some((e) => e.type === "session_ended")) return resolve()
+      setTimeout(tick, 10)
+    }
+    tick()
+  })
+  const systems = captured.instructions
+  assert.equal(systems.length, 4)
+  assert.equal(systems[0]!.content, "AGENT_ROLE")
+  assert.equal(systems[0]!.providerOptions, undefined)
+  assert.equal(systems[1]!.content, "CHAR_BASE")
+  assert.deepEqual(systems[1]!.providerOptions, {
+    anthropic: { cacheControl: { type: "ephemeral" } },
+  })
+  assert.equal(systems[2]!.content, "STABLE_APPEND")
+  assert.deepEqual(systems[2]!.providerOptions, {
+    anthropic: { cacheControl: { type: "ephemeral" } },
+  })
+  assert.equal(systems[3]!.content, "DYN_TAIL")
+  assert.equal(systems[3]!.providerOptions, undefined)
+})
+
 test("anthropic + cacheOptimizationEnabled tags the last message with a history cacheControl breakpoint", async () => {
   const { events, emit } = captureEmit()
   let captured: TestStreamArgs = {} as TestStreamArgs

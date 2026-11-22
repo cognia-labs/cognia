@@ -75,19 +75,51 @@ function configuredToolMatches(
   return source?.serverName ? configured.has(`mcp__${source.serverName}__${name}`) : false
 }
 
+const CJK_RUN_PATTERN = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]+/gu
+
+function tokenizeQueryTerms(normalized: string): string[] {
+  const tokens = new Set<string>()
+  for (const word of normalized.split(/[^\p{L}\p{N}_:-]+/u)) {
+    if (!word) continue
+    const cjkRuns = [...word.matchAll(CJK_RUN_PATTERN)].map((match) => match[0])
+    if (cjkRuns.length === 0) {
+      tokens.add(word)
+      continue
+    }
+    // Keep non-CJK sub-segments (e.g. "v2订单" -> "v2" + CJK n-grams) and emit
+    // character bigrams for unspaced CJK text (or single char for 1-char runs).
+    for (const nonCjk of word.split(CJK_RUN_PATTERN)) {
+      if (nonCjk) tokens.add(nonCjk)
+    }
+    for (const run of cjkRuns) {
+      const chars = [...run]
+      if (chars.length === 1) {
+        tokens.add(chars[0]!)
+      } else {
+        for (let i = 0; i < chars.length - 1; i += 1) {
+          tokens.add(`${chars[i]!}${chars[i + 1]!}`)
+        }
+      }
+    }
+  }
+  return [...tokens]
+}
+
 function scoreCandidate(name: string, description: unknown, query: string): number {
   const normalized = query.trim().toLowerCase()
   if (!normalized) return 0
   const lowerName = name.toLowerCase()
-  const haystack = `${lowerName} ${String(description ?? "").toLowerCase()}`
+  const lowerDesc = String(description ?? "").toLowerCase()
+  const haystack = `${lowerName} ${lowerDesc}`
   if (lowerName === normalized) return 1_000
   if (lowerName.includes(normalized)) return 500
 
-  const terms = [...new Set(normalized.split(/[^a-z0-9_:-]+/).filter(Boolean))]
+  const phraseBonus = lowerDesc.includes(normalized) ? 150 : 0
+  const terms = tokenizeQueryTerms(normalized)
   const hits = terms.filter((term) => haystack.includes(term))
-  if (hits.length === 0) return 0
+  if (hits.length === 0) return phraseBonus
   const nameHits = hits.filter((term) => lowerName.includes(term)).length
-  return hits.length * 20 + nameHits * 10 + (hits.length === terms.length ? 100 : 0)
+  return phraseBonus + hits.length * 20 + nameHits * 10 + (hits.length === terms.length ? 100 : 0)
 }
 
 /**
@@ -188,10 +220,14 @@ export function createAiSdkToolSearchController({
 
   const applyCap = (): string[] => {
     if (cap === null) return []
-    const residentCap = Math.max(0, cap - 1 - discoveryHeadroom(cap))
+    const residentCap = cap <= 1 ? 0 : Math.max(0, cap - 1 - discoveryHeadroom(cap))
     if (resident.size > residentCap) resident = new Set(residentOrder.slice(0, residentCap))
     const unloaded: string[] = []
-    while (discovered.length > 0 && 1 + resident.size + discovered.length > cap) {
+    // Under cap === 1, a discovered tool temporarily takes the single request
+    // slot (yielding ToolSearch until reset); for cap >= 2, ToolSearch stays
+    // active alongside resident + discovered tools.
+    const maxDiscovered = cap === 1 ? 1 : Math.max(0, cap - 1 - resident.size)
+    while (discovered.length > maxDiscovered) {
       unloaded.push(discovered.shift()!)
     }
     return unloaded
@@ -247,14 +283,19 @@ export function createAiSdkToolSearchController({
         )
       }
 
-      const requested = matches.map((entry) => entry.name).sort()
-      for (const name of requested) {
+      // Keep `requested` in `matches` order (ranked best-first for free-text,
+      // sorted for `select:`). Insert in reverse so the highest-ranked match
+      // lands at the MRU tail and survives `applyCap()` under tight caps.
+      const requested = matches.map((entry) => entry.name)
+      const previouslyActive = new Set(discovered)
+      for (const name of [...requested].reverse()) {
         if (resident.has(name)) continue
         const at = discovered.indexOf(name)
         if (at >= 0) discovered.splice(at, 1)
         discovered.push(name)
       }
-      const unloaded = applyCap()
+      const evicted = applyCap()
+      const unloaded = evicted.filter((name) => previouslyActive.has(name))
       const activated = requested.filter((name) => resident.has(name) || discovered.includes(name))
       return JSON.stringify({
         query,
@@ -273,10 +314,15 @@ export function createAiSdkToolSearchController({
       a < b ? -1 : a > b ? 1 : 0
     )
   )
-  const activeToolNames = () =>
-    Object.keys(allTools).filter(
-      (name) => name === AI_SDK_TOOL_SEARCH_NAME || resident.has(name) || discovered.includes(name)
+  const activeToolNames = () => {
+    const keepToolSearch = cap !== 1 || (resident.size === 0 && discovered.length === 0)
+    return Object.keys(allTools).filter(
+      (name) =>
+        (name === AI_SDK_TOOL_SEARCH_NAME && keepToolSearch) ||
+        resident.has(name) ||
+        discovered.includes(name)
     )
+  }
   const deferredToolNames = () => availableNames.filter((name) => !resident.has(name))
 
   return {

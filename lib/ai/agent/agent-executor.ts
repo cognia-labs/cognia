@@ -660,12 +660,22 @@ async function runToolEnabledStandalone(
       if (config.approvalRoute) sendOptions.agentRef = config.approvalRoute.subagentId
     }
     // The structured-output instruction rides `appendSystemPrompt` after the
-    // grant's fragments so the resolved character/skill blocks survive.
-    const appended = composeSystem(
-      sendOptions.appendSystemPrompt,
-      structuredInstruction(config.outputFormat)
-    )
-    if (appended) sendOptions.appendSystemPrompt = appended
+    // grant's fragments (before any dynamic tail) so the resolved character/skill
+    // blocks and Anthropic cache breakpoint both survive.
+    const structured = structuredInstruction(config.outputFormat)
+    if (structured) {
+      const existingAppend = sendOptions.appendSystemPrompt ?? ""
+      const dynTail = sendOptions.dynamicSystemPrompt
+      if (dynTail && existingAppend.endsWith(dynTail)) {
+        const head = existingAppend.slice(0, existingAppend.length - dynTail.length).trim()
+        sendOptions.appendSystemPrompt = head
+          ? `${head}\n\n${structured}\n\n${dynTail}`
+          : `${structured}\n\n${dynTail}`
+      } else {
+        const appended = composeSystem(sendOptions.appendSystemPrompt, structured)
+        if (appended) sendOptions.appendSystemPrompt = appended
+      }
+    }
     if (
       !hasNoLeakingPiiDeep({
         prompt,

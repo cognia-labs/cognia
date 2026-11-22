@@ -57407,6 +57407,10 @@
         "description": "当你需要选择、确认、筛选或提交时，要求模型使用 A2UI 界面。",
         "title": "可视化输出：交互界面"
       },
+      "chat__visual-output__mermaid": {
+        "description": "在开启 Mermaid 渲染时，指导模型用 Mermaid 代码块原地展示结构图。",
+        "title": "可视化输出：Mermaid 图表"
+      },
       "chat__visual-output__no-canvas": {
         "description": "无法创建文档时，要求模型直接在回复中作答，不输出 Canvas。",
         "title": "可视化输出：无 Canvas"
@@ -57418,6 +57422,10 @@
       "chat__visual-output__no-dock-table": {
         "description": "无法绘制图表时，要求模型用简洁的 Markdown 表格展示数据。",
         "title": "可视化输出：表格兜底"
+      },
+      "chat__visual-output__no-mermaid": {
+        "description": "当显示设置关闭 Mermaid 渲染时，告知模型 Mermaid 代码块不会原地渲染，改用图表技能或结构化文本。",
+        "title": "可视化输出：已关闭 Mermaid"
       },
       "cli__base__identity": {
         "description": "CLI 编码 Agent 的基础系统提示词，规定它在项目中的角色、语气和工作方式。",

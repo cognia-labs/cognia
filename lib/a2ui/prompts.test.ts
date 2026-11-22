@@ -141,9 +141,12 @@ describe("A2UI_SYSTEM_PROMPT", () => {
     expect(section).toContain("stop at 10,000 characters")
   })
 
-  it("defers display-only charts to the visual-output routing", () => {
+  it("defers display-only charts to the visual-output routing while allowing no-dock A2UI fallback", () => {
     expect(A2UI_SYSTEM_PROMPT).toContain(
       "A chart or table the reader only looks at follows this conversation's visual-output guidance"
+    )
+    expect(A2UI_SYSTEM_PROMPT).toContain(
+      "use a standalone A2UI Chart only when the visual-output guidance explicitly selects it as the fallback quantitative route"
     )
   })
 })

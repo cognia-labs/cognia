@@ -666,46 +666,64 @@ export function dispatchAiSdk({
   // losing A2UI/goal/plan/brief instructions on the non-Anthropic path.
   /** @type {Array<{ role: "user"|"assistant"|"system", content: any }>} */
   const conversation: ConversationMessage[] = []
-  const systemParts = [
+  const baseParts = [
     // `@agent` overlay (if any) leads so the subagent's identity frames the turn,
     // with the app's base + appended sections kept beneath it.
     agentSystemPrompt,
     sendOptions.systemPrompt,
-    sendOptions.appendSystemPrompt,
   ].filter((s): s is string => typeof s === "string" && s.trim().length > 0)
+  const rawAppend =
+    typeof sendOptions.appendSystemPrompt === "string" &&
+    sendOptions.appendSystemPrompt.trim().length > 0
+      ? sendOptions.appendSystemPrompt
+      : ""
+  const systemParts = [...baseParts, ...(rawAppend ? [rawAppend] : [])]
   if (
     systemParts.length > 0 &&
     protocol === "anthropic" &&
     sendOptions.cacheOptimizationEnabled === true
   ) {
+    const ephemeral = { anthropic: { cacheControl: { type: "ephemeral" as const } } }
     // Cache optimization + anthropic protocol: put an explicit cacheControl
-    // breakpoint on the stable base prefix.
-    conversation.push({
-      role: "system",
-      content: systemParts[0],
-      providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+    // breakpoint at the end of the stable base prefix (covering both `@agent`
+    // overlay and `systemPrompt` when both are present).
+    baseParts.forEach((part, index) => {
+      conversation.push({
+        role: "system",
+        content: part,
+        ...(index === baseParts.length - 1 ? { providerOptions: ephemeral } : {}),
+      })
     })
-    // The remaining part is `appendSystemPrompt`. When the renderer declared a
-    // per-turn dynamic tail (`dynamicSystemPrompt` = twin RAG chunks + memory
-    // recall, the exact suffix of appendSystemPrompt), split it off: cache the
-    // stable head with a SECOND breakpoint and leave only the tail uncached, so
-    // the cache write never churns on the per-turn sections. Without a declared
-    // tail the append stays uncached exactly as before (back-compat).
-    const dyn =
-      typeof sendOptions.dynamicSystemPrompt === "string" ? sendOptions.dynamicSystemPrompt : ""
-    for (const part of systemParts.slice(1)) {
-      if (dyn && part.length > dyn.length && part.endsWith(dyn)) {
-        const stable = part.slice(0, part.length - dyn.length).replace(/\n+$/, "")
-        if (stable) {
+    // When `appendSystemPrompt` carries a declared per-turn `dynamicSystemPrompt`
+    // suffix (even when there is no base `systemPrompt`), split it off so only
+    // the stable head receives a cacheControl breakpoint and the dynamic tail
+    // stays uncached.
+    if (rawAppend) {
+      const dyn =
+        typeof sendOptions.dynamicSystemPrompt === "string"
+          ? sendOptions.dynamicSystemPrompt.trim()
+          : ""
+      const trimmedAppend = rawAppend.trim()
+      if (dyn && trimmedAppend === dyn) {
+        conversation.push({ role: "system", content: rawAppend })
+      } else if (dyn && rawAppend.length > dyn.length && rawAppend.endsWith(dyn)) {
+        const stable = rawAppend.slice(0, rawAppend.length - dyn.length).replace(/\n+$/, "")
+        if (stable.trim()) {
           conversation.push({
             role: "system",
             content: stable,
-            providerOptions: { anthropic: { cacheControl: { type: "ephemeral" } } },
+            providerOptions: ephemeral,
           })
         }
         conversation.push({ role: "system", content: dyn })
+      } else if (baseParts.length === 0) {
+        conversation.push({
+          role: "system",
+          content: rawAppend,
+          providerOptions: ephemeral,
+        })
       } else {
-        conversation.push({ role: "system", content: part })
+        conversation.push({ role: "system", content: rawAppend })
       }
     }
   } else if (systemParts.length > 0) {

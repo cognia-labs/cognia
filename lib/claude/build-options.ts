@@ -1213,18 +1213,19 @@ export function _resetImPromptMemosForTest(): void {
  * (`sidecar/dispatch/ai-sdk.mjs`), and a stable section after it would sit
  * behind text that changes every turn, so no provider could cache it either.
  */
-function appendStableSection(
+export function appendStableSection(
   appendSystemPrompt: string | undefined,
   section: string,
-  dynamicTail: string | undefined
+  dynamicTail: string | undefined,
+  separator = "\n\n"
 ): string {
   const existing = appendSystemPrompt ?? ""
   if (dynamicTail && existing.endsWith(dynamicTail)) {
     const head = existing.slice(0, existing.length - dynamicTail.length).trim()
-    return head ? `${head}\n\n${section}\n\n${dynamicTail}` : `${section}\n\n${dynamicTail}`
+    return head ? `${head}${separator}${section}\n\n${dynamicTail}` : `${section}\n\n${dynamicTail}`
   }
   const trimmed = existing.trim()
-  return trimmed ? `${trimmed}\n\n${section}` : section
+  return trimmed ? `${trimmed}${separator}${section}` : section
 }
 
 /**
@@ -3313,9 +3314,10 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
 
   if (a2uiEnabled) {
     // The a2ui module's section: the protocol, plus the component types the
-    // agent's own catalog (`Character.a2uiCatalogId`) adds.
+    // agent's own catalog (`Character.a2uiCatalogId`) or app default catalog adds.
     const a2uiPrompt = (await loadPort("a2ui-system-prompt"))?.systemSection({
       catalogId: character?.a2uiCatalogId,
+      configuredCatalogId: appSettings?.a2uiDefaultCatalogId,
     })
     if (a2uiPrompt) {
       const existing = opts.appendSystemPrompt?.trim() ?? ""
@@ -4915,8 +4917,11 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
         ? "Summary of the conversation this thread was branched from:"
         : "Context from the conversation this thread was branched from:"
     const seedBlock = `${label}\n\n${await historyText("branch-seed", session.branchSeed.content, session.id, undefined, true)}`
-    const existing = opts.appendSystemPrompt?.trim() ?? ""
-    opts.appendSystemPrompt = existing ? `${existing}\n\n${seedBlock}` : seedBlock
+    opts.appendSystemPrompt = appendStableSection(
+      opts.appendSystemPrompt,
+      seedBlock,
+      opts.dynamicSystemPrompt
+    )
   }
 
   if (personalContextReadersDigest) opts.personalContextReadersDigest = personalContextReadersDigest
@@ -4964,8 +4969,23 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
     )
     if (patched.model) opts.model = patched.model
     if (patched.systemPrompt !== undefined) opts.systemPrompt = patched.systemPrompt
-    if (patched.appendSystemPrompt !== undefined)
-      opts.appendSystemPrompt = patched.appendSystemPrompt
+    if (patched.appendSystemPrompt !== undefined) {
+      const dyn = opts.dynamicSystemPrompt
+      const nextAppend = patched.appendSystemPrompt
+      if (dyn && !nextAppend.endsWith(dyn)) {
+        const marker = `\n\n${dyn}\n\n`
+        if (nextAppend.includes(marker)) {
+          opts.appendSystemPrompt = `${nextAppend.replace(marker, "\n\n")}\n\n${dyn}`
+        } else if (nextAppend.startsWith(`${dyn}\n\n`)) {
+          opts.appendSystemPrompt = `${nextAppend.slice(dyn.length + 2)}\n\n${dyn}`
+        } else {
+          opts.appendSystemPrompt = nextAppend
+          delete opts.dynamicSystemPrompt
+        }
+      } else {
+        opts.appendSystemPrompt = nextAppend
+      }
+    }
     if (patched.allowedTools !== undefined) opts.allowedTools = patched.allowedTools
   }
 
@@ -5367,8 +5387,11 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
       : ""
   const builtInSection = [builtInBodySection, builtInCatalogSection].filter(Boolean).join("\n\n")
   if (builtInSection) {
-    const existing = opts.appendSystemPrompt?.trim() ?? ""
-    opts.appendSystemPrompt = existing ? `${existing}\n\n${builtInSection}` : builtInSection
+    opts.appendSystemPrompt = appendStableSection(
+      opts.appendSystemPrompt,
+      builtInSection,
+      opts.dynamicSystemPrompt
+    )
     void recordSkillUsage(deliveredBuiltInRows.map((skill) => skill.id)).catch(() => undefined)
   }
 
@@ -5542,14 +5565,18 @@ export async function resolveSendOptions(ctx: BuildOptionsContext): Promise<Send
   // markdown renders the reply (the artifact channel's condition: no IM
   // binding, not the CLI) and the user left inline charts on. It is not an
   // artifact, so turning artifact authoring off does not withdraw it.
-  const inlineCharts =
-    artifactsChannelAvailable &&
-    resolveMessageDisplayOptions(appSettings?.messageDisplay).markdown.charts
+  const markdownDisplay = resolveMessageDisplayOptions(
+    appSettings?.messageDisplay,
+    session?.messageDisplayOverride
+  ).markdown
+  const inlineCharts = artifactsChannelAvailable && markdownDisplay.charts
+  const mermaidEnabled = !artifactsChannelAvailable || markdownDisplay.mermaid
   const visualOutputSection = buildVisualOutputSection(
     {
       artifacts: artifactToolAvailable ? "tools" : artifactFencedAvailable ? "fenced" : "disabled",
       a2ui: a2uiEnabled,
       inlineCharts,
+      mermaid: mermaidEnabled,
     },
     { context: promptContext, snapshot: promptSnapshot }
   )

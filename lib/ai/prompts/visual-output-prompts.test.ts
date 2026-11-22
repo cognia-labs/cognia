@@ -2,6 +2,8 @@ import {
   buildVisualOutputSection,
   VISUAL_OUTPUT_DOCK_PROMPT,
   VISUAL_OUTPUT_FRAME_PROMPT,
+  VISUAL_OUTPUT_MERMAID_PROMPT,
+  VISUAL_OUTPUT_NO_MERMAID_PROMPT,
   VISUAL_OUTPUT_PROMPTS,
 } from "./visual-output-prompts"
 import {
@@ -183,6 +185,17 @@ describe("buildVisualOutputSection", () => {
       expect(buildVisualOutputSection(inApp)).not.toContain("fenced `chart`")
     })
   })
+
+  describe("mermaid rendering toggle (T10)", () => {
+    it("withdraws inline mermaid rendering claims when mermaid rendering is disabled", () => {
+      for (const base of [inApp, imThread, { artifacts: "disabled" as const, a2ui: false }]) {
+        const disabled = buildVisualOutputSection({ ...base, mermaid: false })!
+        expect(disabled).not.toContain("fenced `mermaid` block")
+        expect(disabled).not.toContain("It renders\n  in place")
+        expect(disabled).toContain("Mermaid rendering is disabled in display settings")
+      }
+    })
+  })
 })
 
 describe("visual-output prompts in the Prompt Center", () => {
@@ -197,6 +210,37 @@ describe("visual-output prompts in the Prompt Center", () => {
     }
     expect(new Set(VISUAL_OUTPUT_PROMPTS.map((def) => def.id)).size).toBe(
       VISUAL_OUTPUT_PROMPTS.length
+    )
+  })
+
+  it("sends published mermaid and no-mermaid route wordings only when that state applies", () => {
+    __setPromptOverrideSnapshotForTests(
+      buildPromptOverrideSnapshot("test-db", [
+        {
+          bindingId: "pob-mermaid",
+          promptId: VISUAL_OUTPUT_MERMAID_PROMPT.id,
+          scope: "account",
+          targetId: "",
+          revisionId: "por-visual-mermaid",
+          body: "- **Structural**: custom mermaid rule (`mermaid`).",
+          contractVersion: VISUAL_OUTPUT_MERMAID_PROMPT.contractVersion,
+        },
+        {
+          bindingId: "pob-no-mermaid",
+          promptId: VISUAL_OUTPUT_NO_MERMAID_PROMPT.id,
+          scope: "account",
+          targetId: "",
+          revisionId: "por-visual-no-mermaid",
+          body: "- **Structural**: custom plain outline fallback when mermaid is off.",
+          contractVersion: VISUAL_OUTPUT_NO_MERMAID_PROMPT.contractVersion,
+        },
+      ])
+    )
+    expect(buildVisualOutputSection(inApp)).toContain(
+      "- **Structural**: custom mermaid rule (`mermaid`)."
+    )
+    expect(buildVisualOutputSection({ ...inApp, mermaid: false })).toContain(
+      "- **Structural**: custom plain outline fallback when mermaid is off."
     )
   })
 

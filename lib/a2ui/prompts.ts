@@ -56,7 +56,7 @@ Generate A2UI interfaces when:
 6. Settings or configuration interfaces
 7. A calculator-like tool whose result follows its inputs (see Computed Values)
 
-A chart or table the reader only looks at follows this conversation's visual-output guidance (a dock chart, an inline \`chart\` fence or a Markdown table), not an A2UI surface. Use an A2UI Chart or Table when it sits inside a surface that also has controls, and RichOutput for the advanced profiles listed below.
+A chart or table the reader only looks at follows this conversation's visual-output guidance: prefer a dock chart, an inline \`chart\` fence or a Markdown table when those routes are offered, and use a standalone A2UI Chart only when the visual-output guidance explicitly selects it as the fallback quantitative route because no dock or inline \`chart\` fence is available. Whenever a dock or inline \`chart\` fence is available, use an A2UI Chart or Table only when it sits inside a surface that also has controls, and RichOutput for the advanced profiles listed below.
 
 ## A2UI JSON Format
 

@@ -57407,6 +57407,10 @@
         "description": "Tells the model to use an A2UI surface when you need to choose, confirm, filter, or submit something.",
         "title": "Visual output: interactive surfaces"
       },
+      "chat__visual-output__mermaid": {
+        "description": "Tells the model to emit fenced Mermaid diagrams when Mermaid rendering is enabled.",
+        "title": "Visual output: Mermaid diagrams"
+      },
       "chat__visual-output__no-canvas": {
         "description": "When documents cannot be created, tells the model to answer inline instead of producing a Canvas.",
         "title": "Visual output: no Canvas"
@@ -57418,6 +57422,10 @@
       "chat__visual-output__no-dock-table": {
         "description": "With no chart route available, tells the model to show numbers as a compact markdown table.",
         "title": "Visual output: table fallback"
+      },
+      "chat__visual-output__no-mermaid": {
+        "description": "When Mermaid rendering is turned off in display settings, tells the model not to emit raw Mermaid fences as rendered diagrams.",
+        "title": "Visual output: Mermaid disabled"
       },
       "cli__base__identity": {
         "description": "The base system prompt of the command-line coding agent: its role, tone, and way of working in your project.",
