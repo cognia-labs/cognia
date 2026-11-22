@@ -26,7 +26,6 @@ import { __setSharedChatAvailabilityDepsForTesting } from "@/lib/collab/shared-c
 import {
   isSharedChatClientEnabled,
   readSharedChatPreference,
-  writeSharedChatPreference,
 } from "@/lib/collab/shared-chat-feature"
 import { CollaborationCard } from "./collaboration-card"
 

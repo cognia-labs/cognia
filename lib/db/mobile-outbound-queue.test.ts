@@ -296,11 +296,12 @@ describe("mobile outbound queue target isolation", () => {
       const captured = captureOutboundQueueScope()
       const queue = captured.db.mobileOutboundQueue
       const put = queue.put.bind(queue)
-      const insert = jest.spyOn(queue, "put").mockImplementationOnce(async (row) => {
-        const id = await put(row)
-        setActiveRuntimeTargetContext(scope.accountId, "host-other")
-        return id
-      })
+      const insert = jest.spyOn(queue, "put").mockImplementationOnce((row) =>
+        put(row).then((id) => {
+          setActiveRuntimeTargetContext(scope.accountId, "host-other")
+          return id
+        })
+      )
       try {
         await expect(enqueueInScope(captured, input)).rejects.toThrow(
           "outbound_queue_scope_changed"

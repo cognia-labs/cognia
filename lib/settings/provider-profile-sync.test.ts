@@ -125,7 +125,8 @@ describe("syncProviderProfilesFromSettings — per-database memo", () => {
       transportProfiles: emptyTable,
     }))
     let active = databases[0]
-    const putDerivedProfiles = jest.fn(async () => putDerivedProfiles.mock.calls.length)
+    let calls = 0
+    const putDerivedProfiles = jest.fn(async () => ++calls)
 
     await jest.isolateModulesAsync(async () => {
       jest.doMock("@/lib/db/schema", () => ({ getDb: () => active }))

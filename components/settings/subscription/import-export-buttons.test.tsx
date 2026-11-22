@@ -116,10 +116,10 @@ describe("ImportExportButtons import flow", () => {
       manifest: { exportedAt: 0, schemaVersion: 2 },
       vaults: {
         anthropic: {
-          schemaVersion: 2,
+          schemaVersion: 4,
           accounts: [{ id: "a1", label: "Personal", email: "x@x", source: "oauth" }],
           activeAccountId: "a1",
-          preset: undefined,
+          presets: [],
         },
       },
     })
@@ -138,10 +138,10 @@ describe("ImportExportButtons import flow", () => {
       manifest: { exportedAt: 0, schemaVersion: 2 },
       vaults: {
         codex: {
-          schemaVersion: 2,
+          schemaVersion: 4,
           accounts: [],
-          activeAccountId: null,
-          preset: { id: "p1", label: "AWS", baseUrl: "https://aws" },
+          activeAccountId: undefined,
+          presets: [{ id: "p1", label: "AWS", baseUrl: "https://aws" }],
         },
       },
     })
@@ -160,10 +160,10 @@ describe("ImportExportButtons import flow", () => {
       manifest: { exportedAt: 0, schemaVersion: 2 },
       vaults: {
         anthropic: {
-          schemaVersion: 2,
+          schemaVersion: 4,
           accounts: [{ id: "a1", label: "Personal", email: "x@x", source: "oauth" }],
           activeAccountId: "a1",
-          preset: undefined,
+          presets: [],
         },
       },
     })

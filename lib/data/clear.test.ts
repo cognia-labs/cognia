@@ -138,6 +138,8 @@ describe("clearTables", () => {
       await db.messageMedia.put({
         hash: "orphan-message-media",
         mediaType: "image/png",
+        width: 1,
+        height: 1,
         blob: new Blob(["orphan"]),
         byteSize: 6,
         createdAt: 1,
@@ -260,7 +262,13 @@ describe("clearTables", () => {
       if (provenance !== "missing-session") expect(await db.sessions.get("b")).toBeDefined()
       for (const [table, rows] of hostRows) expect(await db.table(table).toArray()).toEqual(rows)
       expect(await db.chatGoals.get("goal-a")).toBeUndefined()
-      expect(await db.sessionUsage.get("usage-a")).toBeUndefined()
+      // Spent money outlives the conversation (F13): kept, never tombstoned.
+      if (provenance === "only-host") {
+        expect(await db.sessionUsage.get("usage-a")).toBeUndefined()
+      } else {
+        expect(await db.sessionUsage.get("usage-a")).toBeDefined()
+      }
+      expect(await db.syncTombstones.get(["sessionUsage", "usage-a"])).toBeUndefined()
       expect(await db.mediaGenerationJobs.get("job-a")).toBeUndefined()
       expect(await db.chatGoals.get("goal-b")).toBeDefined()
       expect(await db.sessionUsage.get("usage-b")).toBeDefined()
@@ -322,7 +330,6 @@ describe("clearTables", () => {
     for (const table of [
       "chatGoals",
       "chatGoalEvents",
-      "sessionUsage",
       "agentPlans",
       "agentPlanEvents",
       "loops",
@@ -332,8 +339,10 @@ describe("clearTables", () => {
     ]) {
       expect(await db.table(table).count()).toBe(0)
     }
+    // Spent money outlives the conversation (F13): kept, never tombstoned.
+    expect(await db.sessionUsage.count()).toBe(1)
     expect(await db.syncTombstones.get(["goals", "goal"])).toBeDefined()
-    expect(await db.syncTombstones.get(["sessionUsage", "usage"])).toBeDefined()
+    expect(await db.syncTombstones.get(["sessionUsage", "usage"])).toBeUndefined()
   })
   it("returns immediately when given no names", async () => {
     const transaction = jest.spyOn(getDb(), "transaction")
@@ -354,10 +363,10 @@ describe("clearTables", () => {
     await clearTables(["sessions", "settings"])
     expect(await db.settings.count()).toBe(0)
     expect(await db.chatGoals.count()).toBe(0)
-    expect(await db.sessionUsage.count()).toBe(0)
+    expect(await db.sessionUsage.count()).toBe(1)
     for (const table of ownedTables) expect(await db.table(table).count()).toBe(0)
     expect(await db.syncTombstones.get(["goals", "goal"])).toBeDefined()
-    expect(await db.syncTombstones.get(["sessionUsage", "usage"])).toBeDefined()
+    expect(await db.syncTombstones.get(["sessionUsage", "usage"])).toBeUndefined()
   })
 
   it.each([false, true])(

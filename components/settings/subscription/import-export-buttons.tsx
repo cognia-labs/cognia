@@ -387,7 +387,7 @@ function ImportPreview({ body }: ImportPreviewProps) {
     for (const provider of providerIds) {
       const vault = body.vaults[provider]
       const accounts = vault?.accounts?.map((a) => a.label || a.id.slice(0, 8)) ?? []
-      out.push({ provider, accounts, hasPreset: !!vault?.preset || !!vault?.presets?.length })
+      out.push({ provider, accounts, hasPreset: Boolean(vault?.presets?.length) })
     }
     return out
   }, [body])
