@@ -180,14 +180,18 @@ export function createAiCompletionProvider(
         ? await resolveRecentMessages(context, signal)
         : context.recentMessages
       if (signal.aborted) return []
-      const { system, prompt } = buildGhostPrompt({
-        draft,
-        recentMessages,
-        ...(context.sessionId ? { promptContext: { sessionId: context.sessionId } } : {}),
-      })
+      const { system, prompt, recordUse } = buildGhostPrompt(
+        {
+          draft,
+          recentMessages,
+          ...(context.sessionId ? { promptContext: { sessionId: context.sessionId } } : {}),
+        },
+        { record: false }
+      )
       // The gate runs on the assembled prompt, so it covers the draft AND the
       // conversation context that would travel with it.
       if (!isPiiSafe(prompt)) return []
+      recordUse()
 
       // One candidate per provider, so its identity is just the provider's —
       // the engine pins and routes partials by it while `text` keeps mutating.

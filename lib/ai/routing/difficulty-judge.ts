@@ -32,6 +32,7 @@ import type { RoutingDifficultyTier } from "@cognia/provider-types/auto-router"
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import { extractJson } from "@/lib/twin/distill/llm"
 import { hasNoLeakingPii } from "@cognia/redact"
+import { recordPromptResolution } from "@/lib/prompts/resolution-log"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt } from "@/lib/prompts/types"
 import { currentRouterFusionGateSettings } from "@/lib/router-fusion/gate/current-settings"
@@ -211,25 +212,34 @@ async function judgeDifficultyDirect(
   const trimmed = (input.promptText ?? "").trim().slice(0, PROMPT_EXCERPT)
   if (!trimmed) return null
 
-  const guidance = await resolvePromptAsync(DIFFICULTY_JUDGE_PROMPT)
+  const guidance = await resolvePromptAsync(DIFFICULTY_JUDGE_PROMPT, { record: false })
   const promptKey = guidance.source.kind === "override" ? guidance.source.revisionId : "shipped"
   const cacheTtlMs = input.cacheTtlMs ?? CACHE_TTL_MS
   const cacheKey = `${promptKey}|${input.deterministicTier ?? "-"}::${trimmed}`
   const cached = cacheTtlMs > 0 ? cache.get(cacheKey) : undefined
   if (cached && now() - cached.at < cacheTtlMs) return cached.value
 
+  const prior = input.deterministicTier
+    ? `\nA heuristic guessed: ${input.deterministicTier}. Correct it only if clearly wrong.`
+    : ""
+  const requestPrompt = `Request:\n${trimmed}${prior}`
+
   // The prompt is the user's own text. It never leaves for a routing decision
   // if it carries anything the redaction gate objects to — a routing hint is
   // not worth a disclosure, and the deterministic score already answers.
-  if (!hasNoLeakingPii(trimmed)) return null
+  if (!hasNoLeakingPii(requestPrompt) || !hasNoLeakingPii(guidance.text)) return null
+
+  recordPromptResolution({
+    promptId: DIFFICULTY_JUDGE_PROMPT.id,
+    source: guidance.source,
+    context: {},
+    at: now(),
+  })
 
   let result: DifficultyVerdict | null = null
   try {
-    const prior = input.deterministicTier
-      ? `\nA heuristic guessed: ${input.deterministicTier}. Correct it only if clearly wrong.`
-      : ""
     const text = await withTimeout(
-      client.complete(`Request:\n${trimmed}${prior}`, {
+      client.complete(requestPrompt, {
         system: guidance.text,
         temperature: 0,
         maxTokens: 24,

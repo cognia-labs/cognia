@@ -210,10 +210,10 @@ function cleanBody(raw: string): string {
 
 type SkippedResult = Extract<IssueAssistResult, { kind: "skipped" }>
 
-function gate(text: string, deps: IssueAssistDeps): SkippedResult | null {
+function gate(text: string, deps: IssueAssistDeps, assembledPrompt?: string): SkippedResult | null {
   if (text.trim().length === 0) return { kind: "skipped", reason: "empty" }
   const isPiiSafe = deps.isPiiSafe ?? hasNoLeakingPii
-  if (!isPiiSafe(text)) return { kind: "skipped", reason: "pii" }
+  if (!isPiiSafe(assembledPrompt ?? text)) return { kind: "skipped", reason: "pii" }
   return null
 }
 
@@ -226,9 +226,6 @@ export async function draftIssueDescription(
   title: string,
   deps: IssueAssistDeps & { projectName?: string }
 ): Promise<IssueAssistResult> {
-  const blocked = gate(title, deps)
-  if (blocked) return blocked
-
   const prompt = [
     deps.projectName ? `Project: ${deps.projectName}` : null,
     `Issue title: ${title.trim()}`,
@@ -237,6 +234,8 @@ export async function draftIssueDescription(
   ]
     .filter(Boolean)
     .join("\n")
+  const blocked = gate(title, deps, prompt)
+  if (blocked) return blocked
 
   const callOptions = {
     system: await systemFor(ISSUE_DRAFT_PROMPT, deps),
@@ -296,10 +295,6 @@ export async function suggestIssueMetadata(
   args: { title: string; description: string; labelNames: readonly string[] },
   deps: IssueAssistDeps
 ): Promise<IssueSuggestResult> {
-  const combined = `${args.title}\n${args.description}`
-  const blocked = gate(combined, deps)
-  if (blocked) return { kind: "skipped", reason: blocked.reason }
-
   const prompt = [
     `Allowed priorities: ${ISSUE_PRIORITIES.join(", ")}`,
     `Allowed labels: ${args.labelNames.length > 0 ? args.labelNames.join(", ") : "(none)"}`,
@@ -311,6 +306,9 @@ export async function suggestIssueMetadata(
   ]
     .filter(Boolean)
     .join("\n")
+  const combined = `${args.title}\n${args.description}`
+  const blocked = gate(combined, deps, prompt)
+  if (blocked) return { kind: "skipped", reason: blocked.reason }
 
   let parsed: unknown
   try {
@@ -385,10 +383,6 @@ export async function suggestIssueRelations(
   deps: IssueAssistDeps
 ): Promise<IssueRelationsResult> {
   if (args.candidates.length === 0) return { kind: "skipped", reason: "empty" }
-  const combined = `${args.title}\n${args.description}`
-  const blocked = gate(combined, deps)
-  if (blocked) return { kind: "skipped", reason: blocked.reason }
-
   const prompt = [
     "Existing issues:",
     ...args.candidates
@@ -402,6 +396,9 @@ export async function suggestIssueRelations(
   ]
     .filter(Boolean)
     .join("\n")
+  const combined = `${args.title}\n${args.description}`
+  const blocked = gate(combined, deps, prompt)
+  if (blocked) return { kind: "skipped", reason: blocked.reason }
 
   let parsed: unknown
   try {

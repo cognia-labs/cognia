@@ -1,3 +1,4 @@
+import { activateAccountDatabase } from "@/lib/db/schema"
 import {
   __resetPromptResolutionsForTests,
   lastPromptResolution,
@@ -41,4 +42,30 @@ it("notifies subscribers and isolates a throwing one", () => {
   expect(good).toHaveBeenCalledTimes(1)
   off()
   offBad()
+})
+
+it("isolates resolution logs across account database switches (T07)", () => {
+  const notified = jest.fn()
+  const off = subscribePromptResolutions(notified)
+  try {
+    activateAccountDatabase("acct-alpha")
+    recordPromptResolution({
+      promptId: "chat.brief-mode",
+      source: { kind: "override", scope: "workspace", bindingId: "pob-a", revisionId: "por-a" },
+      context: { workspaceId: "ws-alpha" },
+      at: 100,
+    })
+    expect(lastPromptResolution("chat.brief-mode")?.context.workspaceId).toBe("ws-alpha")
+
+    activateAccountDatabase("acct-beta")
+    expect(lastPromptResolution("chat.brief-mode")).toBeUndefined()
+    expect(recentPromptResolutions()).toEqual([])
+    expect(notified).toHaveBeenCalled()
+
+    activateAccountDatabase("acct-alpha")
+    expect(lastPromptResolution("chat.brief-mode")?.context.workspaceId).toBe("ws-alpha")
+    expect(recentPromptResolutions()).toHaveLength(1)
+  } finally {
+    off()
+  }
 })

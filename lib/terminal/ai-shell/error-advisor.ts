@@ -47,8 +47,10 @@ RESPONSE FORMAT — respond with ONLY a JSON object (no markdown fences):
 })
 
 /** Resolve diagnosis instructions for the next error advisory. */
-export function buildErrorAdvisorSystemPrompt(): string {
-  return resolvePrompt(AI_SHELL_ERROR_ADVISOR_PROMPT).text
+export function buildErrorAdvisorSystemPrompt(options: { record?: boolean } = {}): string {
+  return resolvePrompt(AI_SHELL_ERROR_ADVISOR_PROMPT, {
+    ...(options.record !== undefined ? { record: options.record } : {}),
+  }).text
 }
 
 /** Build the user prompt for error diagnosis. */
@@ -117,11 +119,12 @@ export async function getErrorAdvisory(
   if (!client) return null
 
   const isPiiSafe = deps.isPiiSafe ?? hasNoLeakingPii
-  const system = buildErrorAdvisorSystemPrompt()
+  const system = buildErrorAdvisorSystemPrompt({ record: false })
   const prompt = buildErrorAdvisorPrompt(step, context)
 
   // PII gate
   if (!isPiiSafe(`${system}\n\n${prompt}`)) return null
+  buildErrorAdvisorSystemPrompt({ record: true })
 
   try {
     const rawText = await client.complete(prompt, {

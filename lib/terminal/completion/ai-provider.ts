@@ -94,7 +94,7 @@ export function createAiCompletionProvider(deps: AiCompletionDeps): TerminalComp
     getCompletions: async (context, signal) => {
       if (signal.aborted) return []
 
-      const { system, prompt } = buildCompletionPrompt(context)
+      const { system, prompt, recordUse } = buildCompletionPrompt(context, { record: false })
       const now = clock()
       const key = cacheKey(context, system)
       const cached = readCache(key, now)
@@ -105,6 +105,8 @@ export function createAiCompletionProvider(deps: AiCompletionDeps): TerminalComp
 
       // Gate the full assembled prompt body — covers input, cwd, history.
       if (!isPiiSafe(prompt)) return []
+
+      recordUse()
 
       let raw: string
       try {

@@ -55,14 +55,23 @@ export function useAiDiffReview(
     }
     setReviewing(true)
     try {
-      // PII gate on the combined patch text; redact each hunk on a hit so the
-      // per-hunk mapping to the model is preserved (redact-and-send).
-      const combined = diff.hunks.map((h) => h.patch).join("\n")
+      // PII gate across patch hunks, file path, and custom instructions; redact
+      // outbound fields on a hit while preserving local `change` for reviewKey.
+      const combined = [
+        change.path,
+        ...diff.hunks.map((h) => h.patch),
+        config.customInstructions ?? "",
+      ].join("\n")
       const leaking = !hasNoLeakingPii(combined)
       if (leaking) toast.warning(t("review.ai.redacted"))
       const hunks = diff.hunks.map((h) => ({
         patch: leaking ? redactText(h.patch).redacted : h.patch,
       }))
+      const gatedPath = leaking ? redactText(change.path).redacted : change.path
+      const gatedCustomInstructions =
+        leaking && config.customInstructions !== undefined
+          ? redactText(config.customInstructions).redacted
+          : config.customInstructions
 
       const client = buildUtilityLlmClient({
         session: null,
@@ -77,9 +86,9 @@ export function useAiDiffReview(
 
       const findings = await generateDiffReview(
         {
-          file: { path: change.path, status: change.status },
+          file: { path: gatedPath, status: change.status },
           hunks,
-          config: { customInstructions: config.customInstructions },
+          config: { customInstructions: gatedCustomInstructions },
         },
         client
       )

@@ -474,4 +474,26 @@ describe("useAiCommitMessage", () => {
       expect(mockSetCommitDraft).not.toHaveBeenCalled()
     })
   })
+
+  it("redacts staged file paths and custom instructions when PII is detected (T15 sibling)", async () => {
+    mockPii = false
+    mockStaged = [{ path: "users/jane@example.com/secret.ts", status: "modified" }]
+    mockSettings = {
+      gitSettings: {
+        commitMessageAI: {
+          enabled: true,
+          conventionalCommits: true,
+          customInstructions: "cc jane@example.com",
+        },
+      },
+    }
+    const { result } = renderHook(() => useAiCommitMessage("/repo"))
+    await act(async () => {
+      await result.current.generate()
+    })
+    expect(mockToast.warning).toHaveBeenCalledWith("commit.ai.redacted")
+    const [prompt, callOpts] = mockComplete.mock.calls[0] as [string, { system: string }]
+    expect(prompt).toContain("REDACTED(users/jane@example.com/secret.ts)")
+    expect(callOpts.system).toContain("REDACTED(cc jane@example.com)")
+  })
 })

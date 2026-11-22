@@ -7,6 +7,7 @@
  * prompt text or task data, so nothing private is persisted or exported.
  */
 
+import * as dbSchema from "@/lib/db/schema"
 import type { PromptResolutionContext, PromptSource } from "./types"
 
 export interface PromptResolutionRecord {
@@ -14,17 +15,32 @@ export interface PromptResolutionRecord {
   source: PromptSource
   context: PromptResolutionContext
   at: number
+  /** Account database partition that owned this resolution. */
+  database?: string
+}
+
+interface PartitionLog {
+  latest: Map<string, PromptResolutionRecord>
+  recent: PromptResolutionRecord[]
 }
 
 const MAX_RECENT = 200
-const latest = new Map<string, PromptResolutionRecord>()
-const recent: PromptResolutionRecord[] = []
+const byDatabase = new Map<string, PartitionLog>()
 const listeners = new Set<() => void>()
+let subscribedToDbSwitch = false
 
-export function recordPromptResolution(record: PromptResolutionRecord): void {
-  latest.set(record.promptId, record)
-  recent.push(record)
-  if (recent.length > MAX_RECENT) recent.splice(0, recent.length - MAX_RECENT)
+function currentDatabase(): string {
+  try {
+    if (typeof dbSchema.activeDatabaseName === "function") {
+      return dbSchema.activeDatabaseName()
+    }
+    return dbSchema.getDb?.()?.name ?? "default"
+  } catch {
+    return "default"
+  }
+}
+
+function notifyListeners(): void {
   for (const listener of listeners) {
     try {
       listener()
@@ -34,23 +50,58 @@ export function recordPromptResolution(record: PromptResolutionRecord): void {
   }
 }
 
-/** The latest resolution of one prompt in this context, if any. */
-export function lastPromptResolution(promptId: string): PromptResolutionRecord | undefined {
-  return latest.get(promptId)
+function ensureDatabaseSubscription(): void {
+  if (subscribedToDbSwitch) return
+  if (typeof dbSchema.onActiveDatabaseChange !== "function") return
+  subscribedToDbSwitch = true
+  dbSchema.onActiveDatabaseChange(() => {
+    notifyListeners()
+  })
 }
 
-/** Recent resolutions, newest first. */
-export function recentPromptResolutions(): PromptResolutionRecord[] {
-  return [...recent].reverse()
+function partitionFor(database: string): PartitionLog {
+  let partition = byDatabase.get(database)
+  if (!partition) {
+    partition = { latest: new Map(), recent: [] }
+    byDatabase.set(database, partition)
+  }
+  return partition
+}
+
+export function recordPromptResolution(record: PromptResolutionRecord): void {
+  ensureDatabaseSubscription()
+  const database = record.database ?? currentDatabase()
+  const entry: PromptResolutionRecord = { ...record, database }
+  const partition = partitionFor(database)
+  partition.latest.set(entry.promptId, entry)
+  partition.recent.push(entry)
+  if (partition.recent.length > MAX_RECENT) {
+    partition.recent.splice(0, partition.recent.length - MAX_RECENT)
+  }
+  notifyListeners()
+}
+
+/** The latest resolution of one prompt in the active account partition, if any. */
+export function lastPromptResolution(
+  promptId: string,
+  database = currentDatabase()
+): PromptResolutionRecord | undefined {
+  return byDatabase.get(database)?.latest.get(promptId)
+}
+
+/** Recent resolutions in the active account partition, newest first. */
+export function recentPromptResolutions(database = currentDatabase()): PromptResolutionRecord[] {
+  const recent = byDatabase.get(database)?.recent
+  return recent ? [...recent].reverse() : []
 }
 
 export function subscribePromptResolutions(listener: () => void): () => void {
+  ensureDatabaseSubscription()
   listeners.add(listener)
   return () => listeners.delete(listener)
 }
 
 /** Test seam. */
 export function __resetPromptResolutionsForTests(): void {
-  latest.clear()
-  recent.length = 0
+  byDatabase.clear()
 }

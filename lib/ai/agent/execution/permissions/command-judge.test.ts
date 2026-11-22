@@ -287,4 +287,34 @@ describe("customized judge guidance is narrow-only (ADR-0236)", () => {
     })
     expect(scoped?.safe).toBe(false)
   })
+
+  it("gates cwd and records prompt resolution only on real model dispatches (T07, T15)", async () => {
+    const { __resetPromptResolutionsForTests, recentPromptResolutions } =
+      await import("@/lib/prompts/resolution-log")
+    __resetPromptResolutionsForTests()
+
+    const piiClient = mockClient('{"safe": true, "risk": "low", "reason": "ok"}')
+    expect(
+      await judgeCommandSafety(piiClient, "pwd", {
+        cwd: "/Users/alex@fictional-audit.invalid/repo",
+      })
+    ).toBeNull()
+    expect(piiClient.complete).not.toHaveBeenCalled()
+    expect(recentPromptResolutions()).toEqual([])
+
+    const cleanClient = mockClient('{"safe": true, "risk": "low", "reason": "ok"}')
+    expect(
+      (await judgeCommandSafety(cleanClient, "pwd", { cwd: "/neutral/repo", contextKey: "s1" }))
+        ?.safe
+    ).toBe(true)
+    // Cache hit must not record a second prompt resolution.
+    expect(
+      (await judgeCommandSafety(cleanClient, "pwd", { cwd: "/neutral/repo", contextKey: "s1" }))
+        ?.safe
+    ).toBe(true)
+    expect(cleanClient.complete).toHaveBeenCalledTimes(1)
+    expect(
+      recentPromptResolutions().filter((entry) => entry.promptId === COMMAND_JUDGE_PROMPT.id)
+    ).toHaveLength(1)
+  })
 })

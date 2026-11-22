@@ -254,7 +254,7 @@ async function showCommand(args: ParsedArgs, out: OutputSink): Promise<number> {
       : null,
     draft: slot.draft ? { revisionId: slot.draft.id, body: slot.draft.body } : null,
   }))
-  const accountText = resolvePrompt(def).body
+  const accountText = resolvePrompt(def, { record: false }).body
   if (boolFlag(args, "json")) {
     out.json({
       id: def.id,

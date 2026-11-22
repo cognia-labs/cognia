@@ -61,8 +61,15 @@ export function useAiDiffExplain(subject: string, diffText: string): UseAiDiffEx
     setExplaining(true)
     try {
       let gated = diffText
-      if (!hasNoLeakingPii(diffText)) {
+      let gatedSubject = subject
+      let gatedCustomInstructions = config.customInstructions
+      const combined = [subject, diffText, config.customInstructions ?? ""].join("\n")
+      if (!hasNoLeakingPii(combined)) {
         gated = redactText(diffText).redacted
+        gatedSubject = redactText(subject).redacted
+        if (gatedCustomInstructions !== undefined) {
+          gatedCustomInstructions = redactText(gatedCustomInstructions).redacted
+        }
         toast.warning(t("explain.redacted"))
       }
 
@@ -78,7 +85,11 @@ export function useAiDiffExplain(subject: string, diffText: string): UseAiDiffEx
       }
 
       const explanation = await generateDiffExplanation(
-        { subject, diffText: gated, config: { customInstructions: config.customInstructions } },
+        {
+          subject: gatedSubject,
+          diffText: gated,
+          config: { customInstructions: gatedCustomInstructions },
+        },
         client
       )
       if (!explanation) {

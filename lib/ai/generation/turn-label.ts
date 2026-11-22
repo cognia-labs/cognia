@@ -15,6 +15,7 @@
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt, type PromptResolutionContext } from "@/lib/prompts/types"
+import { hasNoLeakingPii } from "@cognia/redact"
 import { SHORT_UTILITY_ANSWER_MAX_TOKENS, sanitizeTitle } from "./title"
 
 export interface GenerateTurnLabelArgs {
@@ -61,6 +62,7 @@ export async function generateTurnLabel(
 
   const localeHint = locale ? ` (locale: ${locale})` : ""
   const prompt = `User turn${localeHint}:\n${user.slice(0, 1500)}\n\nLabel:`
+  if (!hasNoLeakingPii(prompt)) return ""
 
   try {
     const system = await resolvePromptAsync(TURN_LABEL_PROMPT, { context: promptContext })

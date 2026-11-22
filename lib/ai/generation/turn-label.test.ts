@@ -87,4 +87,10 @@ describe("generateTurnLabel system prompt", () => {
     await generateTurnLabel(elsewhere, { userText: "hi", promptContext: { sessionId: "ses-2" } })
     expect(systemOf(elsewhere)).toBe(TURN_LABEL_PROMPT.defaultBody)
   })
+
+  it("refuses to dispatch user turns containing PII (T15 sibling)", async () => {
+    const client = mockClient(() => "Label")
+    expect(await generateTurnLabel(client, { userText: "email me at jane@example.com" })).toBe("")
+    expect(client.complete).not.toHaveBeenCalled()
+  })
 })

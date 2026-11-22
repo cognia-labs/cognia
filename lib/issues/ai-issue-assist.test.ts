@@ -366,4 +366,39 @@ describe("issue-assist overrides reach the model call (ADR-0236)", () => {
       expect(calls[0].system).not.toContain(def.defaultBody)
     }
   )
+
+  it("blocks PII interpolated through projectName, labelNames, and candidate issues (T15 sibling)", async () => {
+    const check = (text: string) => !text.includes("leak@example.com")
+    const s1 = stubClient("body")
+    expect(
+      await draftIssueDescription("Clean title", {
+        client: s1.client,
+        isPiiSafe: check,
+        projectName: "leak@example.com",
+      })
+    ).toEqual({ kind: "skipped", reason: "pii" })
+    expect(s1.calls).toHaveLength(0)
+
+    const s2 = stubClient("{}")
+    expect(
+      await suggestIssueMetadata(
+        { title: "Clean", description: "", labelNames: ["leak@example.com"] },
+        { client: s2.client, isPiiSafe: check }
+      )
+    ).toEqual({ kind: "skipped", reason: "pii" })
+    expect(s2.calls).toHaveLength(0)
+
+    const s3 = stubClient("{}")
+    expect(
+      await suggestIssueRelations(
+        {
+          title: "Clean",
+          description: "",
+          candidates: [{ id: "1", identifier: "DEMO-1", title: "Contact leak@example.com" }],
+        },
+        { client: s3.client, isPiiSafe: check }
+      )
+    ).toEqual({ kind: "skipped", reason: "pii" })
+    expect(s3.calls).toHaveLength(0)
+  })
 })

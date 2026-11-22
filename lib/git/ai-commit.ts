@@ -193,7 +193,8 @@ export const COMMIT_AGENT_CLAUSE_PROMPT = definePrompt({
  */
 export async function resolveCommitPromptTexts(
   config: Pick<CommitMessageAIConfig, "conventionalCommits">,
-  context: PromptResolutionContext = {}
+  context: PromptResolutionContext = {},
+  options: { includeAgentClause?: boolean } = {}
 ): Promise<CommitPromptTexts> {
   const [format, agentClause] = await Promise.all([
     resolvePromptAsync(
@@ -202,7 +203,9 @@ export async function resolveCommitPromptTexts(
         : COMMIT_FREEFORM_FORMAT_PROMPT,
       { context }
     ),
-    resolvePromptAsync(COMMIT_AGENT_CLAUSE_PROMPT, { context }),
+    options.includeAgentClause === false
+      ? Promise.resolve({ text: COMMIT_AGENT_CLAUSE_PROMPT.defaultBody })
+      : resolvePromptAsync(COMMIT_AGENT_CLAUSE_PROMPT, { context }),
   ])
   const system = await resolvePromptAsync(COMMIT_SYSTEM_PROMPT, {
     context,
@@ -290,7 +293,9 @@ export async function generateCommitMessage(
   options: GenerateCommitMessageOptions = {}
 ): Promise<string> {
   const prompt = buildCommitUserPrompt(input)
-  const texts = await resolveCommitPromptTexts(input.config, options.promptContext)
+  const texts = await resolveCommitPromptTexts(input.config, options.promptContext, {
+    includeAgentClause: false,
+  })
   options.abortSignal?.throwIfAborted()
   const callOptions = {
     system: buildCommitSystemPrompt(input.config, texts.system),

@@ -199,4 +199,25 @@ describe("useAiDiffReview", () => {
       expect.objectContaining({ override: { providerOverride: "openai", model: "gpt-4o" } })
     )
   })
+
+  it("redacts file path and custom instructions outbound while keeping local reviewKey (T15 sibling)", async () => {
+    mockPii = false
+    mockSettings = {
+      gitSettings: { reviewAI: { enabled: true, customInstructions: "mail bob@example.com" } },
+    }
+    const sensitiveChange: GitFileChange = { ...change, path: "users/bob@example.com/a.ts" }
+    const { result } = renderHook(() =>
+      useAiDiffReview("/r", sensitiveChange, diff([hunk(1, "clean patch")]))
+    )
+    await act(async () => {
+      await result.current.review()
+    })
+    expect(mockGenerate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        file: { path: "RED(users/bob@example.com/a.ts)", status: "modified" },
+        config: { customInstructions: "RED(mail bob@example.com)" },
+      })
+    )
+    expect(mockClearAiFindings).toHaveBeenCalledWith("/r", "users/bob@example.com/a.ts")
+  })
 })

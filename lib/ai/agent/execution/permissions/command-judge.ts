@@ -29,6 +29,7 @@
 
 import type { LlmClient } from "@/lib/twin/distill/llm"
 import { extractJson } from "@/lib/twin/distill/llm"
+import { recordPromptResolution } from "@/lib/prompts/resolution-log"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { definePrompt, type PromptResolutionContext } from "@/lib/prompts/types"
 import { hasNoLeakingPii } from "@cognia/redact"
@@ -200,8 +201,10 @@ export async function judgeCommandSafety(
   const trimmed = (command ?? "").trim()
   if (!trimmed) return null
 
+  const promptContext = opts.promptContext ?? {}
   const guidance = await resolvePromptAsync(COMMAND_JUDGE_PROMPT, {
-    context: opts.promptContext ?? {},
+    context: promptContext,
+    record: false,
   })
   const custom = guidance.source.kind === "override" ? guidance.text : null
   const key = cacheKey(
@@ -213,12 +216,21 @@ export async function judgeCommandSafety(
   const cached = cache.get(key)
   if (cached && Date.now() - cached.at < CACHE_TTL_MS) return cached.value
 
-  // Never send a command carrying secrets / PII to the model.
-  if (!hasNoLeakingPii(trimmed)) return null
-
   const localeHint = opts.locale ? `\nReply language: ${opts.locale}` : ""
   const cwdHint = opts.cwd ? `\nWorking directory: ${opts.cwd}` : ""
   const prompt = `Command:\n${trimmed}${cwdHint}${localeHint}`
+
+  // Gate the entire assembled outbound request (command, cwd, locale, custom system)
+  // before dispatching or recording prompt usage.
+  if (!hasNoLeakingPii(prompt) || (custom !== null && !hasNoLeakingPii(custom))) return null
+
+  recordPromptResolution?.({
+    promptId: COMMAND_JUDGE_PROMPT.id,
+    source: guidance.source,
+    context: promptContext,
+    at: Date.now(),
+  })
+
   const judge = async (system: string): Promise<CommandJudgement | null> => {
     try {
       const text = await client.complete(prompt, { system, temperature: 0, maxTokens: 80 })

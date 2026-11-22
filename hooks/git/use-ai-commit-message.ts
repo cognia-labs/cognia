@@ -146,19 +146,30 @@ export function useAiCommitMessage(rootDir: string): UseAiCommitMessageResult {
         return null
       }
 
-      // PII gate: redact-and-send so config files with emails/keys don't block
-      // the feature, but the user is told placeholders went to the model.
+      // PII gate: redact-and-send across diff, draft, staged file paths, and
+      // custom instructions so nothing unredacted reaches the outbound prompt.
       const diff = gate(diffText)
       const draft = gate(useGitStore.getState().commitDraft[rootDir] ?? "")
-      if (diff.redacted || draft.redacted) toast.warning(t("commit.ai.redacted"))
+      const customInstructions =
+        config.customInstructions !== undefined ? gate(config.customInstructions) : undefined
+      let pathRedacted = false
+      const files = useGitStore.getState().status?.staged.map((f) => {
+        const gatedPath = gate(f.path)
+        if (gatedPath.redacted) pathRedacted = true
+        return { path: gatedPath.text, status: f.status }
+      })
+      if (diff.redacted || draft.redacted || customInstructions?.redacted || pathRedacted) {
+        toast.warning(t("commit.ai.redacted"))
+      }
 
-      const files = useGitStore
-        .getState()
-        .status?.staged.map((f) => ({ path: f.path, status: f.status }))
+      const gatedConfig =
+        customInstructions !== undefined
+          ? { ...config, customInstructions: customInstructions.text }
+          : config
       const input = {
         diffText: diff.text,
         files: files ?? [],
-        config,
+        config: gatedConfig,
         draftHint: draft.text,
       }
 
@@ -190,13 +201,13 @@ export function useAiCommitMessage(rootDir: string): UseAiCommitMessageResult {
           promptContext,
         })
       } else {
-        const texts = await resolveCommitPromptTexts(config, promptContext)
+        const texts = await resolveCommitPromptTexts(gatedConfig, promptContext)
         if (controller.signal.aborted) return null
         const raw = await runCommitMessageAgent(
           target,
           {
             prompt: buildCommitAgentPrompt(input, texts),
-            systemPrompt: buildCommitAgentSystemPrompt(config, texts),
+            systemPrompt: buildCommitAgentSystemPrompt(gatedConfig, texts),
             // A repository on a paired host is not a directory this machine's
             // agent can open; the diff in the prompt is all it gets.
             ...(local.kind === "local" ? { workingDirectory: local.repoPath } : {}),

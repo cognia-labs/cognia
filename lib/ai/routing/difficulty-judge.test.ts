@@ -30,6 +30,10 @@ import {
 } from "./difficulty-judge"
 import { __resetPromptVerdictsForTests } from "@/lib/prompts/resolve"
 import {
+  __resetPromptResolutionsForTests,
+  recentPromptResolutions,
+} from "@/lib/prompts/resolution-log"
+import {
   __setPromptOverrideSnapshotForTests,
   buildPromptOverrideSnapshot,
 } from "@/lib/prompts/snapshot"
@@ -108,6 +112,23 @@ describe("judgeDifficulty", () => {
     await judgeDifficulty(c, { promptText: "repeat me" })
     await judgeDifficulty(c, { promptText: "repeat me" })
     expect(complete).toHaveBeenCalledTimes(1)
+  })
+
+  it("records prompt resolution only on actual model calls, not cache hits or PII aborts (T07)", async () => {
+    __resetPromptResolutionsForTests()
+    const complete = jest.fn(async () => '{"tier":"fast"}')
+    const c = client(complete)
+
+    expect(await judgeDifficulty(c, { promptText: "contact jane@example.com now" })).toBeNull()
+    expect(complete).not.toHaveBeenCalled()
+    expect(recentPromptResolutions()).toEqual([])
+
+    await judgeDifficulty(c, { promptText: "explain the parser" })
+    await judgeDifficulty(c, { promptText: "explain the parser" })
+    expect(complete).toHaveBeenCalledTimes(1)
+    expect(
+      recentPromptResolutions().filter((entry) => entry.promptId === DIFFICULTY_JUDGE_PROMPT.id)
+    ).toHaveLength(1)
   })
 
   it("judges with customized guidance and never answers it from an older verdict (ADR-0236)", async () => {

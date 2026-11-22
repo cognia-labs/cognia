@@ -83,8 +83,14 @@ If you cannot fulfill the request (dangerous, nonsensical, or requires informati
 })
 
 /** Resolve plan instructions at each generation, including the live step limit. */
-export function buildPlanSystemPrompt(maxSteps: number): string {
-  return resolvePrompt(AI_SHELL_PLAN_PROMPT, { values: { maxSteps: String(maxSteps) } }).text
+export function buildPlanSystemPrompt(
+  maxSteps: number,
+  options: { record?: boolean } = {}
+): string {
+  return resolvePrompt(AI_SHELL_PLAN_PROMPT, {
+    values: { maxSteps: String(maxSteps) },
+    ...(options.record !== undefined ? { record: options.record } : {}),
+  }).text
 }
 
 /** Build the user-facing prompt that includes context + intent. */
@@ -202,7 +208,7 @@ export async function generatePlan(
   }
 
   // Build prompts
-  const system = buildPlanSystemPrompt(maxSteps)
+  const system = buildPlanSystemPrompt(maxSteps, { record: false })
   const prompt = buildPlanUserPrompt(intent, context)
 
   // PII gate
@@ -217,6 +223,7 @@ export async function generatePlan(
       createdAt: now,
     }
   }
+  buildPlanSystemPrompt(maxSteps, { record: true })
 
   // Notify stream listeners that generation started
   onStream?.({ id: planId, intent, steps: [], status: "generating", createdAt: now })

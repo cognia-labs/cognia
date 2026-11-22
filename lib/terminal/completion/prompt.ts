@@ -41,9 +41,13 @@ export const TERMINAL_COMPLETION_PROMPT = definePrompt({
  * Build the `{ system, prompt }` pair for `LlmClient.complete`. Synchronous,
  * on the keystroke path: it reads the loaded override snapshot.
  */
-export function buildCompletionPrompt(context: TerminalCompletionContext): {
+export function buildCompletionPrompt(
+  context: TerminalCompletionContext,
+  options: { record?: boolean } = {}
+): {
   system: string
   prompt: string
+  recordUse: () => void
 } {
   const lines: string[] = []
   lines.push(`Shell: ${context.shell} (${context.shellPath})`)
@@ -57,10 +61,17 @@ export function buildCompletionPrompt(context: TerminalCompletionContext): {
   lines.push("")
   lines.push("Partial command line to complete:")
   lines.push(context.input)
-  const system = resolvePrompt(TERMINAL_COMPLETION_PROMPT, {
-    context: context.projectId ? { workspaceId: context.projectId } : {},
-  }).text
-  return { system, prompt: lines.join("\n") }
+  const promptContext = context.projectId ? { workspaceId: context.projectId } : {}
+  const resolved = resolvePrompt(TERMINAL_COMPLETION_PROMPT, {
+    context: promptContext,
+    ...(options.record !== undefined ? { record: options.record } : {}),
+  })
+  return {
+    system: resolved.text,
+    prompt: lines.join("\n"),
+    recordUse: () =>
+      resolvePrompt(TERMINAL_COMPLETION_PROMPT, { context: promptContext, record: true }),
+  }
 }
 
 /** Strip ``` fences, leaving the inner text. */

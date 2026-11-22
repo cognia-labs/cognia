@@ -93,7 +93,10 @@ export function clipPredictionContext(text: string, maxChars: number): string {
  * it runs on a keystroke debounce, so it reads the loaded override snapshot
  * rather than waiting on the database.
  */
-export function buildGhostPrompt(ctx: GhostContext): { system: string; prompt: string } {
+export function buildGhostPrompt(
+  ctx: GhostContext,
+  options: { record?: boolean } = {}
+): { system: string; prompt: string; recordUse: () => void } {
   const lines: string[] = []
   const recent = (ctx.recentMessages ?? [])
     .slice(-RECENT_CONTEXT)
@@ -113,8 +116,15 @@ export function buildGhostPrompt(ctx: GhostContext): { system: string; prompt: s
   // up by `sanitizeGhost`.
   lines.push("Partial message to continue:")
   lines.push(`${ctx.draft}▍`)
-  const system = resolvePrompt(GHOST_TEXT_PROMPT, { context: ctx.promptContext }).text
-  return { system, prompt: lines.join("\n") }
+  const resolved = resolvePrompt(GHOST_TEXT_PROMPT, {
+    context: ctx.promptContext,
+    ...(options.record !== undefined ? { record: options.record } : {}),
+  })
+  return {
+    system: resolved.text,
+    prompt: lines.join("\n"),
+    recordUse: () => resolvePrompt(GHOST_TEXT_PROMPT, { context: ctx.promptContext, record: true }),
+  }
 }
 
 /** Strip ``` fences, leaving the inner text. */
