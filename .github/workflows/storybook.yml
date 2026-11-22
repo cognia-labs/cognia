@@ -79,9 +79,9 @@ jobs:
     env:
       STORYBOOK_DISABLE_TELEMETRY: "1"
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 26
           cache: pnpm
@@ -92,7 +92,7 @@ jobs:
       - run: pnpm storybook:test
       - name: Retain test diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: storybook-quality
           path: |
@@ -110,9 +110,9 @@ jobs:
       STORYBOOK_DISABLE_TELEMETRY: "1"
       NODE_OPTIONS: --max-old-space-size=10240
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 26
           cache: pnpm
@@ -124,7 +124,7 @@ jobs:
           STORYBOOK_FULL_CATALOG: "1"
       - name: Retain full-catalog compatibility diagnostics
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: storybook-full-catalog
           path: |
