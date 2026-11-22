@@ -653,7 +653,7 @@ describe("insight readers", () => {
       scope: "workspace",
       projectId: "p1",
       type: "semantic",
-      projectMemoryKind: "convention",
+      projectMemoryKind: "constraint",
       text: "Repo uses pnpm",
       importance: 7,
       provenance: "user",

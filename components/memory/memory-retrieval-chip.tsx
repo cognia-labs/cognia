@@ -44,6 +44,8 @@ export interface MemoryRetrievalChipProps {
   mode?: MemoryRetrievalMode
 }
 
+const LOADING_SETTINGS = Symbol("loading")
+
 export function MemoryRetrievalChip({ mode: modeOverride }: MemoryRetrievalChipProps = {}) {
   const t = useTranslations("memory.panel.retrieval")
   const [probed, setProbed] = useState<MemoryRetrievalMode | undefined>(undefined)
@@ -52,13 +54,21 @@ export function MemoryRetrievalChip({ mode: modeOverride }: MemoryRetrievalChipP
     () => listRetrievalControlSnapshot({ corpusPrefixes: MEMORY_CORPUS_PREFIXES }),
     []
   )
+  const liveSettings = useLiveQuery(
+    () => getSettings().catch(() => undefined),
+    [],
+    LOADING_SETTINGS
+  )
 
   useEffect(() => {
     if (modeOverride) return
     let cancelled = false
     void (async () => {
       try {
-        const settings = await getSettings().catch(() => undefined)
+        const settings =
+          liveSettings === LOADING_SETTINGS
+            ? await getSettings().catch(() => undefined)
+            : liveSettings
         const result = await describeMemoryRetrievalMode(resolveMemoryConfig(settings?.memory))
         if (!cancelled) setProbed(result)
       } catch {
@@ -69,7 +79,7 @@ export function MemoryRetrievalChip({ mode: modeOverride }: MemoryRetrievalChipP
     return () => {
       cancelled = true
     }
-  }, [modeOverride])
+  }, [modeOverride, liveSettings])
 
   const mode = modeOverride ?? probed
   const killSwitch = snapshot?.runtime.killSwitchEngaged ?? false

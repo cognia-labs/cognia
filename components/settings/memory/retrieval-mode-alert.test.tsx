@@ -37,6 +37,20 @@ describe("RetrievalModeAlert", () => {
     expect(onEnableHybrid).toHaveBeenCalledTimes(1)
   })
 
+  it("links to /twin where the shared embedding and vector backend is configured (G6)", () => {
+    render(
+      <RetrievalModeAlert
+        mode={{ kind: "bm25", reason: "no_backend" }}
+        onEnableHybrid={jest.fn()}
+        onAllowCloudEmbedding={jest.fn()}
+      />
+    )
+    expect(screen.getByRole("link", { name: /Configure embeddings/i })).toHaveAttribute(
+      "href",
+      "/twin"
+    )
+  })
+
   it("hides healthy and disabled states when no guidance is useful", () => {
     const { rerender } = render(
       <RetrievalModeAlert

@@ -696,3 +696,89 @@ it("matches canonical document versions independently of binary source fingerpri
     })
   )
 })
+
+describe("SourcesPart deleted memory placeholder and direct actions (N4, G2)", () => {
+  beforeEach(() => {
+    mockManageMemory.mockReset()
+    mockToastSuccess.mockReset()
+    mockToastError.mockReset()
+  })
+
+  it("renders a deleted placeholder without feedback or edit controls when a memory citation was scrubbed (N4)", () => {
+    render(
+      <SourcesPart
+        part={{
+          type: "sources",
+          sources: [
+            {
+              id: "memory-m1",
+              title: "",
+              origin: "memory",
+              memoryRef: "m1",
+              score: 0.85,
+            },
+          ],
+        }}
+        defaultOpen
+      />
+    )
+    expect(screen.getByTestId("sources-part-memory-deleted")).toHaveTextContent("Memory deleted")
+    expect(screen.queryByTestId("sources-part-feedback")).toBeNull()
+    expect(screen.queryByTestId("sources-part-memory-actions")).toBeNull()
+  })
+
+  it("supports direct inspect link, inline correction, and archive + undo from a recalled memory row (G2)", async () => {
+    mockManageMemory.mockResolvedValue({ ok: true })
+    render(
+      <SourcesPart
+        part={{
+          type: "sources",
+          sources: [
+            {
+              id: "memory-m1",
+              title: "Uses npm",
+              snippet: "Uses npm",
+              origin: "memory",
+              memoryRef: "m1",
+              messageRef: { sessionId: "s1", messageId: "msg-1" },
+            },
+          ],
+        }}
+        defaultOpen
+      />
+    )
+
+    expect(screen.getByTestId("sources-part-memory-inspect")).toHaveAttribute(
+      "href",
+      "/memory?id=m1"
+    )
+    expect(screen.getByTestId("sources-part-jump")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("sources-part-memory-edit"))
+    const input = screen.getByTestId("sources-part-memory-edit-input")
+    fireEvent.change(input, { target: { value: "Uses pnpm across workspaces" } })
+    fireEvent.click(screen.getByTestId("sources-part-memory-edit-save"))
+
+    await waitFor(() =>
+      expect(mockManageMemory).toHaveBeenCalledWith({
+        kind: "update",
+        id: "m1",
+        patch: { text: "Uses pnpm across workspaces" },
+      })
+    )
+    expect(screen.getByTestId("sources-part-snippet")).toHaveTextContent(
+      "Uses pnpm across workspaces"
+    )
+
+    fireEvent.click(screen.getByTestId("sources-part-memory-archive"))
+    await waitFor(() =>
+      expect(mockManageMemory).toHaveBeenCalledWith({ kind: "invalidate", id: "m1" })
+    )
+    expect(screen.getByTestId("sources-part-memory-restore")).toBeInTheDocument()
+
+    fireEvent.click(screen.getByTestId("sources-part-memory-restore"))
+    await waitFor(() =>
+      expect(mockManageMemory).toHaveBeenCalledWith({ kind: "restore", id: "m1" })
+    )
+  })
+})

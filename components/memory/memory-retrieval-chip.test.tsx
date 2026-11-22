@@ -12,7 +12,11 @@ let snapshot: unknown = {
   jobs: [],
   traces: [],
 }
-jest.mock("dexie-react-hooks", () => ({ useLiveQuery: () => snapshot }))
+let liveSettingsRow: unknown = undefined
+jest.mock("dexie-react-hooks", () => ({
+  useLiveQuery: (_querier: unknown, _deps: unknown, defaultResult?: unknown) =>
+    defaultResult !== undefined ? (liveSettingsRow ?? defaultResult) : snapshot,
+}))
 jest.mock("@/lib/db/retrieval-control", () => ({
   listRetrievalControlSnapshot: jest.fn(),
 }))
@@ -31,6 +35,7 @@ jest.mock("@/components/rag/retrieval-control-panel", () => ({
 
 beforeEach(() => {
   snapshot = { runtime: { killSwitchEngaged: false }, generations: [], jobs: [], traces: [] }
+  liveSettingsRow = undefined
   mockDescribe.mockClear()
 })
 
@@ -73,6 +78,21 @@ describe("MemoryRetrievalChip", () => {
 
   it("probes the live backend when no mode is supplied", async () => {
     render(<MemoryRetrievalChip />)
+    await waitFor(() =>
+      expect(screen.getByTestId("memory-retrieval-chip").textContent).toContain("Hybrid recall")
+    )
+  })
+
+  it("re-probes immediately when live settings.memory updates in Dexie (G6)", async () => {
+    mockDescribe
+      .mockResolvedValueOnce({ kind: "bm25", reason: "cloud_blocked" })
+      .mockResolvedValueOnce({ kind: "hybrid", provider: "openai" })
+    const { rerender } = render(<MemoryRetrievalChip />)
+    await waitFor(() =>
+      expect(screen.getByTestId("memory-retrieval-chip").textContent).toContain("Keyword recall")
+    )
+    liveSettingsRow = { memory: { allowCloudEmbedding: true } }
+    rerender(<MemoryRetrievalChip />)
     await waitFor(() =>
       expect(screen.getByTestId("memory-retrieval-chip").textContent).toContain("Hybrid recall")
     )

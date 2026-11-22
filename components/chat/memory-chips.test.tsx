@@ -197,6 +197,21 @@ describe("MemoryRecalledChip", () => {
     expect(screen.queryByRole("button", { name: "Open in memory console" })).not.toBeInTheDocument()
   })
 
+  it("renders a single deleted placeholder when a deleted memory's citation text was scrubbed (N4)", async () => {
+    const user = userEvent.setup()
+    mockRecalled.mockReturnValue([{ id: "m1", memory: undefined }])
+    renderIntl(
+      <MemoryRecalledChip
+        part={{
+          type: "sources",
+          sources: [{ id: "memory-m1", title: "", origin: "memory", score: 0.82 }],
+        }}
+      />
+    )
+    await user.click(screen.getByTestId("memory-recalled-chip"))
+    expect(await screen.findAllByText("Deleted from memory")).toHaveLength(1)
+  })
+
   it("shows budget, truncation and degraded notices", async () => {
     const user = userEvent.setup()
     mockRecalled.mockReturnValue([{ id: "m1", memory: memory() }])

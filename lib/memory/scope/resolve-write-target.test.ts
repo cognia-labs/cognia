@@ -18,6 +18,7 @@ function policy(writableScopes: MemoryScope[]): ResolvedAgentMemoryPolicy {
     canUpdate: writableScopes.length > 0,
     canForget: writableScopes.length > 0,
     canAutoLearn: true,
+    canLearnSession: true,
     readableScopes: ["global", "workspace", "character", "agent"],
     writableScopes,
     recallReason: "allowed",

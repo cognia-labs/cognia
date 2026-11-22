@@ -9608,10 +9608,18 @@
       "hideArtifacts": "Hide artifacts panel",
       "hideConversations": "Hide conversation list",
       "insights": "Session insights",
+      "memoryEffectiveScopes": "Effective scopes — Read: {read} · Write: {write}",
       "memoryInherit": "Inherit app setting",
       "memoryLearn": "Learn from this chat",
       "memoryOff": "Off",
       "memoryOn": "On",
+      "memoryScopeName": {
+        "agent": "Agent",
+        "character": "Character",
+        "global": "Global",
+        "workspace": "Workspace"
+      },
+      "memoryScopeNone": "None",
       "memoryUse": "Use memories in this chat",
       "modeToggle": {
         "inheritOff": "Inherit (off)",
@@ -10954,15 +10962,28 @@
     },
     "sourcesPart": {
       "agentKnowledgeHeader": "Agent Knowledge Base excerpts ({count})",
+      "archiveMemory": "Archive memory",
       "citationExpired": "The cited document version is no longer available.",
       "citationsLabel": "{count, plural, =1 {1 web source} other {# web sources}}",
       "degradedNotice": "Twin retrieval unavailable — this reply skipped the twin's documents.",
+      "editMemory": "Correct memory",
+      "editMemoryCancel": "Cancel",
+      "editMemoryLabel": "Corrected memory text",
+      "editMemorySave": "Save",
       "feedbackFailed": "Couldn't record that",
       "feedbackHelpful": "This was helpful",
       "feedbackOutdated": "This is out of date",
       "feedbackRecorded": "Thanks — noted for ranking",
       "feedbackWrong": "This didn't apply here",
+      "inspectMemory": "Open in memory console",
       "jumpMissing": "That message is no longer available.",
+      "memoryArchiveFailed": "Couldn't archive memory",
+      "memoryArchived": "Archived",
+      "memoryDeleted": "Memory deleted",
+      "memoryRestoreFailed": "Couldn't restore memory",
+      "memoryRestored": "Memory restored",
+      "memorySaveFailed": "Couldn't update memory",
+      "memorySaved": "Memory updated",
       "originLabel": {
         "agentKnowledgeBase": "Agent KB",
         "anthropic": "Web",
@@ -10984,6 +11005,7 @@
       "sourceLoading": "Opening source…",
       "sourceUnavailable": "This source is unavailable or access has been revoked.",
       "styleSamplesHeader": "Style samples ({count})",
+      "undoArchiveMemory": "Undo archive",
       "usedSources": "{count, plural, =0 {No sources} =1 {Used 1 source} other {Used # sources}}",
       "viewInChat": "View in chat",
       "viewSource": "View source"
@@ -55412,20 +55434,8 @@
         "scopes": "Allowed memory scopes",
         "title": "Memory access by caller"
       },
-      "autoExtract": {
-        "description": "After each turn, quietly extract durable facts from what you said.",
-        "heading": "Learn automatically",
-        "label": "Learn automatically"
-      },
       "cap": {
         "label": "Max active memories per scope"
-      },
-      "clearAll": {
-        "button": "Clear all",
-        "cancel": "Cancel",
-        "confirm": "Delete everything",
-        "description": "This permanently deletes every stored memory. This cannot be undone.",
-        "title": "Clear all memories?"
       },
       "cloudEmbedding": {
         "description": "Let memory text be embedded by a cloud provider. Off keeps it on-device (keyword-only).",
@@ -55470,24 +55480,6 @@
         "description": "Recall durable facts about you and inject them into future chats.",
         "heading": "Enable long-term memory",
         "label": "Enable long-term memory"
-      },
-      "externalContext": {
-        "description": "Do not learn automatically from turns that used web search, MCP, screen context, or connectors. Local code tools stay eligible.",
-        "heading": "Block external-context learning",
-        "label": "Block external-context learning"
-      },
-      "halfLife": {
-        "label": "Recency half-life (days)"
-      },
-      "hybrid": {
-        "description": "Combine semantic (vector) and keyword search when recalling.",
-        "heading": "Hybrid retrieval",
-        "label": "Hybrid retrieval"
-      },
-      "learnFromChats": {
-        "description": "Learn durable facts from eligible chats in the background. Each chat can override this independently from recall.",
-        "heading": "Learn from chats",
-        "label": "Learn from chats"
       },
       "learning": {
         "autoExtract": {
@@ -55544,7 +55536,6 @@
           "title": "Lifecycle sweep"
         }
       },
-      "manage": "Manage memories",
       "maxIdle": {
         "label": "Forget after unused days (0 = never)"
       },
@@ -55664,14 +55655,6 @@
           "label": "Facts per reply"
         }
       },
-      "queryExpansion": {
-        "description": "Widen the keyword leg with synonym expansion when recalling memories.",
-        "heading": "Query expansion",
-        "label": "Query expansion"
-      },
-      "relevanceFloor": {
-        "label": "Minimum recall relevance"
-      },
       "retrieval": {
         "beliefWeight": {
           "description": "Rank memories confirmed across several conversations higher. At off, ranking ignores corroboration; it is still shown in the memory inspector.",
@@ -55734,30 +55717,12 @@
           "store_unsupported": "The configured vector store does not support embedding search."
         }
       },
-      "scope": {
-        "character": "Per character",
-        "description": "Where new memories are stored. Narrower scopes override broader memories with the same stable key.",
-        "global": "Global (all characters)",
-        "heading": "Default scope",
-        "workspace": "Current workspace"
-      },
       "temporary": {
         "description": "Pause memory for now — neither read nor write this session.",
         "heading": "Temporary mode",
         "label": "Temporary mode"
       },
-      "title": "Memory",
-      "tokenBudget": {
-        "label": "Recall token budget"
-      },
-      "topK": {
-        "label": "Memories injected per turn"
-      },
-      "useMemory": {
-        "description": "Allow eligible chats to recall saved memories. Each chat can override this.",
-        "heading": "Use memories",
-        "label": "Use memories"
-      }
+      "title": "Memory"
     },
     "network": {
       "application": {

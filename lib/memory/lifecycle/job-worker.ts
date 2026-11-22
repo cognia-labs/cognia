@@ -1016,7 +1016,7 @@ async function processLifecycleSweep(
   const [
     { runMemoryLifecycleSweep, retentionParamsFor },
     { isDecayable, retentionScore },
-    { mergeClusterIntoSurvivor },
+    { compactMemoryText },
     { sameMemoryNamespace },
     buildDeps,
     memDb,
@@ -1025,7 +1025,7 @@ async function processLifecycleSweep(
   ] = await Promise.all([
     import("@/lib/memory/lifecycle/lifecycle-sweep"),
     import("@cognia/memory/forget/retention"),
-    import("@cognia/memory/forget/cold-cluster"),
+    import("@cognia/memory/forget/compaction"),
     import("@/lib/memory/consolidate/consolidator"),
     import("@/lib/memory/runtime/build-deps"),
     import("@/lib/db/memories"),
@@ -1194,7 +1194,10 @@ async function processLifecycleSweep(
             const effectiveText =
               mergedLosers.length === merged.length
                 ? survivorText
-                : mergeClusterIntoSurvivor(survivor, mergedLosers)
+                : (compactMemoryText(
+                    [survivor.text, ...mergedLosers.map((loser) => loser.text)].join("\n\n"),
+                    { force: true }
+                  )?.text ?? survivor.text)
             await memDb.updateMemory(survivor.id, {
               text: effectiveText,
               bumpVersion: true,

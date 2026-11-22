@@ -30,6 +30,7 @@ export default defineHostModule({
     "components/memory/memory-row.tsx",
     "hooks/memory/use-memory-command.ts",
     "hooks/memory/use-message-memories.ts",
+    "lib/memory/agent-policy.ts",
     "lib/memory/api/as-of.ts",
     "lib/memory/api/caller.ts",
     "lib/memory/api/mutate-memory.ts",

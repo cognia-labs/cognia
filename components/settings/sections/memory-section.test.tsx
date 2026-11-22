@@ -9,6 +9,11 @@ import type { MemoryConfig } from "@/types/memory/memory"
 import { MemorySection } from "./memory-section"
 
 const mockSave = jest.fn()
+let mockSearchParams = new URLSearchParams()
+jest.mock("next/navigation", () => ({
+  ...jest.requireActual("next/navigation"),
+  useSearchParams: () => mockSearchParams,
+}))
 let mockSettings: { memory?: Partial<MemoryConfig> } | null = { memory: {} }
 jest.mock("@/stores/settings", () => ({
   useSettingsStore: (selector: (s: unknown) => unknown) =>
@@ -46,6 +51,7 @@ jest.mock("@/components/chat/motion/motion-reveal", () => ({
 
 beforeEach(() => {
   jest.clearAllMocks()
+  mockSearchParams = new URLSearchParams()
   mockSettings = { memory: {} }
 })
 
@@ -193,5 +199,11 @@ describe("MemorySection", () => {
     render(<MemorySection />)
     fireEvent.click(screen.getByTestId("memory-nav-item-maintenance"))
     expect(screen.getByLabelText("Forget after unused days (0 = never)")).toHaveValue(45)
+  })
+
+  it("opens the deep-linked memoryTab panel on mount", () => {
+    mockSearchParams = new URLSearchParams("memoryTab=retrieval")
+    render(<MemorySection />)
+    expect(screen.getByRole("heading", { name: "Retrieval" })).toBeInTheDocument()
   })
 })

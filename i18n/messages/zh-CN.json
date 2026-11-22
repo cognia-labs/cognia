@@ -9608,10 +9608,18 @@
       "hideArtifacts": "折叠产物面板",
       "hideConversations": "折叠会话列表",
       "insights": "会话洞察",
+      "memoryEffectiveScopes": "生效范围 —— 读取：{read} · 写入：{write}",
       "memoryInherit": "继承应用设置",
       "memoryLearn": "从此对话学习",
       "memoryOff": "关闭",
       "memoryOn": "开启",
+      "memoryScopeName": {
+        "agent": "智能体",
+        "character": "角色",
+        "global": "全局",
+        "workspace": "工作区"
+      },
+      "memoryScopeNone": "无",
       "memoryUse": "在此对话使用记忆",
       "modeToggle": {
         "inheritOff": "继承（关闭）",
@@ -10954,15 +10962,28 @@
     },
     "sourcesPart": {
       "agentKnowledgeHeader": "Agent 知识库片段（{count}）",
+      "archiveMemory": "归档记忆",
       "citationExpired": "引用的文档版本已不可用。",
       "citationsLabel": "{count, plural, other {# 个网页来源}}",
       "degradedNotice": "数字分身检索不可用 — 本次回复未使用其资料。",
+      "editMemory": "纠正记忆",
+      "editMemoryCancel": "取消",
+      "editMemoryLabel": "纠正后的记忆内容",
+      "editMemorySave": "保存",
       "feedbackFailed": "未能记录反馈",
       "feedbackHelpful": "这条有帮助",
       "feedbackOutdated": "这条已过时",
       "feedbackRecorded": "已记录，将用于排序",
       "feedbackWrong": "这条不适用",
+      "inspectMemory": "在记忆控制台打开",
       "jumpMissing": "该消息已不存在。",
+      "memoryArchiveFailed": "无法归档记忆",
+      "memoryArchived": "已归档",
+      "memoryDeleted": "记忆已删除",
+      "memoryRestoreFailed": "无法恢复记忆",
+      "memoryRestored": "已恢复记忆",
+      "memorySaveFailed": "无法更新记忆",
+      "memorySaved": "记忆已更新",
       "originLabel": {
         "agentKnowledgeBase": "Agent 知识库",
         "anthropic": "网络",
@@ -10984,6 +11005,7 @@
       "sourceLoading": "正在打开来源…",
       "sourceUnavailable": "此来源已不可用或访问权限已被撤销。",
       "styleSamplesHeader": "风格样本（{count}）",
+      "undoArchiveMemory": "撤销归档",
       "usedSources": "{count, plural, =0 {未引用来源} =1 {引用 1 项来源} other {引用 # 项来源}}",
       "viewInChat": "在会话中查看",
       "viewSource": "查看原文"
@@ -55412,20 +55434,8 @@
         "scopes": "允许的记忆范围",
         "title": "按调用方限制记忆访问"
       },
-      "autoExtract": {
-        "description": "每轮对话后，悄悄从你说的话里抽取耐久事实。",
-        "heading": "自动学习",
-        "label": "自动学习"
-      },
       "cap": {
         "label": "每个作用域的最大活跃记忆数"
-      },
-      "clearAll": {
-        "button": "全部清除",
-        "cancel": "取消",
-        "confirm": "全部删除",
-        "description": "这将永久删除所有已存记忆，且不可恢复。",
-        "title": "清除所有记忆？"
       },
       "cloudEmbedding": {
         "description": "允许记忆文本由云端服务做向量化。关闭则仅在本机（关键词检索）。",
@@ -55470,24 +55480,6 @@
         "description": "召回关于你的耐久事实，并注入到后续对话中。",
         "heading": "启用长期记忆",
         "label": "启用长期记忆"
-      },
-      "externalContext": {
-        "description": "使用网页搜索、MCP、屏幕上下文或连接器的轮次不自动学习；本地代码工具仍可学习。",
-        "heading": "阻止外部上下文学习",
-        "label": "阻止外部上下文学习"
-      },
-      "halfLife": {
-        "label": "新近度半衰期（天）"
-      },
-      "hybrid": {
-        "description": "召回时结合语义（向量）与关键词检索。",
-        "heading": "混合检索",
-        "label": "混合检索"
-      },
-      "learnFromChats": {
-        "description": "在后台从符合条件的对话学习耐久事实；可与召回开关分别按对话覆盖。",
-        "heading": "从对话学习",
-        "label": "从对话学习"
       },
       "learning": {
         "autoExtract": {
@@ -55544,7 +55536,6 @@
           "title": "生命周期清理"
         }
       },
-      "manage": "管理记忆",
       "maxIdle": {
         "label": "未使用后遗忘天数（0 为永不）"
       },
@@ -55664,14 +55655,6 @@
           "label": "每次回复的事实条数"
         }
       },
-      "queryExpansion": {
-        "description": "召回记忆时用同义词扩展加宽关键词检索。",
-        "heading": "查询扩展",
-        "label": "查询扩展"
-      },
-      "relevanceFloor": {
-        "label": "最低召回相关度"
-      },
       "retrieval": {
         "beliefWeight": {
           "description": "让在多次对话中得到印证的记忆排得更靠前。关闭时排序不考虑佐证，但记忆检查器中仍会显示。",
@@ -55734,30 +55717,12 @@
           "store_unsupported": "已配置的向量存储不支持向量检索。"
         }
       },
-      "scope": {
-        "character": "按人格",
-        "description": "新记忆的存储位置。相同稳定键下，更窄的作用域覆盖更宽的记忆。",
-        "global": "全局（所有人格）",
-        "heading": "默认作用域",
-        "workspace": "当前工作区"
-      },
       "temporary": {
         "description": "暂停记忆——本次会话既不读取也不写入。",
         "heading": "临时模式",
         "label": "临时模式"
       },
-      "title": "记忆",
-      "tokenBudget": {
-        "label": "召回 Token 预算"
-      },
-      "topK": {
-        "label": "每轮注入的记忆数"
-      },
-      "useMemory": {
-        "description": "允许符合条件的对话召回已保存记忆；每个对话可单独覆盖。",
-        "heading": "使用记忆",
-        "label": "使用记忆"
-      }
+      "title": "记忆"
     },
     "network": {
       "application": {

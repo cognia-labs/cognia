@@ -33,15 +33,20 @@ import { ExternalLink } from "@/components/shared/external-link"
 import { toast } from "sonner"
 import {
   AlertTriangleIcon,
+  ArchiveIcon,
   BookIcon,
   BrainIcon,
+  CheckIcon,
   ChevronDownIcon,
   ClockAlertIcon,
   ExternalLinkIcon,
   FolderGit2Icon,
+  PencilIcon,
   SparklesIcon,
   ThumbsDownIcon,
   ThumbsUpIcon,
+  Undo2Icon,
+  XIcon,
 } from "lucide-react"
 import { MAX_PREVIEW_CHARS } from "@/components/twin/source-content-preview"
 import { TwinSourcePreviewDialog } from "@/components/twin/twin-source-preview-dialog"
@@ -281,7 +286,7 @@ const JumpToSourceButton = memo(function JumpToSourceButton({
   return (
     <button
       type="button"
-      className="ml-auto text-2xs text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded-sm"
+      className="text-2xs text-muted-foreground hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 rounded-sm"
       data-testid="sources-part-jump"
       onClick={() => {
         void import("@/lib/chat/cross-session-jump")
@@ -354,10 +359,7 @@ const MemoryFeedbackButtons = memo(function MemoryFeedbackButtons({
   )
 
   return (
-    <span
-      className="ml-auto flex shrink-0 items-center gap-0.5"
-      data-testid="sources-part-feedback"
-    >
+    <span className="flex shrink-0 items-center gap-0.5" data-testid="sources-part-feedback">
       {RETRIEVAL_FEEDBACK_OPTIONS.map(({ verdict, labelKey, Icon }) => (
         <button
           key={verdict}
@@ -561,6 +563,69 @@ const KnowledgeSourceButton = memo(function KnowledgeSourceButton({
 
 const SourceRow = memo(function SourceRow({ source }: { source: SourcesPartItem }) {
   const t = useTranslations("chat.sourcesPart")
+  const isMemoryOrigin = source.origin === "memory" || source.origin === "project-claim"
+  const isScrubbedMemory = isMemoryOrigin && !source.title.trim() && !source.snippet
+  const [editing, setEditing] = useState(false)
+  const [editedText, setEditedText] = useState<string | null>(null)
+  const [draft, setDraft] = useState(source.snippet ?? source.title)
+  const [archived, setArchived] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const currentText = editedText ?? source.snippet ?? source.title
+  const displayTitle = editedText ?? source.title
+
+  const saveEdit = async () => {
+    if (!source.memoryRef) return
+    const next = draft.trim()
+    if (!next || next === currentText) {
+      setEditing(false)
+      return
+    }
+    setBusy(true)
+    try {
+      const { runMemoryCommand } = await import("@/lib/memory/control-plane/routed-manage")
+      const result = await runMemoryCommand({
+        kind: "update",
+        id: source.memoryRef,
+        patch: { text: next },
+      })
+      if (result.ok) {
+        setEditedText(next)
+        setEditing(false)
+        toast.success(t("memorySaved"))
+      } else {
+        toast.error(t("memorySaveFailed"))
+      }
+    } catch {
+      toast.error(t("memorySaveFailed"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const toggleArchive = async (nextArchived: boolean) => {
+    if (!source.memoryRef) return
+    setBusy(true)
+    try {
+      const { runMemoryCommand } = await import("@/lib/memory/control-plane/routed-manage")
+      const result = await runMemoryCommand({
+        kind: nextArchived ? "invalidate" : "restore",
+        id: source.memoryRef,
+      })
+      if (result.ok) {
+        setArchived(nextArchived)
+        setEditing(false)
+        toast.success(t(nextArchived ? "memoryArchived" : "memoryRestored"))
+      } else {
+        toast.error(t(nextArchived ? "memoryArchiveFailed" : "memoryRestoreFailed"))
+      }
+    } catch {
+      toast.error(t(nextArchived ? "memoryArchiveFailed" : "memoryRestoreFailed"))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const body = (
     <div
       className="flex w-full items-start gap-2"
@@ -575,38 +640,174 @@ const SourceRow = memo(function SourceRow({ source }: { source: SourcesPartItem 
       ) : (
         originIcon(source.origin)
       )}
-      <div className="flex min-w-0 flex-1 flex-col">
+      <div className="flex min-w-0 flex-1 flex-col gap-1">
         <div className="flex items-center gap-2">
-          <span className="truncate font-medium">{source.title}</span>
+          {isScrubbedMemory ? (
+            <span
+              className="truncate italic text-muted-foreground"
+              data-testid="sources-part-memory-deleted"
+            >
+              {t("memoryDeleted")}
+            </span>
+          ) : (
+            <span className={cn("truncate font-medium", archived && "line-through opacity-70")}>
+              {displayTitle}
+            </span>
+          )}
           <Badge variant="secondary" className="text-2xs" data-testid="sources-part-origin">
             {t(`originLabel.${ORIGIN_LABEL_KEY[source.origin]}`)}
           </Badge>
+          {archived && (
+            <Badge variant="outline" className="text-2xs text-muted-foreground">
+              {t("memoryArchived")}
+            </Badge>
+          )}
           {typeof source.score === "number" && (
             <span className="text-2xs text-muted-foreground" data-testid="sources-part-score">
               {source.score.toFixed(2)}
             </span>
           )}
-          {source.chunkRef && (
-            <Link
-              href={buildTwinDeepLink(source.chunkRef)}
-              className="ml-auto text-2xs text-muted-foreground hover:text-primary"
-              data-testid="sources-part-view-source"
-            >
-              {t("viewSource")}
-            </Link>
-          )}
-          {source.knowledgeBaseRef && <KnowledgeSourceButton reference={source.knowledgeBaseRef} />}
-          {source.messageRef && !source.chunkRef && !source.knowledgeBaseRef && (
-            <JumpToSourceButton messageRef={source.messageRef} />
-          )}
-          {source.memoryRef && <MemoryFeedbackButtons memoryId={source.memoryRef} />}
+          <div className="ml-auto flex shrink-0 items-center gap-1.5">
+            {source.chunkRef && (
+              <Link
+                href={buildTwinDeepLink(source.chunkRef)}
+                className="text-2xs text-muted-foreground hover:text-primary"
+                data-testid="sources-part-view-source"
+              >
+                {t("viewSource")}
+              </Link>
+            )}
+            {source.knowledgeBaseRef && (
+              <KnowledgeSourceButton reference={source.knowledgeBaseRef} />
+            )}
+            {source.messageRef && !source.chunkRef && !source.knowledgeBaseRef && (
+              <JumpToSourceButton messageRef={source.messageRef} />
+            )}
+            {source.memoryRef && !isScrubbedMemory && (
+              <span
+                className="flex shrink-0 items-center gap-0.5"
+                data-testid="sources-part-memory-actions"
+              >
+                {!archived && (
+                  <>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      title={t("editMemory")}
+                      aria-label={t("editMemory")}
+                      data-testid="sources-part-memory-edit"
+                      className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40"
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        setDraft(currentText)
+                        setEditing((prev) => !prev)
+                      }}
+                    >
+                      <PencilIcon className="size-3" aria-hidden="true" />
+                    </button>
+                    <button
+                      type="button"
+                      disabled={busy}
+                      title={t("archiveMemory")}
+                      aria-label={t("archiveMemory")}
+                      data-testid="sources-part-memory-archive"
+                      className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40"
+                      onClick={(event) => {
+                        event.preventDefault()
+                        event.stopPropagation()
+                        void toggleArchive(true)
+                      }}
+                    >
+                      <ArchiveIcon className="size-3" aria-hidden="true" />
+                    </button>
+                  </>
+                )}
+                {archived && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    title={t("undoArchiveMemory")}
+                    aria-label={t("undoArchiveMemory")}
+                    data-testid="sources-part-memory-restore"
+                    className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60 disabled:opacity-40"
+                    onClick={(event) => {
+                      event.preventDefault()
+                      event.stopPropagation()
+                      void toggleArchive(false)
+                    }}
+                  >
+                    <Undo2Icon className="size-3" aria-hidden="true" />
+                  </button>
+                )}
+                <Link
+                  href={`/memory?id=${encodeURIComponent(source.memoryRef)}`}
+                  title={t("inspectMemory")}
+                  aria-label={t("inspectMemory")}
+                  data-testid="sources-part-memory-inspect"
+                  className="rounded-sm p-0.5 text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/60"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <ExternalLinkIcon className="size-3" aria-hidden="true" />
+                </Link>
+              </span>
+            )}
+            {source.memoryRef && !isScrubbedMemory && !archived && (
+              <MemoryFeedbackButtons memoryId={source.memoryRef} />
+            )}
+          </div>
         </div>
-        {source.snippet && (
+        {editing && source.memoryRef && (
+          <div className="flex items-center gap-1" data-testid="sources-part-memory-editor">
+            <input
+              type="text"
+              value={draft}
+              aria-label={t("editMemoryLabel")}
+              data-testid="sources-part-memory-edit-input"
+              onChange={(event) => setDraft(event.target.value)}
+              onClick={(event) => event.stopPropagation()}
+              className="h-6 min-w-0 flex-1 rounded border border-border bg-background px-1.5 text-xs text-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            />
+            <button
+              type="button"
+              disabled={busy || !draft.trim()}
+              aria-label={t("editMemorySave")}
+              data-testid="sources-part-memory-edit-save"
+              className="rounded p-1 text-primary hover:bg-muted disabled:opacity-40"
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                void saveEdit()
+              }}
+            >
+              <CheckIcon className="size-3" aria-hidden="true" />
+            </button>
+            <button
+              type="button"
+              disabled={busy}
+              aria-label={t("editMemoryCancel")}
+              data-testid="sources-part-memory-edit-cancel"
+              className="rounded p-1 text-muted-foreground hover:bg-muted"
+              onClick={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+                setDraft(currentText)
+                setEditing(false)
+              }}
+            >
+              <XIcon className="size-3" aria-hidden="true" />
+            </button>
+          </div>
+        )}
+        {!isScrubbedMemory && (editedText ?? source.snippet) && (
           <span
-            className="line-clamp-2 break-words text-muted-foreground"
+            className={cn(
+              "line-clamp-2 break-words text-muted-foreground",
+              archived && "line-through opacity-70"
+            )}
             data-testid="sources-part-snippet"
           >
-            {source.snippet}
+            {editedText ?? source.snippet}
           </span>
         )}
       </div>

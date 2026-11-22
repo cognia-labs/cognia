@@ -49,7 +49,7 @@ function makeDeps(
   const calls: string[] = []
   const deps = {
     listActive: jest.fn(async () => rows),
-    reviseText: jest.fn(
+    reviseText: jest.fn<Promise<boolean | void>, Parameters<LifecycleSweepDeps["reviseText"]>>(
       async (memory: Memory, _text: string, reason: "compaction" | "dedup-merge", _now: number) => {
         calls.push(`revise:${reason}:${memory.id}`)
       }

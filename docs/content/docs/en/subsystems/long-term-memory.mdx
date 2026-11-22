@@ -5,24 +5,25 @@ description: Durable personal recall — how a fact gets extracted from a conver
 
 # Long-term Memory
 
-<Status variant="beta">Beta · memories schema v65 → governance v118 → v122</Status>
+<Status variant="beta">Beta · memories schema v65 → governance v118 → operations & backfill v212</Status>
 
 <TLDR>
   A **learned memory** is a durable fact inferred from a conversation or deliberately saved by the user. Writing
   uses one entry point — `storeMemoryCore()` (`lib/memory/api/store-memory.ts:78`) — and reading uses
   another — `retrieveMemories()` (`packages/memory/src/retrieve/retriever.ts:266`), which
   `applyMemoryContext()` (`packages/memory/src/runtime/apply-memory-context.ts:102`) folds into the turn.
-  **Provenance** enforces the safety boundary: only `user` / `explicit` memories may ever be `procedural`, so an
+  **Provenance** enforces the safety boundary: only `user` / `explicit` memories may ever be active `procedural`, so an
   inbound connector message cannot silently rewrite how the agent behaves. Everything durable lives in
-  four Dexie tables — `memories` plus the immutable `memoryEvidence`, the durable `memoryJobs` queue, and
-  the content-free `memoryAuditEvents` — introduced together at **schema v118**.
+  six Dexie tables — `memories`, immutable `memoryEvidence`, the leased `memoryJobs` queue,
+  content-free `memoryAuditEvents`, idempotent `memoryOperations` receipts, and `projectMiningRuns`
+  for workspace history backfill.
 </TLDR>
 
 <StatGrid>
-  <Stat label="Core modules" value="28" hint="lib/memory — non-test .ts" />
-  <Stat label="Extracted core" value="20" hint="packages/memory/src — zero app imports" />
+  <Stat label="Core modules" value="28+" hint="lib/memory — non-test .ts" />
+  <Stat label="Extracted core" value="20+" hint="packages/memory/src — zero app imports" />
   <Stat label="UI components" value="9" hint="components/memory" />
-  <Stat label="Dexie tables" value="4" hint="memories · memoryEvidence · memoryJobs · memoryAuditEvents" />
+  <Stat label="Dexie tables" value="6" hint="memories · evidence · jobs · audit · ops · runs" />
   <Stat label="Memory types" value="3" hint="semantic · episodic · procedural" />
   <Stat label="Scopes" value="4" hint="global · workspace · character · agent" />
 </StatGrid>
@@ -56,8 +57,9 @@ lib/memory/
                   manage-for-caller · mirror-memory                     # host side / paired mirror of a manage command
   retrieve/       retriever                                             # scope-union read
   extract/        extractor · salience                                  # conversation → candidate facts
-  write/          run-memory-extraction · run-episodic-distill          # background write jobs
-  consolidate/    consolidator                                          # merge near-duplicates
+  write/          run-memory-extraction · run-episodic-distill · run-project-mining
+  backfill/       backfill-service · project-mining-backfill · repair-workspace-scope
+  consolidate/    consolidator                                          # 6-op merge & conflict/quarantine
   forget/         decay                                                 # importance decay + eviction
   lifecycle/      job-worker · maintenance · enqueue-reconcile          # the memoryJobs queue
   control-plane/  policy · manage · contamination                       # governance decisions
@@ -134,7 +136,7 @@ indexes and adds three tables that deliberately do not live inside the memory ro
 - `memoryJobs` — the durable extraction queue (`dedupeKey`, `nextAttemptAt`, `[status+queuedAt]`)
 - `memoryAuditEvents` — content-free audit trail
 
-**v122** adds a `sourceMessageId` index so the chat surface can find the memories a given message produced.
+**v122** adds a `sourceMessageId` index so the chat surface can find the memories a given message produced. Later migrations add `memoryOperations` (atomic idempotency receipts for paired/external mutations) and `projectMiningRuns` (leased, cursor-paged workspace history backfill), plus revision snapshots (`revisionOf`) and scrubbing of deleted memory excerpts from persisted assistant `SourcesPart` items.
 
 ## External surfaces
 
@@ -148,7 +150,7 @@ Three surfaces can reach memory from outside the app, and all of them write thro
 - **Plugins** — `ctx.memory`, built per-plugin by `createMemoryAPI(pluginId)`
   (`lib/plugin/api/memory-api.ts:112`).
 - **Companion RPC** — the mobile/remote surface, over the transport described in
-  [Companion API](./companion-api).
+  [Companion API](./companion-api). Both direct reads (`memory_list`, `memory_search`) and `memories` delta sync enforce device `principalGrants` and `pairedReader` (`owner` vs `member`) personal-memory visibility.
 
 ### Managing memory from a paired client
 
@@ -158,8 +160,10 @@ where they run: on the host when a remote host transport is active or the runtim
 (a browser on a headless brain host, a desktop driving a remote host, a paired phone); locally
 otherwise, including a standalone Capacitor phone with no host. A host-bound command is PII-gated, queued
 as `memory_mutate` `{ command, operationId }`, and applied optimistically to the local mirror. The host's
-`manageMemoryForCaller()` checks the device's namespace grants and replays through the operation ledger;
-a refusal rewinds the `memories` sync cursor and re-pulls the canonical rows. See ADR-0069 §8.
+`manageMemoryForCaller()` checks the device's namespace grants (plus owner-only authority when approving
+procedural instructions) and commits the mutation and its `memoryOperations` receipt atomically; a retry
+after an interrupted response replays the committed receipt or reconciles any partial state without
+stranding the operation in `pending`. A refusal rewinds the `memories` sync cursor and re-pulls canonical rows. See ADR-0069 §8.
 
 ## Related
 

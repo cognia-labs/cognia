@@ -595,6 +595,7 @@ export async function buildProjectMiningDeps(
   const write = params.withCanonicalWrite ?? (<T>(operation: () => Promise<T>) => operation())
   let activeExcerpts: ReadonlyMap<string, string> | undefined
   let activeToolExcerpts: ReadonlyMap<string, string> | undefined
+  let activeCandidates: readonly ConsolidationCandidate[] = []
 
   const consolidateDeps: ConsolidateDeps = {
     client,
@@ -632,17 +633,32 @@ export async function buildProjectMiningDeps(
         .map((hit) => hit.memory)
         .filter((memory) => sameMemoryNamespace(memory, namespace))
     },
-    persist: async (pInput, candidate) => {
+    persist: async (pInput) => {
       const row = await write(async () => {
         const created = await memDb.createMemory(pInput)
         if (params.recordCanonicalOperation) {
+          const matchedCandidate: ConsolidationCandidate = activeCandidates.find(
+            (candidate) =>
+              candidate.text === pInput.text &&
+              candidate.projectClaim?.evidenceHash === pInput.evidenceHash &&
+              candidate.projectClaim?.projectMemoryKind === pInput.projectMemoryKind
+          ) ?? {
+            type: pInput.type,
+            text: pInput.text,
+            importance: pInput.importance,
+          }
           const targetId = pInput.conflictWithIds?.[0]
           const op: ConsolidationOp =
             pInput.reviewStatus === "conflict" && targetId
-              ? { op: "CONFLICT", memory: created, targetId, candidate }
-              : pInput.trustState === "quarantined" && candidate
-                ? { op: "QUARANTINE", memory: created, candidate }
-                : { op: "ADD", memory: created, candidate }
+              ? { op: "CONFLICT", memory: created, targetId, candidate: matchedCandidate }
+              : pInput.trustState === "quarantined"
+                ? {
+                    op: "QUARANTINE",
+                    memory: created,
+                    candidate: matchedCandidate,
+                    reason: "judge_unavailable",
+                  }
+                : { op: "ADD", memory: created, candidate: matchedCandidate }
           await params.recordCanonicalOperation(op, {
             excerpts: activeExcerpts,
             toolExcerpts: activeToolExcerpts,
@@ -723,7 +739,7 @@ export async function buildProjectMiningDeps(
             })
             if (params.recordCanonicalOperation) {
               await params.recordCanonicalOperation(
-                { op: "INVALIDATE", targetId: id, supersededById: replacement.id },
+                { op: "DELETE", targetId: id },
                 { excerpts: activeExcerpts, toolExcerpts: activeToolExcerpts }
               )
             }
@@ -750,6 +766,7 @@ export async function buildProjectMiningDeps(
       }),
     consolidate: async (requestedInput) => {
       const cInput = { ...requestedInput, permissions: requestedInput.permissions ?? permissions }
+      activeCandidates = cInput.candidates
       const judgedDeps: ConsolidateDeps = {
         ...consolidateDeps,
         decideSystemPrompt: await resolveConsolidateSystemPrompt(),
@@ -807,11 +824,8 @@ export async function buildProjectMiningDeps(
                     cInput,
                     {
                       ...judgedDeps,
-                      persist: (pInput, candidateArg) =>
-                        consolidateDeps.persist(
-                          { ...pInput, trustState: "quarantined" },
-                          candidateArg
-                        ),
+                      persist: (pInput) =>
+                        consolidateDeps.persist({ ...pInput, trustState: "quarantined" }),
                     },
                     previous.id,
                     result.reason
@@ -824,8 +838,8 @@ export async function buildProjectMiningDeps(
                 cInput,
                 {
                   ...judgedDeps,
-                  persist: (pInput, candidateArg) =>
-                    consolidateDeps.persist({ ...pInput, trustState: "quarantined" }, candidateArg),
+                  persist: (pInput) =>
+                    consolidateDeps.persist({ ...pInput, trustState: "quarantined" }),
                 },
                 previous.id,
                 "update_denied"
@@ -843,15 +857,12 @@ export async function buildProjectMiningDeps(
               // External source instructions must never overwrite trusted workspace
               // facts. Keep new attachment findings as explicit review drafts.
               findSimilar: async () => [],
-              persist: (pInput, candidateArg) =>
-                consolidateDeps.persist(
-                  {
-                    ...pInput,
-                    trustState: "quarantined",
-                    reviewStatus: "unreviewed",
-                  },
-                  candidateArg
-                ),
+              persist: (pInput) =>
+                consolidateDeps.persist({
+                  ...pInput,
+                  trustState: "quarantined",
+                  reviewStatus: "unreviewed",
+                }),
             }
           : judgedDeps
       )

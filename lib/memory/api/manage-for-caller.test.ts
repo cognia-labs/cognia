@@ -389,8 +389,15 @@ describe("canonical command and receipt atomicity", () => {
   })
 
   it.each([
-    { kind: "create", text: "" },
-    { kind: "create", text: "fact", scope: "workspace" },
+    { kind: "create", text: "", type: "semantic", importance: 5, tags: [] as string[] },
+    {
+      kind: "create",
+      text: "fact",
+      type: "semantic",
+      importance: 5,
+      tags: [] as string[],
+      scope: "workspace",
+    },
   ] as const)(
     "releases pre-write validation failures and permits a corrected retry: %o",
     async (command) => {
@@ -399,7 +406,10 @@ describe("canonical command and receipt atomicity", () => {
       expect(await findMemoryOperation(device.principalId, context.operationId)).toBeUndefined()
       mockManage.mockResolvedValueOnce({ ok: true, memoryId: "corrected" })
       await expect(
-        manageMemoryForCaller({ kind: "create", text: "corrected fact" }, context)
+        manageMemoryForCaller(
+          { kind: "create", text: "corrected fact", type: "semantic", importance: 5, tags: [] },
+          context
+        )
       ).resolves.toMatchObject({ ok: true })
     }
   )

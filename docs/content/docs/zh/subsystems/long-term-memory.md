@@ -5,24 +5,24 @@ description: 持久化的个人记忆 —— 一条事实如何从对话中被�
 
 # 长期记忆
 
-<Status variant="beta">Beta · memories schema v65 → 治理 v118 → v122</Status>
+<Status variant="beta">Beta · memories schema v65 → 治理 v118 → 幂等与回填 v212</Status>
 
 <TLDR>
   **学习到的记忆（learned memory）**是从对话中推断、或由用户主动保存的持久事实。写入只有一个入口 ——
   `storeMemoryCore()`（`lib/memory/api/store-memory.ts:78`）；读取也只有一个入口 ——
   `retrieveMemories()`（`packages/memory/src/retrieve/retriever.ts:266`），再由
   `applyMemoryContext()`（`packages/memory/src/runtime/apply-memory-context.ts:102`）加入当前回合。
-  真正保证安全的是**来源（provenance）**：只有 `user` / `explicit` 来源的记忆才可能是 `procedural`，
-  因此一条从连接器进来的消息无法悄悄改写 Agent 的长期行为。所有持久化数据落在四张 Dexie 表 ——
-  `memories` 加上不可变的 `memoryEvidence`、持久任务队列 `memoryJobs`、以及不含内容的
-  `memoryAuditEvents` —— 它们在 **schema v118** 一同引入。
+  真正保证安全的是**来源（provenance）**：只有 `user` / `explicit` 来源的记忆才可能是直接生效的 `procedural`，
+  因此一条从连接器进来的消息无法悄悄改写 Agent 的长期行为。所有持久化数据落在六张 Dexie 表 ——
+  `memories`、不可变的 `memoryEvidence`、租约式持久任务队列 `memoryJobs`、不含内容的
+  `memoryAuditEvents`、幂等操作回执 `memoryOperations` 以及工作区历史回填运行表 `projectMiningRuns`。
 </TLDR>
 
 <StatGrid>
-  <Stat label="核心模块" value="28" hint="lib/memory —— 非测试 .ts" />
-  <Stat label="抽取出的内核" value="20" hint="packages/memory/src —— 零 app 导入" />
+  <Stat label="核心模块" value="28+" hint="lib/memory —— 非测试 .ts" />
+  <Stat label="抽取出的内核" value="20+" hint="packages/memory/src —— 零 app 导入" />
   <Stat label="UI 组件" value="9" hint="components/memory" />
-  <Stat label="Dexie 表" value="4" hint="memories · memoryEvidence · memoryJobs · memoryAuditEvents" />
+  <Stat label="Dexie 表" value="6" hint="memories · evidence · jobs · audit · ops · runs" />
   <Stat label="记忆类型" value="3" hint="semantic · episodic · procedural" />
   <Stat label="作用域" value="4" hint="global · workspace · character · agent" />
 </StatGrid>
@@ -52,8 +52,9 @@ lib/memory/
                   manage-for-caller · mirror-memory                     # 管理命令的主机端 / 配对镜像
   retrieve/       retriever                                             # 作用域并集读取
   extract/        extractor · salience                                  # 对话 → 候选事实
-  write/          run-memory-extraction · run-episodic-distill          # 后台写入任务
-  consolidate/    consolidator                                          # 合并近重复项
+  write/          run-memory-extraction · run-episodic-distill · run-project-mining
+  backfill/       backfill-service · project-mining-backfill · repair-workspace-scope
+  consolidate/    consolidator                                          # 六态整合与冲突/隔离治理
   forget/         decay                                                 # 重要度衰减 + 淘汰
   lifecycle/      job-worker · maintenance · enqueue-reconcile          # memoryJobs 队列
   control-plane/  policy · manage · contamination                       # 治理决策
@@ -119,7 +120,7 @@ type MemorySensitivity        = "normal" | "sensitive"
 - `memoryJobs` —— 持久化抽取队列（`dedupeKey`、`nextAttemptAt`、`[status+queuedAt]`）
 - `memoryAuditEvents` —— 不含内容的审计轨迹
 
-**v122** 增加 `sourceMessageId` 索引，让聊天界面能找到某条消息产生了哪些记忆。
+**v122** 增加 `sourceMessageId` 索引，让聊天界面能找到某条消息产生了哪些记忆。后续迁移新增了 `memoryOperations`（配对/外部变更的原子幂等回执账本）与 `projectMiningRuns`（带租约与游标的工作区历史回填），并补齐了修订历史快照（`revisionOf`）及硬删除时对历史回答 `SourcesPart` 摘录副本的同步擦除。
 
 ## 外部接口面
 
@@ -127,11 +128,11 @@ type MemorySensitivity        = "normal" | "sensitive"
 
 - **MCP 工具**（`lib/external-bridge/handlers/memory.ts`）—— `memory_search` / `memory_list` 归于 `memory:read` 权限，`memory_store` / `memory_update` / `memory_forget` 归于 `memory:write`。两个权限默认均为 **OFF**：这是蒸馏后的个人内容，暴露必须是显式选择。
 - **插件** —— `ctx.memory`，由 `createMemoryAPI(pluginId)` 按插件构建（`lib/plugin/api/memory-api.ts:112`）。
-- **Companion RPC** —— 移动端 / 远程接口面，走 [Companion API](./companion-api) 所述传输层。
+- **Companion RPC** —— 移动端 / 远程接口面，走 [Companion API](./companion-api) 所述传输层。直读接口（`memory_list`、`memory_search`）与 `memories` 增量/冷启动同步均强制校验设备 `principalGrants` 与 `pairedReader`（`owner` / `member`）个人可见性边界。
 
 ### 从配对客户端管理记忆
 
-控制台自身的写操作（置顶、归档、恢复、移动、编辑、解决冲突、删除、清空）都经过 `runMemoryCommand()`（`lib/memory/control-plane/routed-manage.ts`）。`memoryWriteAuthority()` 决定它们在哪里执行：远程主机传输处于活动状态或运行时目标是 companion（headless 大脑主机上的浏览器、驱动远程主机的桌面端、已配对的手机）时在主机上执行；否则在本地执行，包括没有主机的独立 Capacitor 手机。发往主机的命令先过 PII 门禁，作为 `memory_mutate` `{ command, operationId }` 入队，并乐观地应用到本地镜像。主机端的 `manageMemoryForCaller()` 检查设备的命名空间授权，并通过操作账本重放；被拒绝时回退 `memories` 同步游标并重新拉取规范行。见 ADR-0069 §8。
+控制台自身的写操作（置顶、归档、恢复、移动、编辑、解决冲突、删除、清空）都经过 `runMemoryCommand()`（`lib/memory/control-plane/routed-manage.ts`）。`memoryWriteAuthority()` 决定它们在哪里执行：远程主机传输处于活动状态或运行时目标是 companion（headless 大脑主机上的浏览器、驱动远程主机的桌面端、已配对的手机）时在主机上执行；否则在本地执行，包括没有主机的独立 Capacitor 手机。发往主机的命令先过 PII 门禁，作为 `memory_mutate` `{ command, operationId }` 入队，并乐观地应用到本地镜像。主机端的 `manageMemoryForCaller()` 检查设备的命名空间授权（审核启用 `procedural` 记忆额外要求 `owner` 身份），并在同一事务内提交数据变更与 `memoryOperations` 回执；若网络或进程在回执返回前中断，重试会重放已完成回执或自动恢复未决记录，不会永久停留在 `pending`。被拒绝时回退 `memories` 同步游标并重新拉取规范行。见 ADR-0069 §8。
 
 ## 相关文档
 

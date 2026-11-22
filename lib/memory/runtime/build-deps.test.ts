@@ -243,7 +243,13 @@ describe("personal memory provenance", () => {
     const sourceMark = mark({ kind: "local-person" })
     const fact = memory("candidate", { personalMarks: [sourceMark] })
     const second = memory("candidate-2", { sourceMessageId: "public-rerank-2" })
-    const rerankSpy = jest.fn(async () => [0, 1])
+    const rerankSpy = jest.fn(
+      async () =>
+        new Map([
+          [fact.id, 0.9],
+          [second.id, 0.5],
+        ])
+    )
     const deps = withPersonalMemoryVisibility(
       {
         loadCandidates: async () => [fact, second],
@@ -255,14 +261,10 @@ describe("personal memory provenance", () => {
     )
     expect(await deps.loadCandidates()).toEqual([fact, second])
     expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
-    await deps.rerank?.(
-      "query",
-      [
-        { memory: fact, relevance: 0.9, score: 0.8 },
-        { memory: second, relevance: 0.7, score: 0.6 },
-      ] as never,
-      2
-    )
+    await deps.rerank?.("query", [
+      { id: fact.id, text: fact.text },
+      { id: second.id, text: second.text },
+    ])
     expect(rerankSpy).toHaveBeenCalledTimes(1)
     expect((await getDb().executionRuns.get(run.id))?.personalMarks).toEqual([sourceMark])
   })

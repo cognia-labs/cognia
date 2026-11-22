@@ -290,16 +290,21 @@ export function MemoryRecalledChip({ part }: { part: SourcesPart }) {
           {items.map((item, index) => {
             const id = ids[index]
             const live = resolved.find((ref) => ref.id === id)?.memory
-            const text = live?.text ?? item.snippet ?? item.title
+            const rawText = live?.text ?? item.snippet ?? item.title
+            const scrubbed = !live && !rawText.trim()
             return (
               <li
                 key={item.id}
                 className="flex flex-col gap-0.5 border-b border-border/40 pb-2 last:border-b-0 last:pb-0"
               >
-                <p className="text-xs leading-snug">{text}</p>
+                <p
+                  className={cn("text-xs leading-snug", scrubbed && "italic text-muted-foreground")}
+                >
+                  {scrubbed ? t("memoryChips.deletedFallback") : rawText}
+                </p>
                 <div className="flex items-center gap-1 text-2xs text-muted-foreground">
                   {item.score !== undefined && <span>{Math.round(item.score * 100)}%</span>}
-                  {!live && <span>{t("memoryChips.deletedFallback")}</span>}
+                  {!live && !scrubbed && <span>{t("memoryChips.deletedFallback")}</span>}
                   <span className="flex-1" />
                   {live && (
                     <Button

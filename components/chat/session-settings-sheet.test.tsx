@@ -1206,6 +1206,9 @@ describe("SessionSettingsSheet", () => {
         </Wrapper>
       )
       expect(screen.getByRole("combobox", { name: /use memories/i })).toBeInTheDocument()
+      expect(screen.getByTestId("session-memory-effective-scopes")).toHaveTextContent(
+        /Effective scopes — Read: None/i
+      )
       expect(screen.getByTestId("session-settings-section-memory-count")).toHaveTextContent("1")
       expect(screen.getByTestId("session-settings-section-behavior-count")).toHaveTextContent("2")
       expect(screen.getByTestId("session-settings-footer-summary")).toHaveTextContent(

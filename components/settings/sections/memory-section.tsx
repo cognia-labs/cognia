@@ -20,6 +20,7 @@
  */
 
 import { useState } from "react"
+import { useSearchParams } from "next/navigation"
 import { useTranslations } from "next-intl"
 import { BrainIcon } from "lucide-react"
 
@@ -36,7 +37,11 @@ import { MemoryDangerZone } from "@/components/settings/memory/danger-zone"
 import { MemoryPrincipalAccess } from "@/components/settings/memory/principal-access"
 import { MemoryToggleRow } from "@/components/settings/memory/memory-controls"
 import { MemoryNav } from "@/components/settings/memory/memory-nav"
-import { DEFAULT_MEMORY_PANEL, type MemoryPanelId } from "@/components/settings/memory/nav-config"
+import {
+  MEMORY_TAB_PARAM,
+  resolveMemoryPanel,
+  type MemoryPanelId,
+} from "@/components/settings/memory/nav-config"
 import { LearningPanel } from "@/components/settings/memory/panels/learning-panel"
 import { MaintenancePanel } from "@/components/settings/memory/panels/maintenance-panel"
 import { OverviewPanel } from "@/components/settings/memory/panels/overview-panel"
@@ -47,9 +52,20 @@ import { Switch } from "@/components/ui/switch"
 
 export function MemorySection() {
   const t = useTranslations("settings.memory")
+  const searchParams = useSearchParams()
+  const requestedTab = searchParams?.get(MEMORY_TAB_PARAM) ?? null
   const settings = useSettingsStore((s) => s.settings)
   const save = useSettingsStore((s) => s.save)
-  const [activePanel, setActivePanel] = useState<MemoryPanelId>(DEFAULT_MEMORY_PANEL)
+  const [panelSelection, setPanelSelection] = useState<{
+    tabParam: string | null
+    panel: MemoryPanelId
+  } | null>(null)
+  const activePanel =
+    panelSelection && panelSelection.tabParam === requestedTab
+      ? panelSelection.panel
+      : resolveMemoryPanel(requestedTab)
+  const setActivePanel = (panel: MemoryPanelId) =>
+    setPanelSelection({ tabParam: requestedTab, panel })
 
   const activeProjectId = useProjectStore((state) => state.activeProjectId) ?? undefined
   const config = resolveMemoryConfig(settings?.memory)

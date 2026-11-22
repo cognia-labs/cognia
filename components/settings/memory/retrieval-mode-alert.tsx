@@ -90,7 +90,7 @@ export function RetrievalModeAlert({
         ) : null}
         {mode.reason === "no_backend" || mode.reason === "store_unsupported" ? (
           <Button size="sm" variant="outline" asChild>
-            <Link href="/settings?section=providers">
+            <Link href="/twin">
               <ExternalLinkIcon className="size-3.5" />
               {t("actions.configureEmbedding")}
             </Link>

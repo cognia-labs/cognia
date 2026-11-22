@@ -193,17 +193,17 @@ export function withPersonalMemoryVisibility(
     loadProcedural: async (reader) => visible(await deps.loadProcedural(reader)),
     ...(deps.rerank
       ? {
-          rerank: async (query, candidates, topK) => {
+          rerank: async (query, candidates, options) => {
             if (candidates.length < 2) return null
-            if (!candidates.every((candidate) => hasNoLeakingPii(candidate.memory.text))) {
+            if (!candidates.every((candidate) => hasNoLeakingPii(candidate.text))) {
               return null
             }
             try {
-              await markInjectedMemories(candidates.map((candidate) => candidate.memory.id))
+              await markInjectedMemories(candidates.map((candidate) => candidate.id))
             } catch {
               return null
             }
-            return deps.rerank!(query, candidates, topK)
+            return deps.rerank!(query, candidates, options)
           },
         }
       : {}),

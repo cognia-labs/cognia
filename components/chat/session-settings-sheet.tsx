@@ -133,6 +133,8 @@ import {
   resolveAgentModel,
 } from "@/lib/agent/agent-profile-policy"
 import { createAgentEnvSecretRef, saveAgentEnvSecret } from "@/lib/agent/agent-env-keyring"
+import { resolveAgentMemoryPolicy } from "@/lib/memory/agent-policy"
+import { resolveMemoryConfig } from "@/types/memory/memory"
 import type {
   AgentEnvBinding,
   AppSettings,
@@ -673,6 +675,18 @@ export function SessionSettingsSheet({
       maxTurns: policy.maxTurns,
     }
   }, [character, session.effort, session.executionPolicy])
+
+  const effectiveMemoryScopes = useMemo(() => {
+    const policy = resolveAgentMemoryPolicy({
+      config: resolveMemoryConfig(credentialSettings?.memory),
+      session,
+      agentPolicy: character?.memoryPolicy,
+    })
+    return {
+      readable: policy.canRecall ? policy.readableScopes : [],
+      writable: policy.canLearnSession ? policy.writableScopes : [],
+    }
+  }, [credentialSettings?.memory, session, character?.memoryPolicy])
 
   // Per-section override counts, derived from the *draft* form so the badges
   // update live as the user edits (before Save).
@@ -1365,6 +1379,25 @@ export function SessionSettingsSheet({
                   </Select>
                 </div>
               </div>
+              <p
+                className="text-[11px] text-muted-foreground"
+                data-testid="session-memory-effective-scopes"
+              >
+                {t("memoryEffectiveScopes", {
+                  read:
+                    effectiveMemoryScopes.readable.length > 0
+                      ? effectiveMemoryScopes.readable
+                          .map((scope) => t(`memoryScopeName.${scope}`))
+                          .join(", ")
+                      : t("memoryScopeNone"),
+                  write:
+                    effectiveMemoryScopes.writable.length > 0
+                      ? effectiveMemoryScopes.writable
+                          .map((scope) => t(`memoryScopeName.${scope}`))
+                          .join(", ")
+                      : t("memoryScopeNone"),
+                })}
+              </p>
             </SessionSettingsSection>
 
             {/* Role & abilities */}
