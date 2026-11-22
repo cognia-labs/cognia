@@ -389,12 +389,15 @@ export function ExposeTestGlobals(): null {
         // finishes its dynamic schema upgrade before opening `getDb()` here.
         // Otherwise two same-page connections can collide across versions N and
         // N+1 and abort Squad hydration with `DatabaseClosedError`.
-        const [{ useAccountStore }, { isBootCapabilityRequested }, { capabilitiesForPathname }] =
-          await Promise.all([
-            import("@/stores/account/account-store"),
-            import("@/lib/boot/capabilities"),
-            import("@/lib/boot/route-capabilities"),
-          ])
+        const [
+          { useAccountStore },
+          { isBootCapabilityRequested },
+          { resolveRouteBootCapabilities },
+        ] = await Promise.all([
+          import("@/stores/account/account-store"),
+          import("@/lib/boot/capabilities"),
+          import("@/lib/boot/route-capabilities"),
+        ])
         const accountDeadline = Date.now() + 15_000
         while (!cancelled && Date.now() < accountDeadline) {
           const acct = useAccountStore.getState()
@@ -406,10 +409,12 @@ export function ExposeTestGlobals(): null {
         const unsubscribeAccountUnlocked = useAccountStore.subscribe((state) => {
           window.__cogniaAccountUnlocked = Boolean(state.unlockedAccountId)
         })
-        const routeCaps = capabilitiesForPathname(window.location.pathname)
+        const routeCaps = resolveRouteBootCapabilities(
+          window.location.pathname,
+          window.location.search
+        )
         const routeNeedsPluginRuntime =
-          isBootCapabilityRequested("plugin-runtime") ||
-          routeCaps.some((cap) => cap !== "core-chat")
+          isBootCapabilityRequested("plugin-runtime") || routeCaps.length > 0
         if (useAccountStore.getState().unlockedAccountId && routeNeedsPluginRuntime) {
           const pluginDeadline = Date.now() + 20_000
           while (
@@ -534,7 +539,17 @@ export function ExposeTestGlobals(): null {
           await db.skills.clear().catch(() => undefined)
           await db.connectorDrafts.clear().catch(() => undefined)
           const { useAgentTeamStore } = await import("@/stores/squads/agent-team-store/store")
-          useAgentTeamStore.getState().resetStore?.()
+          useAgentTeamStore.setState({
+            teams: {},
+            teammates: {},
+            tasks: {},
+            messages: {},
+            events: [],
+            consensus: {},
+            sharedMemory: {},
+            delegations: {},
+            activeTeamId: null,
+          })
           // Safe to wipe wholesale: the unlocked-account state the gate reads is
           // never stored here. The dedicated E2E browser artifact re-derives it
           // from the account registry (a separate DB, untouched by this reset)
@@ -829,7 +844,7 @@ export function ExposeTestGlobals(): null {
               break
             }
             if (useAccountStore.getState().unlockedAccountId && state === "failed") {
-              await runSquadBootstrap().catch(() => undefined)
+              await runSquadBootstrap().done.catch(() => undefined)
               if (getSquadRuntimeState() === "ready") break
             }
             await new Promise((resolve) => setTimeout(resolve, 100))

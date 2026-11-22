@@ -87,7 +87,6 @@ export const SAMPLE_SPANS: SpanSnapshot[] = [
 
 /** A composed frame at index `i` of a synthetic run. */
 function makeSample(i: number): PerfSample {
-  const t = 1_700_000_000_000 + i * 1000
   return {
     processes: [
       makeProcess({

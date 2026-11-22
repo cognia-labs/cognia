@@ -98,7 +98,7 @@ export function createContainerExecAdapter(deps: ContainerExecDeps): MicrovmExec
   return {
     enforcesNetworkOff(ref) {
       const binding = bindings.get(ref)
-      return !!binding && egressOff(binding.placement)
+      return !!binding && egressTier(binding.placement) === "off"
     },
     async preflight(ref, workspaceRoot, ownerGroup) {
       if (!workspaceRoot) {

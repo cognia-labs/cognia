@@ -3,7 +3,7 @@ import { generateTextEmbedding } from "@cognia/provider-embedding/multimodal-emb
 // ── AI structured-output helpers (shared by ai.prompt / ai.extract) ─────────
 // parseStructured / buildJsonInstruction live in ./structured so the
 // ai.prompt module can share them without a circular import.
-import { buildJsonInstruction, parseStructured } from "./structured"
+import { parseStructured } from "./structured"
 import { coerceToType, nonRetryable, resolveNodeApiKey } from "../shared/executor-support"
 import { runAiPromptFusionAction } from "./fusion-action"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
