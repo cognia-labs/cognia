@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 from collections.abc import Callable
 
 from repowiki.core.cache import Cache, content_hash
+from repowiki.host import resolve_system_prompts
 from repowiki.core.graph import DependencyGraph
 from repowiki.core.models import (
     ArchitectureDiagram,
@@ -107,6 +109,13 @@ def _module_summary_block(module_docs: list) -> str:
     return "\n".join(parts)
 
 
+def _canonical_hash(*parts: object) -> str:
+    """Collision-free SHA-256 over structured cache-key inputs."""
+    return content_hash(
+        json.dumps(parts, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+    )
+
+
 class Analyzer:
     """runs the full wiki generation pipeline."""
 
@@ -202,25 +211,30 @@ class Analyzer:
             reading_guide=reading_guide,
         )
 
+    def _model_identity(self) -> dict[str, object]:
+        return {
+            "model": getattr(self.llm, "model", "") or "",
+            "run_options": getattr(self.llm, "run_options", None) or {},
+        }
+
     @staticmethod
     def _structure_hash(project: ProjectContext) -> str:
         """hash that captures project shape only (paths + sizes), not file bodies."""
-        parts = sorted(f"{f.path}:{f.size}" for f in project.files)
-        return content_hash("\n".join(parts))
+        parts = sorted((f.path, f.size) for f in project.files)
+        return _canonical_hash(parts)
 
     @staticmethod
     def _overview_hash(project: ProjectContext, structure_hash: str) -> str:
-        """structure hash + content hash of README / pyproject / package.json -- the
+        """structure hash + content hash of README / config / entrypoint files -- the
         files that actually change a project's elevator pitch."""
         relevant = ("readme", "pyproject", "package.json", "cargo.toml", "go.mod")
         bodies = []
         for f in project.files:
             name = f.path.lower()
-            if any(token in name for token in relevant):
+            if f.is_config or f.is_entrypoint or any(token in name for token in relevant):
                 bodies.append((f.path, f.content or f.preview or ""))
         bodies.sort()
-        material = structure_hash + "|" + "|".join(f"{p}:{c}" for p, c in bodies)
-        return content_hash(material)
+        return _canonical_hash(structure_hash, bodies)
 
     def _build_key_files_context(
         self,
@@ -294,7 +308,17 @@ class Analyzer:
     async def _generate_overview(
         self, project: ProjectContext, key_files: str, tree_hash: str
     ) -> ProjectOverview:
-        cache_key = f"overview:{tree_hash}"
+        try:
+            messages = await resolve_system_prompts(
+                build_overview_prompt(project.file_tree, key_files, self.language),
+                record=False,
+            )
+        except Exception as e:
+            self._report_error("overview", e)
+            return ProjectOverview(name=project.name)
+
+        system_text = str(messages[0].get("content") or "") if messages else ""
+        cache_key = f"overview:v2:{_canonical_hash(tree_hash, project.file_tree, key_files, self.language, system_text, self._model_identity())}"
         cached = await self.cache.get(cache_key)
         if cached:
             try:
@@ -302,7 +326,6 @@ class Analyzer:
             except Exception:
                 pass
 
-        messages = build_overview_prompt(project.file_tree, key_files, self.language)
         try:
             raw = await self.llm.complete(messages, max_tokens=4096)
         except LLMError as e:
@@ -413,14 +436,14 @@ class Analyzer:
     def _build_module_context(
         name: str, files: list[FileInfo]
     ) -> tuple[str, str]:
-        """assemble the LLM context + cache key for one module.
+        """assemble the LLM context + framed file digest for one module.
 
         Pure-synchronous CPU work (string joins + sha256). Designed to run on
         an executor in parallel with peer modules so the analyzer's main loop
         can enter the LLM stage as soon as the *first* context is ready.
         """
         files_text_parts: list[str] = []
-        content_parts: list[str] = []
+        file_entries: list[tuple[str, str, str]] = []
         for f in files:
             content = f.content if f.content else f.preview
             if len(content) > 4096:
@@ -428,11 +451,11 @@ class Analyzer:
             files_text_parts.append(
                 f"### {f.path} ({f.language})\n```{f.language}\n{content}\n```"
             )
-            content_parts.append(content)
+            file_entries.append((f.path, f.language, content))
 
         files_context = "\n\n".join(files_text_parts)
-        cache_key = f"module:{name}:{content_hash(''.join(content_parts))}"
-        return files_context, cache_key
+        files_digest = f"module:{name}:{_canonical_hash(name, file_entries)}"
+        return files_context, files_digest
 
     async def _analyze_modules(
         self,
@@ -441,6 +464,26 @@ class Analyzer:
         project: ProjectContext,
         progress: Callable[[str], None],
     ) -> list[ModuleDoc]:
+        if not modules:
+            return []
+
+        try:
+            module_probe = await resolve_system_prompts(
+                build_module_prompt("", "", "", self.language),
+                record=False,
+            )
+        except Exception as e:
+            for name in modules:
+                self._report_error(f"module {name!r}", e)
+            return [
+                ModuleDoc(
+                    name=name,
+                    purpose=f"Module containing {len(files)} files (analysis skipped: {e})",
+                )
+                for name, files in sorted(modules.items(), key=lambda item: -len(item[1]))
+            ]
+        resolved_system = dict(module_probe[0]) if module_probe else None
+
         # Pre-build every module's context concurrently in the default
         # executor. Before this change, each call to ``_analyze_one_module``
         # did the string concat + content_hash inline (synchronously) before
@@ -459,6 +502,7 @@ class Analyzer:
                 project_summary,
                 project,
                 ctx=ctx,
+                resolved_system=resolved_system,
             )
             for (name, files), ctx in zip(items, contexts)
         ]
@@ -491,10 +535,27 @@ class Analyzer:
         project: ProjectContext,
         *,
         ctx: tuple[str, str] | None = None,
+        resolved_system: dict | None = None,
     ) -> tuple[ModuleDoc | None, bool]:
         if ctx is None:
             ctx = self._build_module_context(name, files)
-        files_context, cache_key = ctx
+        files_context, files_digest = ctx
+
+        messages = build_module_prompt(name, files_context, project_summary, self.language)
+        if resolved_system is not None and messages:
+            messages[0] = dict(resolved_system)
+        else:
+            try:
+                messages = await resolve_system_prompts(messages, record=False)
+            except Exception as e:
+                self._report_error(f"module {name!r}", e)
+                return ModuleDoc(
+                    name=name,
+                    purpose=f"Module containing {len(files)} files (analysis skipped: {e})",
+                ), False
+
+        system_text = str(messages[0].get("content") or "") if messages else ""
+        cache_key = f"module:v2:{name}:{_canonical_hash(name, files_digest, project_summary, self.language, system_text, self._model_identity())}"
 
         # Cache lookup is async (sqlite) but very cheap -- outside the
         # semaphore so an entirely cached run incurs zero serialization.
@@ -516,8 +577,6 @@ class Analyzer:
                     name=name,
                     purpose=f"Module containing {len(files)} files (skipped, unchanged since prior run)",
                 ), False
-
-        messages = build_module_prompt(name, files_context, project_summary, self.language)
 
         # The semaphore now only covers the actual provider call, so
         # --concurrency=5 really means five concurrent LLM requests.
@@ -552,14 +611,20 @@ class Analyzer:
         module_docs: list[ModuleDoc],
         tree_hash: str,
     ) -> ArchitectureDiagram:
-        # cache key folds in module summaries so re-running with different
-        # module analyses (e.g. after --since invalidates some) doesn't
-        # silently return stale arch JSON.
         module_summary_text = _module_summary_block(module_docs)
-        summary_hash = content_hash(module_summary_text)
-        # v3: prompt no longer carries file_tree, so old v2 entries reflect a
-        # different prompt shape -- bump the key to force a clean recompute.
-        cache_key = f"arch:v3:{tree_hash}:{summary_hash}"
+        try:
+            messages = await resolve_system_prompts(
+                build_architecture_prompt(
+                    project.file_tree, module_summary_text, self.language
+                ),
+                record=False,
+            )
+        except Exception as e:
+            self._report_error("architecture", e)
+            return ArchitectureDiagram()
+
+        system_text = str(messages[0].get("content") or "") if messages else ""
+        cache_key = f"arch:v4:{_canonical_hash(tree_hash, project.file_tree, module_summary_text, self.language, system_text, self._model_identity())}"
         cached = await self.cache.get(cache_key)
         if cached:
             try:
@@ -567,9 +632,6 @@ class Analyzer:
             except Exception:
                 pass
 
-        messages = build_architecture_prompt(
-            project.file_tree, module_summary_text, self.language
-        )
         try:
             raw = await self.llm.complete(messages, max_tokens=4096)
         except LLMError as e:
@@ -606,10 +668,17 @@ class Analyzer:
         rankings_text = _format_rankings(project, rankings)
         module_summaries = _module_summary_block(module_docs)
 
-        # Key on the actual prompt inputs so import-only ranking changes and
-        # refreshed module summaries both invalidate the cached guide.
-        prompt_hash = content_hash(rankings_text + module_summaries)
-        cache_key = f"guide:v3:{tree_hash}:{prompt_hash}"
+        try:
+            messages = await resolve_system_prompts(
+                build_reading_guide_prompt(rankings_text, module_summaries, self.language),
+                record=False,
+            )
+        except Exception as e:
+            self._report_error("reading-guide", e)
+            return ReadingGuide()
+
+        system_text = str(messages[0].get("content") or "") if messages else ""
+        cache_key = f"guide:v4:{_canonical_hash(tree_hash, rankings_text, module_summaries, self.language, system_text, self._model_identity())}"
         cached = await self.cache.get(cache_key)
         if cached:
             try:
@@ -617,7 +686,6 @@ class Analyzer:
             except Exception:
                 pass
 
-        messages = build_reading_guide_prompt(rankings_text, module_summaries, self.language)
         try:
             raw = await self.llm.complete(messages, max_tokens=4096)
         except LLMError as e:

@@ -581,7 +581,12 @@ def build_repair_prompt(
     context, then explains exactly what's wrong. Capped at one round at
     the call site to keep cost bounded.
     """
-    messages = list(original_messages)
+    messages = [
+        {k: v for k, v in msg.items() if k != "prompt_pre_resolved"}
+        if isinstance(msg, dict)
+        else msg
+        for msg in original_messages
+    ]
     messages.append({"role": "assistant", "content": raw_response})
     messages.append(
         {

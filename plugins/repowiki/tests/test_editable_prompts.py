@@ -278,6 +278,25 @@ async def test_a_malformed_answer_fails_the_call():
     assert fake.systems == []
 
 
+async def test_a_snapshot_unavailable_fallback_fails_the_call_instead_of_sending_default():
+    class SnapshotUnavailable(PromptHost):
+        async def prompts_resolve(self, prompt_id, *, record: bool = False):
+            self.resolved.append(prompt_id)
+            return {
+                "text": EDITABLE_PROMPTS[prompt_id].default,
+                "source": "default",
+                "fallback": "snapshot-unavailable",
+            }
+
+    fake = SnapshotUnavailable()
+    set_host(fake)
+    await register_prompts()
+
+    with pytest.raises(LLMError, match="snapshot unavailable"):
+        await LLMClient().complete(build_chat_prompt("q", "ctx", "en"))
+    assert fake.systems == []
+
+
 async def test_forgetting_the_registration_returns_to_the_shipped_wording():
     fake = PromptHost(overrides={"chat": "Overridden."})
     set_host(fake)

@@ -11,8 +11,8 @@
         },
         {
           "path": "README.md",
-          "bytes": 10745,
-          "sha256": "b3660ab386eaa91cdb1944b36eece5edd72290295967dfd51b5cec8f063ad004"
+          "bytes": 11036,
+          "sha256": "3fb2255861a233992f579d6886384d6f54d78fd8fb9a03f7aafbf9c7bf97e670"
         },
         {
           "path": "assets/icon.png",
@@ -21,13 +21,13 @@
         },
         {
           "path": "main.py",
-          "bytes": 56344,
-          "sha256": "2a2fea5e7b3b58e6208963e83ad1f7318be6a511b9b9d5dde3ec6bbd7abe7d8d"
+          "bytes": 58033,
+          "sha256": "66dd025cd25a5f17ca3134a284d38873789040d18516eb361fc3b60cd86c5e73"
         },
         {
           "path": "plugin.json",
-          "bytes": 7201,
-          "sha256": "5b63443ede36f56f641e727a95a3c2e2b3d1d217085ffea846061d0ee5426e11"
+          "bytes": 10026,
+          "sha256": "6c0e8e8e180f5cfda1c879301add75814d67f969292ff3299a1bb9eb3a726834"
         },
         {
           "path": "pyproject.toml",
@@ -51,8 +51,8 @@
         },
         {
           "path": "repowiki/core/analyzer.py",
-          "bytes": 24340,
-          "sha256": "aecf43b4b1935cba4bd5b9b0f5e90c61098dbb228483ecb7216b316d89a2ee67"
+          "bytes": 26998,
+          "sha256": "3d4ca56049c516658b5b45b2f5a6d4ac64366c5330939dfcea9997a5c8def2a7"
         },
         {
           "path": "repowiki/core/cache.py",
@@ -121,8 +121,8 @@
         },
         {
           "path": "repowiki/host.py",
-          "bytes": 14191,
-          "sha256": "cdf70ddf7fa3e7ae442e93d109222d7799eeab4ffde8c37da7cefff825ac8fdc"
+          "bytes": 21922,
+          "sha256": "6276cfff5c2cc9d48b648e153c5653300b261e5fa175bec855bbcea3438bd666"
         },
         {
           "path": "repowiki/ingest/__init__.py",
@@ -161,8 +161,8 @@
         },
         {
           "path": "repowiki/llm/prompts.py",
-          "bytes": 19674,
-          "sha256": "3ed0dcc4b12ffd3414d06f665e7a51e30b63c8ad3125ce1c4927750a064e4e43"
+          "bytes": 24247,
+          "sha256": "67ece870df56d45b4349dfa294ac0904ff68ef207a517769d83f40ac0b507273"
         },
         {
           "path": "repowiki/panel.py",
@@ -171,8 +171,8 @@
         },
         {
           "path": "repowiki/pipeline.py",
-          "bytes": 16354,
-          "sha256": "011500e9da06be07616a67404e4f4339d4c4377b11090bfc3016177ee5bc7e57"
+          "bytes": 17656,
+          "sha256": "332bd464e2c5cdf24a3e155659f8567849335b71693cb93a7b559c966c43064c"
         },
         {
           "path": "repowiki/project.py",
@@ -233,18 +233,18 @@
         },
         {
           "path": "dist/index.js",
-          "bytes": 1812953,
-          "sha256": "f25a27b612c10a6299559ab13a13c68ef260057e7f9bee4935759e0ac5c0bab4"
+          "bytes": 1821624,
+          "sha256": "ccabb2ce3c32f7717b88b810bda77bff5ee1e7ef65dab6b86c6cd79df6f17b44"
         },
         {
           "path": "dist/plugin.css",
-          "bytes": 8145,
-          "sha256": "6a9d0f1add041f9c0b904f5336a96b51059ac6afd04977962d85b43d9d58e0a1"
+          "bytes": 8328,
+          "sha256": "68697fa62758e1089bef9f2f3698d262d9bc05b27a53ad58c4967b686153e85d"
         },
         {
           "path": "plugin.json",
-          "bytes": 14172,
-          "sha256": "d4bfaf787fa475b66f8fde8f395022d1c8f34f72abe90aaf5813035a05045203"
+          "bytes": 15208,
+          "sha256": "f4ca790b5cc16a80d596b10e8fe839081ea6d3981f47bc49cece4fee9f59805c"
         },
         {
           "path": "runtime/package.json",

@@ -44,6 +44,7 @@ export function createGovernanceHost(ctx: PluginContext): GovernanceHost {
     async resolvePrompt(id, values, sessionId) {
       return (
         await ctx.prompts.resolve(id, {
+          record: true,
           ...(values ? { values } : {}),
           ...(sessionId ? { sessionId } : {}),
         })

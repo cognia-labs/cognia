@@ -75,10 +75,18 @@ export function createPromptsAPI(pluginId: string): PluginPromptsAPI {
       const resolved = await resolvePromptAsync(entry.def, {
         context: workspaceId ? { workspaceId } : {},
         ...(options.values ? { values: options.values } : {}),
+        record: options.record ?? false,
       })
+      if (resolved.source.kind === "override") {
+        return { text: resolved.text, source: "override" }
+      }
       return {
         text: resolved.text,
-        source: resolved.source.kind === "override" ? "override" : "default",
+        source: "default",
+        ...(resolved.source.fallback ? { fallback: resolved.source.fallback } : {}),
+        ...(resolved.source.skippedRevisionId
+          ? { skippedRevisionId: resolved.source.skippedRevisionId }
+          : {}),
       }
     },
   }

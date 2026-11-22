@@ -59,6 +59,8 @@ function authoringHost(t) {
     "packages/plugin-contract/src/context.ts":
       "export interface Context { backup: { create(): void } }",
     "types/plugin/index.ts": 'export * from "@cognia/plugin-contract"',
+    "plugin-sdk/python/pyproject.toml": '[project]\nname = "cognia-sdk"\nversion = "0.2.0"\n',
+    "plugin-sdk/python/src/cognia/__init__.py": "def tool(fn):\n    return fn\n",
     "lib/plugin/core/shared-modules.ts": "export {}",
     "lib/plugin/core/sdk-subpath-loaders.ts": "export {}",
     "app/globals.css": "",
@@ -76,7 +78,14 @@ function authoringHost(t) {
   return { root, write, initial }
 }
 
-for (const change of ["edit", "add", "remove", "package exports"])
+for (const change of [
+  "edit",
+  "add",
+  "remove",
+  "package exports",
+  "python signature",
+  "python pyproject",
+])
   test(`rejects the pinned Kit when only contract ${change} changes, including a proof-time recheck`, (t) => {
     const { root, write, initial } = authoringHost(t)
     if (change === "edit")
@@ -88,6 +97,16 @@ for (const change of ["edit", "add", "remove", "package exports"])
       write("packages/plugin-contract/src/destinations.ts", "export interface Destination { id: string }")
     else if (change === "remove")
       fs.unlinkSync(path.join(root, "packages/plugin-contract/src/context.ts"))
+    else if (change === "python signature")
+      write(
+        "plugin-sdk/python/src/cognia/__init__.py",
+        "def tool(fn, *, strict: bool = True):\n    return fn\n"
+      )
+    else if (change === "python pyproject")
+      write(
+        "plugin-sdk/python/pyproject.toml",
+        '[project]\nname = "cognia-sdk"\nversion = "0.2.1"\n'
+      )
     else
       write(
         "packages/plugin-contract/package.json",
@@ -100,10 +119,12 @@ for (const change of ["edit", "add", "remove", "package exports"])
     assert.deepEqual({ ...current, sdkSourceSha256: initial.sdkSourceSha256 }, initial)
   })
 
-test("contract tests and documentation do not invalidate the distributed SDK identity", (t) => {
+test("contract tests, Python caches, and documentation do not invalidate the distributed SDK identity", (t) => {
   const { root, write, initial } = authoringHost(t)
   write("packages/plugin-contract/src/context.test.ts", "test('new contract check', () => {})")
   write("packages/plugin-contract/README.md", "Updated contract contributor notes")
+  write("plugin-sdk/python/src/cognia/__pycache__/__init__.cpython-312.pyc", "bytecode")
+  write("plugin-sdk/python/src/cognia/test_ctx.py", "def test_ctx(): pass\n")
   assert.deepEqual(readHostAuthoringAbi(root), initial)
   assert.equal(readHostAuthoringIdentity(root).kitSha256, "1".repeat(64))
 })

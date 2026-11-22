@@ -40,11 +40,12 @@ describe("createGovernanceHost", () => {
     ])
     expect(host.currentWorkspaceId()).toBe("a")
     expect(await host.resolvePrompt("x", { rule: "r" })).toBe("resolved")
-    expect(ctx.prompts.resolve).toHaveBeenCalledWith("x", { values: { rule: "r" } })
+    expect(ctx.prompts.resolve).toHaveBeenCalledWith("x", { record: true, values: { rule: "r" } })
     await host.resolvePrompt("y")
-    expect(ctx.prompts.resolve).toHaveBeenLastCalledWith("y", {})
+    expect(ctx.prompts.resolve).toHaveBeenLastCalledWith("y", { record: true })
     await host.resolvePrompt("z", { rule: "r" }, "s-1")
     expect(ctx.prompts.resolve).toHaveBeenLastCalledWith("z", {
+      record: true,
       values: { rule: "r" },
       sessionId: "s-1",
     })

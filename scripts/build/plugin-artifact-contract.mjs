@@ -81,6 +81,20 @@ export function readHostAuthoringAbi(root) {
             ? [relative]
             : []
       })
+  const pythonSdkFiles = (directory) =>
+    fs
+      .readdirSync(path.join(root, directory), { withFileTypes: true })
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .flatMap((entry) => {
+        if (entry.name === "__pycache__" || entry.name.endsWith(".egg-info")) return []
+        const relative = `${directory}/${entry.name}`
+        if (entry.isSymbolicLink()) fail(`symlink in authoring source ${relative}`)
+        return entry.isDirectory()
+          ? pythonSdkFiles(relative)
+          : /\.py$/.test(relative) && !/(?:^|\/)test_[^/]+\.py$|_test\.py$/.test(relative)
+            ? [relative]
+            : []
+      })
   const identity = {
     sdkVersion: sdk.version,
     uiVersion: ui.version,
@@ -98,8 +112,10 @@ export function readHostAuthoringAbi(root) {
       // The packed SDK vendors contract declarations even when SDK entrypoints stay unchanged.
       ...sourceFiles("packages/plugin-contract/src"),
       ...sourceFiles("types/plugin"),
+      ...pythonSdkFiles("plugin-sdk/python/src"),
       "packages/plugin-sdk/package.json",
       "packages/plugin-contract/package.json",
+      "plugin-sdk/python/pyproject.toml",
     ]),
     uiSourceSha256: hashFiles([
       ...sourceFiles("packages/plugin-ui/src"),

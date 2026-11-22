@@ -23,6 +23,7 @@ a thousand round trips for no extra safety.
 
 from __future__ import annotations
 
+import inspect
 import json
 import logging
 from collections.abc import AsyncGenerator
@@ -108,10 +109,12 @@ class HostBridge:
 
         return await cognia.ctx.prompts.register(declarations)
 
-    async def prompts_resolve(self, prompt_id: str) -> dict[str, Any]:
+    async def prompts_resolve(self, prompt_id: str, *, record: bool = False) -> dict[str, Any]:
         """``ctx.prompts.resolve`` — the published override, else the default."""
         import cognia
 
+        if record:
+            return await cognia.ctx.prompts.resolve(prompt_id, {"record": True})
         return await cognia.ctx.prompts.resolve(prompt_id)
 
 
@@ -262,7 +265,37 @@ def forget_registered_prompts() -> None:
     _REGISTERED_PROMPTS.clear()
 
 
-async def resolve_system_prompts(messages: list[dict]) -> list[dict]:
+def _accepts_record_kwarg(fn: Any) -> bool:
+    try:
+        params = inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+    return "record" in params or any(
+        param.kind == inspect.Parameter.VAR_KEYWORD for param in params.values()
+    )
+
+
+async def _call_prompts_resolve(prompt_id: str, *, record: bool) -> Any:
+    fn = get_host().prompts_resolve
+    if record and _accepts_record_kwarg(fn):
+        return await fn(prompt_id, record=True)
+    return await fn(prompt_id)
+
+
+def _extract_resolved_prompt_text(prompt_id: str, answer: Any) -> str:
+    if not isinstance(answer, dict):
+        raise LLMError(f"prompts.resolve({prompt_id!r}) returned no text: {answer!r}")
+    if answer.get("fallback") == "snapshot-unavailable":
+        raise LLMError(
+            f"prompts.resolve({prompt_id!r}) snapshot unavailable: {answer!r}"
+        )
+    text = answer.get("text")
+    if not isinstance(text, str):
+        raise LLMError(f"prompts.resolve({prompt_id!r}) returned no text: {answer!r}")
+    return text
+
+
+async def resolve_system_prompts(messages: list[dict], *, record: bool = True) -> list[dict]:
     """Swap each registered system message's wording for the resolved text.
 
     The resolved text replaces only the wording: the protocol sentences and
@@ -273,26 +306,27 @@ async def resolve_system_prompts(messages: list[dict]) -> list[dict]:
         return messages
     resolved: dict[str, str] = {}
     out: list[dict] = []
+    host_accepts_record = _accepts_record_kwarg(get_host().prompts_resolve)
     for message in messages:
         prompt_id = message.get("prompt_id") if isinstance(message, dict) else None
         if not isinstance(prompt_id, str) or prompt_id not in _REGISTERED_PROMPTS:
             out.append(message)
             continue
+        if record and message.get("prompt_pre_resolved") and not host_accepts_record:
+            cleaned = {k: v for k, v in message.items() if k != "prompt_pre_resolved"}
+            out.append(cleaned)
+            continue
         if prompt_id not in resolved:
-            answer = await get_host().prompts_resolve(prompt_id)
-            text = answer.get("text") if isinstance(answer, dict) else None
-            if not isinstance(text, str):
-                raise LLMError(f"prompts.resolve({prompt_id!r}) returned no text: {answer!r}")
-            resolved[prompt_id] = text
+            answer = await _call_prompts_resolve(prompt_id, record=record)
+            resolved[prompt_id] = _extract_resolved_prompt_text(prompt_id, answer)
         tail = message.get("prompt_tail")
-        out.append(
-            {
-                **message,
-                "content": compose_system(
-                    resolved[prompt_id], prompt_id, tail if isinstance(tail, str) else ""
-                ),
-            }
+        updated = {k: v for k, v in message.items() if k != "prompt_pre_resolved"}
+        updated["content"] = compose_system(
+            resolved[prompt_id], prompt_id, tail if isinstance(tail, str) else ""
         )
+        if not record:
+            updated["prompt_pre_resolved"] = True
+        out.append(updated)
     return out
 
 

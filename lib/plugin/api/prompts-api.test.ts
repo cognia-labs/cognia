@@ -8,6 +8,10 @@ import {
   getPluginPromptEntry,
   pluginPromptId,
 } from "@/lib/prompts/plugin-prompts"
+import {
+  __resetPromptResolutionsForTests,
+  lastPromptResolution,
+} from "@/lib/prompts/resolution-log"
 import { publishPromptBody } from "@/lib/prompts/service"
 import { invalidatePromptOverrideSnapshot } from "@/lib/prompts/snapshot"
 import { createPromptsAPI } from "./prompts-api"
@@ -17,6 +21,7 @@ beforeAll(dbFixture.initialize)
 beforeEach(async () => {
   await dbFixture.restore()
   invalidatePromptOverrideSnapshot()
+  __resetPromptResolutionsForTests()
   __resetPluginPromptsForTesting()
 })
 afterAll(dbFixture.dispose)
@@ -119,5 +124,48 @@ describe("ctx.prompts", () => {
     const other = createPromptsAPI("other-plugin")
     await expect(other.resolve("outline")).rejects.toThrow("not registered by other-plugin")
     await expect(other.resolve("../deep-research/outline")).rejects.toThrow("not registered")
+  })
+
+  it("surfaces fallback reasons instead of collapsing snapshot failures into ordinary defaults", async () => {
+    const prompts = createPromptsAPI("cognia-repowiki")
+    prompts.register([{ ...OUTLINE, scopes: ["account"] }])
+    const id = pluginPromptId("cognia-repowiki", "outline")
+
+    const spy = jest
+      .spyOn(getDb(), "transaction")
+      .mockRejectedValueOnce(new Error("IndexedDB unavailable"))
+    try {
+      invalidatePromptOverrideSnapshot()
+      await expect(prompts.resolve("outline", { values: { topic: "AI" } })).resolves.toEqual({
+        text: "You are a research lead planning a report on AI.",
+        source: "default",
+        fallback: "snapshot-unavailable",
+      })
+    } finally {
+      spy.mockRestore()
+    }
+
+    invalidatePromptOverrideSnapshot()
+    await publish(id, { scope: "account", targetId: "" }, "Account: plan a report on {{topic}}.")
+    // Re-register with a stricter requiredFragment so the stored override fails contract validation.
+    prompts.register([{ ...OUTLINE, scopes: ["account"], requiredFragments: ["report", "lead"] }])
+    await expect(prompts.resolve("outline", { values: { topic: "AI" } })).resolves.toMatchObject({
+      text: "You are a research lead planning a report on AI.",
+      source: "default",
+      fallback: "invalid-body",
+      skippedRevisionId: expect.any(String),
+    })
+  })
+
+  it("records Prompt Center usage only when options.record is true", async () => {
+    const prompts = createPromptsAPI("deep-research")
+    prompts.register([OUTLINE])
+    const id = pluginPromptId("deep-research", "outline")
+
+    await prompts.resolve("outline", { values: { topic: "AI" } })
+    expect(lastPromptResolution(id)).toBeUndefined()
+
+    await prompts.resolve("outline", { values: { topic: "AI" }, record: true })
+    expect(lastPromptResolution(id)).toMatchObject({ promptId: id })
   })
 })

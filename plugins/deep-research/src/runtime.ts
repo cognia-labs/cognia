@@ -60,6 +60,7 @@ export function buildEngineDeps(ctx: PluginContext, options: BuildDepsOptions = 
     prompt: async (id) =>
       (
         await ctx.prompts.resolve(id, {
+          record: true,
           ...(options.sessionId ? { sessionId: options.sessionId } : {}),
         })
       ).text,
