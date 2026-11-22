@@ -54,8 +54,10 @@ export type ProjectMiningStepOutcome =
   | { kind: "idle" }
   /** The previous batch is still draining. Nothing was enqueued. */
   | { kind: "throttled"; pending: number }
+  /** Every historical session was scanned; waiting for queued mining jobs to finish. */
+  | { kind: "draining"; pending: number }
   | { kind: "advanced"; sessionsScanned: number; jobsEnqueued: number }
-  /** No sessions left before the cursor. The run is finished. */
+  /** No sessions left before the cursor and all mining jobs finished. */
   | { kind: "finished" }
 
 export interface ProjectMiningBackfillDeps {
@@ -80,8 +82,8 @@ export interface ProjectMiningBackfillDeps {
   advanceRun: (
     runId: string,
     step: {
-      cursorCreatedAt: number
-      cursorSessionId: string
+      cursorCreatedAt?: number
+      cursorSessionId?: string
       sessionsScanned: number
       jobsEnqueued: number
     }
@@ -110,7 +112,12 @@ export async function stepProjectMiningBackfill(
   }
   if (!run) return { kind: "idle" }
 
-  const pending = await deps.countPendingJobs(runId).catch(() => 0)
+  let pending: number
+  try {
+    pending = await deps.countPendingJobs(runId)
+  } catch {
+    return { kind: "idle" }
+  }
   if (pending >= BACKFILL_PENDING_JOB_CEILING) return { kind: "throttled", pending }
 
   let page: ChatSession[]
@@ -125,6 +132,15 @@ export async function stepProjectMiningBackfill(
     return { kind: "idle" }
   }
   if (page.length === 0) {
+    if (pending > 0) {
+      await deps
+        .advanceRun(runId, {
+          sessionsScanned: 0,
+          jobsEnqueued: 0,
+        })
+        .catch(() => undefined)
+      return { kind: "draining", pending }
+    }
     await deps.finishRun(runId).catch(() => undefined)
     return { kind: "finished" }
   }

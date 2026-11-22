@@ -26,6 +26,7 @@ import {
   type ProjectWindowMessage,
 } from "@cognia/memory/extract/project-windows"
 import { assessProjectSalience } from "@cognia/memory/extract/project-salience"
+import { enqueueMemoryJob, type MemoryPersistenceScope } from "@/lib/db/memory-governance"
 import { projectMiningMessageText } from "@/lib/memory/write/project-transcript-text"
 import type { MemoryProvenance, MemoryScope } from "@/types/memory/memory"
 import type { MemoryJob, MemoryJobCheckpoint } from "@/types/memory/governance"
@@ -110,6 +111,8 @@ export interface EnqueueProjectMiningJobsParams {
   includeTrailing: boolean
   /** Set by history backfill so its jobs can be withdrawn as a group. */
   runId?: string
+  /** Optional transaction scope when enqueuing inside a multi-table guard. */
+  persistenceScope?: MemoryPersistenceScope
 }
 
 /**
@@ -125,7 +128,6 @@ export async function enqueueProjectMiningJobs(
   })
   if (windows.length === 0) return []
 
-  const { enqueueMemoryJob } = await import("@/lib/db/memory-governance")
   const queued: MemoryJob[] = []
   for (const window of windows) {
     try {
@@ -137,6 +139,7 @@ export async function enqueueProjectMiningJobs(
             runId: params.runId,
           }),
           kind: "project-mining",
+          ...(params.runId ? { runId: params.runId } : {}),
           checkpoint: projectMiningCheckpoint(window, params.transcriptRevision),
           sessionId: params.sessionId,
           projectId: params.projectId,
@@ -148,7 +151,10 @@ export async function enqueueProjectMiningJobs(
           // written by the worker once consolidation has produced memory ids.
           evidenceIds: [],
         },
-        { reuseCompleted: true }
+        {
+          reuseCompleted: true,
+          ...(params.persistenceScope ? { scope: params.persistenceScope } : {}),
+        }
       )
       queued.push(job)
     } catch {

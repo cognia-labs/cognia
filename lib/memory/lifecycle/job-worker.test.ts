@@ -122,6 +122,7 @@ import {
   drainMemoryJobs,
   drainMemoryJobsAfterTurn,
   MAX_VECTOR_RECONCILE_UPSERTS,
+  nudgeMemoryJobWorker,
   processMemoryJob,
   startMemoryJobWorker,
   type MemoryJobWorkerDeps,
@@ -344,6 +345,34 @@ describe("startMemoryJobWorker namespace repair", () => {
     stop()
     await Promise.resolve()
     expect(repair).not.toHaveBeenCalled()
+  })
+
+  it("wakes immediately on nudgeMemoryJobWorker and drains newly stepped backfill jobs (N16)", async () => {
+    const queue: MemoryJob[] = []
+    const d = deps(queue)
+    let nudged = false
+    const tickBackfills = jest.fn(async () => {
+      if (!nudged) return 0
+      nudged = false
+      queue.push(job("backfill-1"))
+      return 1
+    })
+    const stop = startMemoryJobWorker({
+      deps: d,
+      repairNamespaces: false,
+      tickBackfills,
+      intervalMs: 60_000,
+    })
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 10))
+      nudged = true
+      nudgeMemoryJobWorker()
+      await new Promise((resolve) => setTimeout(resolve, 20))
+      expect(d.process).toHaveBeenCalledWith(expect.objectContaining({ id: "backfill-1" }))
+      expect(d.finish).toHaveBeenCalledTimes(1)
+    } finally {
+      stop()
+    }
   })
 })
 

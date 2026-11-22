@@ -7,24 +7,28 @@
  * store or the job queue lives here.
  */
 
+import Dexie from "dexie"
 import {
   isTerminalProjectMiningRun,
   projectMiningRunProgress,
 } from "@cognia/memory/lifecycle/project-mining-run"
 import type { ChatSession } from "@cognia/agent-config-types"
 import type { ProjectMiningRun } from "@/types/memory/governance"
+import { resolveMemoryConfig } from "@/types/memory/memory"
 import { getDb } from "@/lib/db/schema"
+import { getSettings } from "@/lib/db/settings"
 import { listMessages } from "@/lib/db/messages"
 import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
 import { cancelMemoryJobsForRun, countPendingMemoryJobsForRun } from "@/lib/db/memory-governance"
 import {
   advanceProjectMiningRun,
   claimProjectMiningRun,
-  createProjectMiningRun,
+  createOrGetActiveProjectMiningRun,
   getActiveProjectMiningRun,
   getProjectMiningRun,
   transitionProjectMiningRun,
 } from "@/lib/db/project-mining-runs"
+import { nudgeMemoryJobWorker } from "@/lib/memory/lifecycle/job-worker"
 import { enqueueProjectMiningJobs } from "@/lib/memory/write/project-mining-enqueue"
 import { memoryTranscriptProse } from "@/lib/memory/write/project-transcript-text"
 import {
@@ -61,31 +65,29 @@ async function pageSessions({
   limit: number
 }): Promise<ChatSession[]> {
   const table = getDb().sessions.where("[projectId+createdAt+id]")
-  // Prefix bounds built from strings. A shorter array sorts before every longer
-  // one sharing its prefix, which is all the lower bound needs, and `\uffff`
-  // sorts after every other UTF-16 code unit, which is what the upper bound
-  // needs.
-  //
-  // `Dexie.minKey` / `Dexie.maxKey` would work here too. An earlier version of
-  // this comment claimed `-Infinity` is not a valid IndexedDB key, and that is
-  // wrong: the spec's value-to-key algorithm rejects only `NaN` among numbers,
-  // and both sentinels round-trip fine under `fake-indexeddb`. The bound that
-  // really does throw `DataError` is `undefined`, which is why the cursor arm
-  // below defaults `beforeSessionId` to `""` rather than passing it through.
-  const lower = [projectId]
+  // Keep element 0 pinned to `projectId` at both ends. `[`${projectId}\uffff`]`
+  // matched prefix-sharing projects (`p1` -> `p10`), polluting both the mined
+  // windows and the watermark cursor.
+  const lower = [projectId, Dexie.minKey]
   const upper =
     beforeCreatedAt === undefined
-      ? [`${projectId}\uffff`]
+      ? [projectId, Dexie.maxKey]
       : [projectId, beforeCreatedAt, beforeSessionId ?? ""]
-  return table.between(lower, upper, true, false).reverse().limit(limit).toArray() as Promise<
-    ChatSession[]
-  >
+  const rows = (await table
+    .between(lower, upper, true, false)
+    .reverse()
+    .limit(limit)
+    .toArray()) as ChatSession[]
+  return rows.filter((row) => row.projectId === projectId)
 }
 
 function backfillDeps(): ProjectMiningBackfillDeps {
+  const owner = thisWorker()
   return {
     pageSessions,
     loadTranscript: async (sessionId) => {
+      const session = await getDb().sessions.get(sessionId)
+      if (!session || session.memoryLearn === false) return []
       const history = await preparePersonalHistory(
         undefined,
         (await listMessages(sessionId)).map((message) => ({ ...message, sessionId }))
@@ -109,32 +111,45 @@ function backfillDeps(): ProjectMiningBackfillDeps {
         )
     },
     enqueueForSession: async ({ session, runId, transcript }) => {
-      const jobs = await enqueueProjectMiningJobs({
-        sessionId: session.id,
-        projectId: session.projectId ?? "",
-        transcript: transcript.map((message) => ({
-          ...message,
-          parts: Array.isArray(message.parts) ? message.parts : undefined,
-        })),
-        transcriptRevision: session.transcriptRevision,
-        scope: "workspace",
-        characterId: session.characterId,
-        // `system`, not `user`: nobody was in this conversation just now. The
-        // provenance facet in /memory should be able to separate what a sweep
-        // learned from what a live turn learned.
-        provenance: "system",
-        // The conversation is over, so every window is closed, including the
-        // last one the live path deliberately holds back.
-        includeTrailing: true,
-        runId,
+      if (!session.projectId || session.memoryLearn === false) return 0
+      const db = getDb()
+      return db.transaction("rw", [db.projectMiningRuns, db.memoryJobs], async () => {
+        const liveRun = await db.projectMiningRuns.get(runId)
+        if (
+          !liveRun ||
+          liveRun.status !== "running" ||
+          liveRun.leaseOwner !== owner ||
+          liveRun.projectId !== session.projectId
+        ) {
+          return 0
+        }
+        const jobs = await enqueueProjectMiningJobs({
+          sessionId: session.id,
+          projectId: session.projectId,
+          transcript: transcript.map((message) => ({
+            ...message,
+            parts: Array.isArray(message.parts) ? message.parts : undefined,
+          })),
+          transcriptRevision: session.transcriptRevision,
+          scope: "workspace",
+          characterId: session.characterId,
+          // `system`, not `user`: nobody was in this conversation just now. The
+          // provenance facet in /memory should be able to separate what a sweep
+          // learned from what a live turn learned.
+          provenance: "system",
+          // The conversation is over, so every window is closed, including the
+          // last one the live path deliberately holds back.
+          includeTrailing: true,
+          runId,
+        })
+        return jobs.length
       })
-      return jobs.length
     },
     countPendingJobs: countPendingMemoryJobsForRun,
     claimRun: (runId, worker) => claimProjectMiningRun(runId, worker),
     advanceRun: advanceProjectMiningRun,
     finishRun: (runId) => transitionProjectMiningRun(runId, "succeeded"),
-    workerId: thisWorker(),
+    workerId: owner,
   }
 }
 
@@ -163,14 +178,16 @@ export async function proposeWorkspaceBackfill(projectId: string): Promise<Proje
   const existing = await getActiveProjectMiningRun(projectId)
   if (existing) return existing
   const estimate = await estimateWorkspaceBackfill(projectId)
-  return createProjectMiningRun({ projectId, estimate })
+  return createOrGetActiveProjectMiningRun({ projectId, estimate })
 }
 
 /** The user agreed to the cost. This is the only way out of `preconsent`. */
 export async function confirmWorkspaceBackfill(
   runId: string
 ): Promise<ProjectMiningRun | undefined> {
-  return transitionProjectMiningRun(runId, "queued")
+  const updated = await transitionProjectMiningRun(runId, "queued")
+  if (updated) nudgeMemoryJobWorker()
+  return updated
 }
 
 export async function pauseWorkspaceBackfill(runId: string): Promise<ProjectMiningRun | undefined> {
@@ -180,18 +197,24 @@ export async function pauseWorkspaceBackfill(runId: string): Promise<ProjectMini
 export async function resumeWorkspaceBackfill(
   runId: string
 ): Promise<ProjectMiningRun | undefined> {
-  return transitionProjectMiningRun(runId, "queued")
+  const updated = await transitionProjectMiningRun(runId, "queued")
+  if (updated) nudgeMemoryJobWorker()
+  return updated
 }
 
 /**
  * Stop a run and withdraw the work it has not done yet.
  *
- * The order matters: the run leaves the runnable states first, so a tick racing
- * the cancel cannot enqueue a fresh batch behind the withdrawal.
+ * Runs in one `[projectMiningRuns, memoryJobs]` transaction with
+ * `enqueueForSession`, so an in-flight transcript load cannot append new jobs
+ * after withdrawal completes.
  */
 export async function cancelWorkspaceBackfill(runId: string): Promise<number> {
-  await transitionProjectMiningRun(runId, "cancelled").catch(() => undefined)
-  return cancelMemoryJobsForRun(runId)
+  const db = getDb()
+  return db.transaction("rw", [db.projectMiningRuns, db.memoryJobs], async () => {
+    await transitionProjectMiningRun(runId, "cancelled").catch(() => undefined)
+    return cancelMemoryJobsForRun(runId)
+  })
 }
 
 /**
@@ -207,6 +230,36 @@ export async function tickWorkspaceBackfill(projectId: string): Promise<ProjectM
   // state a background tick may move out of.
   if (run.status !== "queued" && run.status !== "running") return { kind: "idle" }
   return stepProjectMiningBackfill(run.id, backfillDeps())
+}
+
+/**
+ * Step every workspace with a `queued` or `running` backfill run.
+ *
+ * Driven by `startMemoryJobWorker` so a confirmed backfill progresses even
+ * when the user sends no further chat turns. Returns how many runs enqueued
+ * fresh mining work on this pass.
+ */
+export async function tickActiveWorkspaceBackfills(): Promise<number> {
+  const settings = await getSettings().catch(() => undefined)
+  const config = resolveMemoryConfig(settings?.memory)
+  if (!config.enabled || config.temporary || !config.mineProjectContext) return 0
+  const db = getDb()
+  if (!db.projectMiningRuns) return 0
+  const runs = await db.projectMiningRuns
+    .filter((run) => run.status === "queued" || run.status === "running")
+    .toArray()
+  if (runs.length === 0) return 0
+  let enqueuedRuns = 0
+  const seenProjects = new Set<string>()
+  for (const run of runs) {
+    if (seenProjects.has(run.projectId)) continue
+    seenProjects.add(run.projectId)
+    const outcome = await stepProjectMiningBackfill(run.id, backfillDeps())
+    if (outcome.kind === "advanced" && outcome.jobsEnqueued > 0) {
+      enqueuedRuns += 1
+    }
+  }
+  return enqueuedRuns
 }
 
 export { getProjectMiningRun, isTerminalProjectMiningRun, projectMiningRunProgress }

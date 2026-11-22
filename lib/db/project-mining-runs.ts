@@ -87,6 +87,35 @@ export async function getActiveProjectMiningRun(
   return rows.find((row) => !isTerminalProjectMiningRun(row.status))
 }
 
+/**
+ * Atomically return an existing active run for `projectId` or create one in `preconsent`.
+ */
+export async function createOrGetActiveProjectMiningRun(
+  input: CreateProjectMiningRunInput
+): Promise<ProjectMiningRun> {
+  const db = getDb()
+  return db.transaction("rw", db.projectMiningRuns, async () => {
+    const rows = await db.projectMiningRuns.where("projectId").equals(input.projectId).toArray()
+    rows.sort((a, b) => b.createdAt - a.createdAt)
+    const existing = rows.find((row) => !isTerminalProjectMiningRun(row.status))
+    if (existing) return existing
+    const now = input.createdAt ?? Date.now()
+    const row: ProjectMiningRun = {
+      id: input.id ?? newRunId(),
+      projectId: input.projectId,
+      status: "preconsent",
+      estimate: input.estimate,
+      createdAt: now,
+      updatedAt: now,
+      sessionsScanned: 0,
+      jobsEnqueued: 0,
+      claimsProduced: 0,
+    }
+    await db.projectMiningRuns.add(row)
+    return row
+  })
+}
+
 export class ProjectMiningRunTransitionError extends Error {
   constructor(
     readonly from: ProjectMiningRunStatus,
@@ -185,8 +214,8 @@ export async function claimProjectMiningRun(
 export async function advanceProjectMiningRun(
   id: string,
   step: {
-    cursorCreatedAt: number
-    cursorSessionId: string
+    cursorCreatedAt?: number
+    cursorSessionId?: string
     sessionsScanned: number
     jobsEnqueued: number
     claimsProduced?: number
@@ -200,8 +229,8 @@ export async function advanceProjectMiningRun(
     if (!row || row.status !== "running") return undefined
     const updated: ProjectMiningRun = {
       ...row,
-      cursorCreatedAt: step.cursorCreatedAt,
-      cursorSessionId: step.cursorSessionId,
+      ...(step.cursorCreatedAt !== undefined ? { cursorCreatedAt: step.cursorCreatedAt } : {}),
+      ...(step.cursorSessionId !== undefined ? { cursorSessionId: step.cursorSessionId } : {}),
       sessionsScanned: row.sessionsScanned + step.sessionsScanned,
       jobsEnqueued: row.jobsEnqueued + step.jobsEnqueued,
       claimsProduced: row.claimsProduced + (step.claimsProduced ?? 0),
@@ -233,8 +262,4 @@ export async function recordProjectMiningRunClaims(
       updatedAt: now,
     })
   })
-}
-
-export async function deleteProjectMiningRun(id: string): Promise<void> {
-  await getDb().projectMiningRuns.delete(id)
 }

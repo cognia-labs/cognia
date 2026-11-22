@@ -160,6 +160,39 @@ describe("one backfill step", () => {
     expect(advanceRun).not.toHaveBeenCalled()
   })
 
+  it("keeps the run draining while 1..39 mining jobs are still pending (N15)", async () => {
+    const finishRun = jest.fn(async () => undefined)
+    const advanceRun = jest.fn(async () => run())
+    const outcome = await stepProjectMiningBackfill(
+      "r1",
+      makeDeps({
+        pageSessions: async () => [],
+        countPendingJobs: async () => 7,
+        finishRun,
+        advanceRun,
+      })
+    )
+    expect(outcome).toEqual({ kind: "draining", pending: 7 })
+    expect(finishRun).not.toHaveBeenCalled()
+    expect(advanceRun).toHaveBeenCalledWith("r1", { sessionsScanned: 0, jobsEnqueued: 0 })
+  })
+
+  it("returns idle instead of prematurely finishing when countPendingJobs fails (N15)", async () => {
+    const finishRun = jest.fn(async () => undefined)
+    const outcome = await stepProjectMiningBackfill(
+      "r1",
+      makeDeps({
+        pageSessions: async () => [],
+        countPendingJobs: async () => {
+          throw new Error("dexie busy")
+        },
+        finishRun,
+      })
+    )
+    expect(outcome).toEqual({ kind: "idle" })
+    expect(finishRun).not.toHaveBeenCalled()
+  })
+
   it("never throws, so a failed step cannot strand the lease", async () => {
     await expect(
       stepProjectMiningBackfill(

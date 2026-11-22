@@ -4,6 +4,7 @@ import {
   ProjectMiningRunTransitionError,
   advanceProjectMiningRun,
   claimProjectMiningRun,
+  createOrGetActiveProjectMiningRun,
   createProjectMiningRun,
   getActiveProjectMiningRun,
   getProjectMiningRun,
@@ -129,6 +130,40 @@ describe("advancing", () => {
       })
     ).toBeUndefined()
   })
+
+  it("renews the lease without overwriting the cursor during a 0-delta draining heartbeat", async () => {
+    await newRun()
+    await transitionProjectMiningRun("r1", "queued")
+    await claimProjectMiningRun("r1", "w1", 1_000, 60_000)
+    await advanceProjectMiningRun(
+      "r1",
+      { cursorCreatedAt: 250, cursorSessionId: "s3", sessionsScanned: 3, jobsEnqueued: 2 },
+      5_000,
+      60_000
+    )
+    const heartbeat = await advanceProjectMiningRun(
+      "r1",
+      { sessionsScanned: 0, jobsEnqueued: 0 },
+      10_000,
+      60_000
+    )
+    expect(heartbeat).toMatchObject({
+      cursorCreatedAt: 250,
+      cursorSessionId: "s3",
+      sessionsScanned: 3,
+      jobsEnqueued: 2,
+      leaseExpiresAt: 70_000,
+    })
+  })
+})
+
+it("createOrGetActiveProjectMiningRun deduplicates concurrent preconsent creation", async () => {
+  const [first, second] = await Promise.all([
+    createOrGetActiveProjectMiningRun({ projectId: "p1", estimate: ESTIMATE }),
+    createOrGetActiveProjectMiningRun({ projectId: "p1", estimate: ESTIMATE }),
+  ])
+  expect(first.id).toBe(second.id)
+  expect(await listProjectMiningRuns("p1")).toHaveLength(1)
 })
 
 it("accumulates claims attributed by finished mining jobs", async () => {

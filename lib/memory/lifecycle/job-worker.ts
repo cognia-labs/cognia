@@ -161,6 +161,15 @@ export async function drainMemoryJobsAfterTurn(
   return withDrainLock(() => drainMemoryJobs({ maxJobs: 1, ...options }, deps))
 }
 
+const activeWorkerTickers = new Set<() => void>()
+
+/** Wake any running memory job worker immediately (e.g. after backfill confirm/resume). */
+export function nudgeMemoryJobWorker(): void {
+  for (const trigger of activeWorkerTickers) {
+    trigger()
+  }
+}
+
 /** Test hook: drop the in-process drain lock between cases. */
 export function __resetMemoryDrainLock(): void {
   inFlightDrain = undefined
@@ -173,21 +182,41 @@ export interface StartMemoryJobWorkerOptions extends DrainMemoryJobsOptions {
   repairNamespaces?: boolean
   /** Injected repair pass; defaults to `repairWorkspaceScopedMemories`. */
   repair?: () => Promise<unknown>
+  /** Whether to autonomously advance active workspace history backfills. */
+  driveBackfills?: boolean
+  /** Injected backfill driver; defaults to `tickActiveWorkspaceBackfills`. */
+  tickBackfills?: () => Promise<number>
 }
 
 export function startMemoryJobWorker(options: StartMemoryJobWorkerOptions = {}): () => void {
   const deps = options.deps ?? defaultWorkerDeps
+  const shouldDriveBackfills =
+    options.driveBackfills ?? (options.tickBackfills !== undefined || options.deps === undefined)
   const controller = new AbortController()
   const tick = () => {
     if (controller.signal.aborted || options.signal?.aborted) return
-    void withDrainLock(() =>
-      drainMemoryJobs({ ...options, signal: controller.signal }, deps)
-    ).catch(() => {
+    void withDrainLock(async () => {
+      let processed = await drainMemoryJobs({ ...options, signal: controller.signal }, deps)
+      if (!shouldDriveBackfills || controller.signal.aborted || options.signal?.aborted) {
+        return processed
+      }
+      const runBackfillStep = options.tickBackfills ?? defaultTickBackfills
+      const enqueuedRuns = await runBackfillStep().catch(() => 0)
+      if (enqueuedRuns > 0 && !controller.signal.aborted && !options.signal?.aborted) {
+        const extra = await drainMemoryJobs({ ...options, signal: controller.signal }, deps)
+        processed += extra
+        if (extra > 0 && !controller.signal.aborted && !options.signal?.aborted) {
+          await runBackfillStep().catch(() => 0)
+        }
+      }
+      return processed
+    }).catch(() => {
       // Storage errors may contain transcript text or paths. Log a stable,
       // content-free diagnostic and let the next interval retry the queue.
       console.warn("Memory job worker drain failed")
     })
   }
+  activeWorkerTickers.add(tick)
   // Repair unreadable `workspace` rows once per start. It hangs off the worker
   // rather than off a renderer initializer because every host that can process
   // memory at all already starts this worker, and the repair is idempotent by
@@ -200,6 +229,7 @@ export function startMemoryJobWorker(options: StartMemoryJobWorkerOptions = {}):
   tick()
   const timer = setInterval(tick, options.intervalMs ?? 30_000)
   return () => {
+    activeWorkerTickers.delete(tick)
     controller.abort()
     clearInterval(timer)
     options.signal?.removeEventListener("abort", stopClaims)
@@ -1266,6 +1296,11 @@ async function defaultRepairNamespaces(): Promise<unknown> {
   const { repairWorkspaceScopedMemories } =
     await import("@/lib/memory/backfill/repair-workspace-scope")
   return repairWorkspaceScopedMemories()
+}
+
+async function defaultTickBackfills(): Promise<number> {
+  const { tickActiveWorkspaceBackfills } = await import("@/lib/memory/backfill/backfill-service")
+  return tickActiveWorkspaceBackfills()
 }
 
 const defaultWorkerDeps: MemoryJobWorkerDeps = {
