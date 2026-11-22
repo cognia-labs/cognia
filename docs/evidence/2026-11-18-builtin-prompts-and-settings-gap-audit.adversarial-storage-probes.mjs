@@ -162,7 +162,7 @@ function activate(accountId) {
   schema.activateAccountDatabase(accountId)
   databaseNames.add(schema.getDb().name)
 }
-const storage = load("lib/db/prompt-overrides.ts")
+load("lib/db/prompt-overrides.ts")
 const snapshots = load("lib/prompts/snapshot.ts")
 const resolver = load("lib/prompts/resolve.ts")
 const service = load("lib/prompts/service.ts")

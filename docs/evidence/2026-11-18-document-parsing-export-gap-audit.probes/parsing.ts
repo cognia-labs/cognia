@@ -1,6 +1,4 @@
 import { processDocumentAsync } from "../../../packages/document/src/document-processor"
-import { parseWord, parseExcel } from "../../../packages/document/src/parsers/office-parser"
-import { parsePresentation } from "../../../packages/document/src/parsers/presentation-parser"
 import { parseOpenDocumentSpreadsheet } from "../../../packages/document/src/parsers/open-document-parser"
 import JSZip from "jszip"
 import * as XLSX from "xlsx"

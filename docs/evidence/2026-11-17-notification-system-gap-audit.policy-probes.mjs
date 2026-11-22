@@ -9,6 +9,11 @@ const root = process.cwd()
 const rootRequire = createRequire(path.join(root, "package.json"))
 const ts = rootRequire("typescript")
 const cache = new Map()
+let currentRemoteTransport
+let onRemoteTransportChange
+let hostProfile = "desktop"
+const processTransport = { transport: undefined }
+
 function load(file) {
   file = path.resolve(root, file)
   if (cache.has(file)) return cache.get(file).exports
@@ -23,7 +28,25 @@ function load(file) {
     if (spec === "./scope" && file.endsWith("/notify.ts"))
       return { cachedNotificationScopeKey: () => "scope" }
     if (spec === "@/lib/execution/personal-sink")
-      return { mergePersonalSinkContexts: (a, b) => ({ ...a, ...b }) }
+      return {
+        mergePersonalSinkContexts: (a, b) => ({ ...a, ...b }),
+        unverifiedPersonalSinkContext: () => ({}),
+      }
+    // The ingest probes call the pure adapters and inject the real notify core.
+    // Boot, native transport and the production store belong to other probes.
+    if (spec === "@/lib/platform/capabilities") return { detectHostProfile: () => hostProfile }
+    if (spec === "@/lib/tauri/transport-instance") return processTransport
+    if (spec === "@/lib/tauri/transport-routing")
+      return {
+        getActiveRemoteTransport: () => currentRemoteTransport,
+        subscribeActiveRemoteTransport: (listener) => {
+          onRemoteTransportChange = listener
+          return () => {
+            onRemoteTransportChange = undefined
+          }
+        },
+      }
+    if (spec === "./runtime" || spec === "@/lib/push/push-notifications") return {}
     let next
     if (spec.startsWith("@/")) next = path.join(root, spec.slice(2))
     else if (spec.startsWith("@cognia/plugin-contract/"))
@@ -46,6 +69,10 @@ const { resolveChannels } = load("lib/notifications/routing.ts")
 const { notify } = load("lib/notifications/notify.ts")
 const { buildBumpPatch } = load("lib/notifications/dedup.ts")
 const { selectAutoWake } = load("lib/notifications/snooze.ts")
+const { ingestRemoteNotification, installRemoteNotificationListener } = load(
+  "lib/notifications/remote-subscription.ts"
+)
+const { pushToInput } = load("lib/notifications/inbound-push.ts")
 const scope = { namespaceId: "n", accountId: "a", authorityHostId: "h" }
 const target = (id, timezone = "UTC") => ({
   id,
@@ -111,9 +138,42 @@ assert.notEqual(a, b)
 record("different facts fail to share a digest bucket", { keyA: a, keyB: b })
 const deny = plan(fact(), sub([{ kind: "aggregate" }, { kind: "deny" }])).routes[0]
 assert.equal(deny.kind, "digest")
+const deferredDeny = plan(fact(), sub([{ kind: "defer", until: now + 1000 }, { kind: "deny" }]))
+  .routes[0]
+assert.equal(deferredDeny.kind, "deferred")
 record("aggregate before deny bypasses deny-first promise", {
   verdict: deny.kind,
   reason: deny.reasonCode,
+  deferBeforeDenyVerdict: deferredDeny.kind,
+})
+const quota = planNotification({
+  fact: fact(),
+  subscriptions: [{ ...sub(), targetIds: ["t1", "t2"], maxIntentsPerFact: 1 }],
+  targets: new Map([
+    ["t1", target("t1")],
+    ["t2", target("t2")],
+  ]),
+  incidents: [],
+  priorIntents: [],
+  policy: basePolicy,
+  now,
+}).routes
+assert.deepEqual(
+  quota.map((route) => route.kind),
+  ["notified", "notified"]
+)
+record("initial fan-out exceeds the per-fact intent quota", { quota: 1, routes: quota.length })
+
+const webhook = target("t1")
+const originReply = { ...webhook, consent: { ...webhook.consent, mode: "origin-reply" } }
+const normalVerdict = plan(fact(), sub(), originReply).routes[0]
+const approvalVerdict = plan({ ...fact(), purpose: "approval-request" }, sub(), originReply)
+  .routes[0]
+assert.equal(normalVerdict.kind, "denied-by-target")
+assert.equal(approvalVerdict.kind, "notified")
+record("origin-reply webhook allows an approval fact without matching origin evidence", {
+  ordinaryVerdict: normalVerdict.kind,
+  approvalVerdict: approvalVerdict.kind,
 })
 const old = {
   id: "old",
@@ -288,6 +348,135 @@ function deps(overrides = {}) {
   record("same operationKey creates two durable records and two fanouts", {
     storedRows: repeatedOp.rows.size,
     toastCount: repeatedOp.calls.filter((x) => x === "toast").length,
+  })
+
+  const remote = deps({
+    loadPrefs: () =>
+      resolvePreferences({
+        perSource: {
+          issue: { enabled: false },
+          site: { enabled: false },
+          collab: { enabled: false },
+        },
+      }),
+  })
+  const ingest = (frame, target = remote) =>
+    ingestRemoteNotification(frame, {
+      hostKey: "test-host",
+      notifyFn: (input, host) => notify(input, target, host),
+    })
+  const mutedSourcesMappedToSystem = []
+  for (const source of ["issue", "site", "collab"]) {
+    const frame = { source, id: source, level: "warning", title: "Synthetic remote notice" }
+    const direct = deps({ loadPrefs: remote.loadPrefs })
+    await notify(frame, direct, { personalContext: {} })
+    assert.deepEqual(direct.calls, ["persist"])
+    const id = await ingest(frame)
+    const row = remote.rows.get(id)
+    assert.equal(row?.source, "system")
+    assert.ok(row.deliveredVia.includes("toast"))
+    mutedSourcesMappedToSystem.push(source)
+  }
+  record("remote ingress loses source and bypasses its mute", { mutedSourcesMappedToSystem })
+
+  let receivedAt = now
+  const replay = deps({ now: () => receivedAt })
+  const frame = {
+    id: "same-frame",
+    source: "scheduler",
+    level: "warning",
+    title: "Synthetic replay",
+  }
+  const initialId = await ingest(frame, replay)
+  replay.rows.get(initialId).readState = "read"
+  assert.equal(await ingest(frame, replay), initialId)
+  assert.equal(replay.rows.get(initialId).readState, "unseen")
+  receivedAt += 46_000
+  assert.notEqual(await ingest(frame, replay), initialId)
+  assert.equal(replay.rows.size, 2)
+  const toastCount = replay.calls.filter((call) => call === "toast").length
+  assert.equal(toastCount, 3)
+  record("identical remote frame interrupts again and reopens a read row", {
+    toastCount,
+    rowsAfterWindow: replay.rows.size,
+  })
+
+  const switched = deps()
+  const ingested = []
+  function makeTransport() {
+    const listeners = new Set()
+    return {
+      listeners,
+      subscribe: (_channel, listener) => {
+        listeners.add(listener)
+        return () => listeners.delete(listener)
+      },
+      emit: (payload) => {
+        for (const listener of listeners) listener(payload)
+      },
+    }
+  }
+  const hostA = makeTransport()
+  const hostB = makeTransport()
+  currentRemoteTransport = hostA
+  const dispose = installRemoteNotificationListener({
+    notifyFn: (input, host) => {
+      const pending = notify(input, switched, host)
+      ingested.push(pending)
+      return pending
+    },
+  })
+  assert.equal(hostA.listeners.size, 1)
+  hostA.emit({ ...frame, title: "Host A" })
+  const fromA = await ingested[0]
+  switched.rows.get(fromA).readState = "read"
+  onRemoteTransportChange(hostB)
+  assert.equal(hostA.listeners.size, 0)
+  assert.equal(hostB.listeners.size, 1)
+  hostB.emit({ ...frame, title: "Host B" })
+  const fromB = await ingested[1]
+  assert.equal(fromA, fromB)
+  assert.equal(switched.rows.get(fromA).readState, "unseen")
+  assert.equal(switched.rows.get(fromA).title, "Host B")
+  assert.equal(switched.rows.size, 1)
+  dispose()
+  record("desktop remote-host switch reuses the notification dedupe namespace", {
+    distinctTransports: 2,
+    resultingRows: switched.rows.size,
+    overwrittenTitle: switched.rows.get(fromA).title,
+  })
+
+  hostProfile = "mobile-companion"
+  processTransport.transport = hostA
+  const mobileFrames = []
+  const disposeMobile = installRemoteNotificationListener({
+    notifyFn: async (input) => {
+      mobileFrames.push(input.title)
+      return "mobile-notification"
+    },
+  })
+  hostA.emit({ ...frame, title: "Old transport" })
+  processTransport.transport = hostB
+  hostB.emit({ ...frame, title: "New transport" })
+  assert.equal(hostB.listeners.size, 0)
+  assert.deepEqual(mobileFrames, ["Old transport"])
+  disposeMobile()
+  record("mobile remote listener is not rebound when the process transport changes", {
+    receivedFrom: mobileFrames,
+    listenersOnReplacement: hostB.listeners.size,
+  })
+
+  const criticalPush = deps()
+  const input = pushToInput({
+    foreground: true,
+    title: "Synthetic critical push",
+    data: { source: "system", level: "critical" },
+  })
+  assert.deepEqual(input.channels, ["center"])
+  await notify(input, criticalPush, { personalContext: {} })
+  assert.deepEqual(criticalPush.calls, ["toast", "os", "persist"])
+  record("inbound critical push requests another toast and OS alert", {
+    operations: criticalPush.calls,
   })
   console.log(JSON.stringify({ probeCount: results.length, results }, null, 2))
 })().catch((e) => {

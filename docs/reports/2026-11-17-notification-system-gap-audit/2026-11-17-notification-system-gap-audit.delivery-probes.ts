@@ -371,7 +371,7 @@ test("AUDIT retry leaves connector job deadlettered and receipt makes retry fail
   )
 })
 
-test("AUDIT revoked subscription still permits queued webhook send", async () => {
+async function seedWebhookRoute(operationKey: string) {
   const target = await upsertNotificationTarget({
     scope,
     label: "webhook",
@@ -397,7 +397,7 @@ test("AUDIT revoked subscription still permits queued webhook send", async () =>
     payload,
     purpose: "terminal-state",
     category: "run.terminal",
-    operationKey: "revoked",
+    operationKey,
     subscriptionId: sub.id,
   })
   const db = getDb()
@@ -406,6 +406,11 @@ test("AUDIT revoked subscription still permits queued webhook send", async () =>
     [db.notificationDeliveryIntents, db.notificationTargets, db.notificationSubscriptions],
     () => persistWebhookIntentInsideTransaction(db, prepared)
   )
+  return { id, target, sub }
+}
+
+test("AUDIT revoked subscription still permits queued webhook send", async () => {
+  const { id, sub } = await seedWebhookRoute("revoked")
   await deleteNotificationSubscription(sub.id, sub.version)
   const sendHttp = jest.fn(async () => ({ status: 200, body: '{"code":0}' }) as never)
   const result = await sendPendingWebhookIntents({
@@ -421,4 +426,52 @@ test("AUDIT revoked subscription still permits queued webhook send", async () =>
       intent: (await getDeliveryIntent(id))?.status,
     })
   )
+})
+
+test("AUDIT target disable blocks pre-claim work but misses a claimed send awaiting credentials", async () => {
+  const early = await seedWebhookRoute("disable-before-claim")
+  await upsertNotificationTarget({
+    ...early.target,
+    enabled: false,
+    expectedVersion: early.target.version,
+  })
+  const sendHttp = jest.fn(async () => ({ status: 200, body: '{"code":0}' }) as never)
+  await sendPendingWebhookIntents({
+    deps: { sendHttp, resolveSecret: async () => "https://example.invalid/fake-webhook" },
+  })
+  expect(sendHttp).not.toHaveBeenCalled()
+  expect((await getDeliveryIntent(early.id))?.status).toBe("cancelled")
+
+  const late = await seedWebhookRoute("disable-after-claim")
+  const enteredKeyring = Promise.withResolvers<void>()
+  const resumeKeyring = Promise.withResolvers<void>()
+  const sending = sendPendingWebhookIntents({
+    deps: {
+      sendHttp,
+      resolveSecret: async () => {
+        enteredKeyring.resolve()
+        await resumeKeyring.promise
+        return "https://example.invalid/fake-webhook"
+      },
+    },
+  })
+  try {
+    await Promise.race([
+      enteredKeyring.promise,
+      sending.then(() => {
+        throw new Error("Sender completed without resolving credentials")
+      }),
+    ])
+    expect((await getDeliveryIntent(late.id))?.status).toBe("sending")
+    await upsertNotificationTarget({
+      ...late.target,
+      enabled: false,
+      expectedVersion: late.target.version,
+    })
+  } finally {
+    resumeKeyring.resolve()
+    await sending
+  }
+  expect(sendHttp).toHaveBeenCalledTimes(1)
+  expect((await getDeliveryIntent(late.id))?.status).toBe("accepted")
 })

@@ -71,7 +71,7 @@ registry.registerPluginPrompts(
   [{ id: "slot", title: "Test", defaultBody: "Old default" }],
   "test"
 )
-const before = resolve.resolvePrompt(registry.getPluginPromptEntry(override.promptId).def, {
+resolve.resolvePrompt(registry.getPluginPromptEntry(override.promptId).def, {
   snapshot,
 })
 registry.registerPluginPrompts(
