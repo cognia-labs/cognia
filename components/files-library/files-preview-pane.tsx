@@ -751,14 +751,16 @@ function AccessSection({
                   <Link2Icon className="size-3 shrink-0 text-muted-foreground" aria-hidden />
                   <span className="truncate">{link.title || link.code}</span>
                 </div>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">
-                  {t("access.expiresAt", {
-                    date: format.dateTime(link.expiresAt, {
-                      dateStyle: "medium",
-                      timeStyle: "short",
-                    }),
-                  })}
-                </p>
+                {link.expiresAt !== undefined ? (
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">
+                    {t("access.expiresAt", {
+                      date: format.dateTime(link.expiresAt, {
+                        dateStyle: "medium",
+                        timeStyle: "short",
+                      }),
+                    })}
+                  </p>
+                ) : null}
               </div>
               {ops.revokeSharedLink && !readOnly ? (
                 <Button

@@ -295,7 +295,15 @@ describe("expandShareSelection", () => {
     expect(byPath.get(p("/workspace/README.md"))).toMatchObject({
       kind: "workspace-file",
       originSessionId: "s1",
-      workspace: { workspaceRoot: "/repo", relPath: "README.md" },
+      snapshot: {
+        title: "README.md",
+        workspace: {
+          sessionId: "s1",
+          workspaceRoot: "/repo",
+          executionRoot: "/repo",
+          relPath: "README.md",
+        },
+      },
     })
     expect(byPath.get(p("/uploads/report.pdf"))).toEqual({
       kind: "session-upload",

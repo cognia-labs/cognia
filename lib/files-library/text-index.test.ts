@@ -137,9 +137,10 @@ describe("syncFilesTextIndex & searchFilesBodies", () => {
     const searchWorkspace = jest.fn(async () => [
       {
         relPath: "src/router.rs",
-        lineNumber: 42,
+        absolutePath: "/repo/src/router.rs",
+        line: 42,
         column: 5,
-        lineText: "    pub fn dispatch_companion_route() -> Result<(), Error> {",
+        preview: "pub fn dispatch_companion_route() -> Result<(), Error> {",
       },
     ])
 

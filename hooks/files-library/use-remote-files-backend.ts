@@ -146,7 +146,9 @@ export function useRemoteFilesBackend(
       const run = ++searchGenRef.current
       const ask = client.searchQuery
         ? client.searchQuery(query, imageLimitRef.current, 200)
-        : client.search(query, imageLimitRef.current, 200).then((items) => ({ items }))
+        : client
+            .search(query, imageLimitRef.current, 200)
+            .then((items) => ({ items, truncated: false }))
       void ask
         .then((answer) => {
           if (run !== searchGenRef.current) return

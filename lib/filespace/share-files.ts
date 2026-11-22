@@ -18,8 +18,9 @@ import {
   assertSharedSessionFileShare,
   SharedSessionAccessError,
 } from "@/lib/collab/shared-session-access"
-import { recordLibraryItemsShared } from "@/lib/db/files-library-items"
-import type { LibraryItemSource } from "@/lib/db/files-library-types"
+import { recordLibraryItemsShared, type LibraryItemSource } from "@/lib/db/files-library-items"
+import { libraryItemKey } from "@/lib/db/files-library-types"
+import { getDb } from "@/lib/db/schema"
 import { loadLiveShareCodes } from "@/lib/files-library/sources"
 import {
   createShareLink,
@@ -76,7 +77,10 @@ export const defaultCreateFileShareDeps: CreateFileShareDeps = {
   loadPolicy: loadEffectiveFileSharingPolicy,
   createShareLink,
   recordSharedItems: async (sources, code) => {
-    const live = await loadLiveShareCodes()
+    const rows = await getDb().libraryItems.bulkGet(
+      sources.map((source) => libraryItemKey(source.kind, source.sourceId))
+    )
+    const live = await loadLiveShareCodes(rows.flatMap((row) => row?.sharedLinkCodes ?? []))
     await recordLibraryItemsShared(sources, code, live)
   },
 }

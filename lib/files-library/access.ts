@@ -31,7 +31,7 @@ export interface FilesShareLinkAccess {
   title: string
   kind: string
   createdAt: number
-  expiresAt: number
+  expiresAt?: number
   /** Public viewer URL with any `#k=` decryption fragment stripped. */
   url: string
 }
@@ -74,7 +74,7 @@ const defaultDeps: FilesAccessDeps = {
   listSharedLinks: () => listSharedLinks({ includeRevoked: false }),
   hasLiveGrants: isTauri,
   listLiveGrants: (query) => listLiveGrants(query),
-  loadFileSpace: loadConversationFileSpace,
+  loadFileSpace: async (sessionId) => (await loadConversationFileSpace(sessionId)).space,
   listDexieEntries: listFileSpaceDexieEntries,
 }
 
@@ -107,7 +107,7 @@ export async function resolveFilesEntryAccess(
   const recordedCodes = new Set(item?.sharedLinkCodes ?? [])
   const sharedLinks: FilesShareLinkAccess[] = links
     .filter((link) => {
-      if (link.revoked || link.expiresAt <= now) return false
+      if (link.revoked || (link.expiresAt !== undefined && link.expiresAt <= now)) return false
       if (recordedCodes.has(link.code)) return true
       if (entry.contentHash && link.files?.some((file) => file.sha256 === entry.contentHash)) {
         return true
@@ -117,10 +117,10 @@ export async function resolveFilesEntryAccess(
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((link) => ({
       code: link.code,
-      title: link.title,
+      title: link.title ?? "",
       kind: link.kind,
       createdAt: link.createdAt,
-      expiresAt: link.expiresAt,
+      ...(link.expiresAt !== undefined ? { expiresAt: link.expiresAt } : {}),
       url: stripUrlFragment(link.url),
     }))
 
@@ -203,8 +203,7 @@ export async function resolveFilesEntryAccess(
       } else if (
         entry.kind === "upload" ||
         entry.kind === "session-upload" ||
-        entry.kind === "image" ||
-        entry.kind === "generated-video"
+        entry.kind === "image"
       ) {
         for (const gp of grant.paths) {
           if (gp.mountId !== "uploads") continue

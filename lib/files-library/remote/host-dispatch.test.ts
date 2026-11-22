@@ -667,7 +667,7 @@ it("reuses one sorted snapshot across 10,000-item multi-page sweeps and invalida
       "files_library_list",
       { pageSize: 500, ...(pageToken ? { pageToken } : {}) },
       d
-    )) as FilesRemoteListPage & { ok: true }
+    )) as unknown as FilesRemoteListPage & { ok: true }
     expect(page.ok).toBe(true)
     expectedRevision ??= page.revision
     expect(page.revision).toBe(expectedRevision)

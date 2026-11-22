@@ -386,9 +386,9 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
       }
       const exportFilename = t("exportFilename")
       const totalEstimate = entries.reduce((sum, entry) => sum + (entry.byteSize ?? 0), 0)
-      const runExport = async (existingTaskId?: string) => {
+      const runExport = async (existingTaskId?: string): Promise<void> => {
         const controller = new AbortController()
-        const taskId =
+        const taskId: string =
           existingTaskId ??
           useFilesTransferStore.getState().enqueueTask({
             kind: "export-zip",
@@ -396,7 +396,7 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
             totalBytes: totalEstimate,
             status: "running",
             abortController: controller,
-            retryFn: () => runExport(taskId),
+            retryFn: (): Promise<void> => runExport(taskId),
           })
         if (existingTaskId) {
           useFilesTransferStore.getState().markRunning(existingTaskId, controller)

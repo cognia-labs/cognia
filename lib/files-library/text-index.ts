@@ -304,15 +304,15 @@ export async function searchFilesBodies(
               `${root}\u0000${normalizeRelPath(hit.relPath)}`
             )
             if (!matched) continue
-            const lineLower = hit.lineText.toLowerCase()
+            const lineLower = hit.preview.toLowerCase()
             for (const entry of matched) {
               const combined = `${entry.searchText}\n${lineLower}`
               if (terms.every((term) => combined.includes(term))) {
                 matchedKeys.add(entry.key)
                 if (!snippets.has(entry.key)) {
                   const snippet =
-                    extractMatchSnippet(hit.lineText, trimmed) ??
-                    hit.lineText.trim().slice(0, FILES_SNIPPET_MAX_CHARS)
+                    extractMatchSnippet(hit.preview, trimmed) ??
+                    hit.preview.trim().slice(0, FILES_SNIPPET_MAX_CHARS)
                   if (snippet) snippets.set(entry.key, snippet)
                 }
               }

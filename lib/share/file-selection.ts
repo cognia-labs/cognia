@@ -36,7 +36,7 @@ import {
   SHARE_MAX_TOTAL_BLOB_BYTES,
   shareBlobStoredBytes,
 } from "./blob-crypto"
-import type { LibraryItemSource } from "@/lib/db/files-library-types"
+import type { LibraryItemSource } from "@/lib/db/files-library-items"
 import { isImageMediaType, originalMediaKey } from "@/lib/files-library/aggregate"
 import { workspaceFileSourceId } from "@/lib/files-library/workspace-files"
 import type { ShareBlobSource } from "./blobs"
@@ -278,17 +278,29 @@ export async function expandShareSelection(
     const diskCandidate = (rel: string, size: number): ShareFileCandidate | null => {
       const candidatePath = joinFileSpacePath(mount.virtualPath, rel)
       if (!candidatePath) return null
+      const name = baseName(rel)
+      const mime = mimeForFileName(name)
       return {
         path: candidatePath,
-        name: baseName(rel),
-        mime: mimeForFileName(baseName(rel)),
+        name,
+        mime,
         size,
         sensitive: isSensitivePath(rel),
         librarySource: {
           kind: "workspace-file",
           sourceId: workspaceFileSourceId(space.sessionId, root, rel),
           originSessionId: space.sessionId,
-          workspace: { workspaceRoot: root, relPath: rel },
+          snapshot: {
+            title: name,
+            mediaType: mime,
+            byteSize: size,
+            workspace: {
+              sessionId: space.sessionId,
+              workspaceRoot: root,
+              executionRoot: root,
+              relPath: rel,
+            },
+          },
         },
         open: async () => workspaceShareSource(root, rel, size, candidatePath),
       }
