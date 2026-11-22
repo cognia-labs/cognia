@@ -1,4 +1,5 @@
 import Dexie from "dexie"
+import type { StoredMessage } from "@cognia/agent-config-types"
 import type {
   MemoryAuditEvent,
   MemoryEvidence,
@@ -6,6 +7,7 @@ import type {
   MemoryJobStatus,
 } from "@/types/memory/governance"
 import { computeBeliefInputs } from "@cognia/memory/lifecycle/belief"
+import { assessClaimSupport } from "@cognia/memory/lifecycle/claim-support"
 import { getDb } from "./schema"
 
 export interface MemoryPersistenceScope {
@@ -133,6 +135,53 @@ export async function recordMemoryEvidenceVerdict(
  * `messageId` index — this is what it exists for. Returns the affected memory
  * ids so the caller can queue a re-check for each.
  */
+/**
+ * Synchronously reconcile active project claims whose evidence was just revoked
+ * so the very next prompt cannot inject a claim whose sole support disappeared
+ * (`N12`). Personal memories have no citation model and are untouched.
+ */
+async function syncRevokedProjectClaims(
+  memoryIds: readonly string[],
+  now: number,
+  scope?: MemoryPersistenceScope
+): Promise<void> {
+  const ids = [...new Set(memoryIds.filter(Boolean))]
+  if (ids.length === 0) return
+  const db = scope?.db ?? getDb()
+  for (const memoryId of ids) {
+    scope?.assertActive()
+    const memory = await db.memories.get(memoryId)
+    scope?.assertActive()
+    if (!memory || memory.projectMemoryKind === undefined || memory.status !== "active") continue
+    const allEvidence = await db.memoryEvidence.where("memoryId").equals(memoryId).toArray()
+    scope?.assertActive()
+    const verdict = assessClaimSupport(allEvidence)
+    if (verdict.invalidate) {
+      await db.memories.update(memoryId, {
+        status: "invalidated",
+        staleness: "expired",
+        invalidatedAt: now,
+        validatedAt: now,
+        updatedAt: now,
+      })
+      scope?.assertActive()
+      await db.memoryAuditEvents.add({
+        id: newId("mau"),
+        action: "invalidated",
+        memoryId,
+        reason: "evidence_revoked",
+        metadata: { support: verdict.support },
+        createdAt: now,
+      })
+    } else {
+      await db.memories.update(memoryId, {
+        staleness: verdict.staleness,
+        validatedAt: now,
+      })
+    }
+  }
+}
+
 export async function revokeMemoryEvidenceForMessages(
   messageIds: readonly string[],
   now: number = Date.now()
@@ -151,6 +200,7 @@ export async function revokeMemoryEvidenceForMessages(
     ...new Set(rows.map((row) => row.memoryId).filter((id): id is string => Boolean(id))),
   ]
   await scheduleBeliefRefresh(memoryIds)
+  await syncRevokedProjectClaims(memoryIds, now)
   return memoryIds
 }
 
@@ -181,6 +231,8 @@ export async function revokeMemoryEvidenceForSession(
   ]
   scope?.assertActive()
   await scheduleBeliefRefresh(memoryIds, scope)
+  scope?.assertActive()
+  await syncRevokedProjectClaims(memoryIds, now, scope)
   scope?.assertActive()
   return memoryIds
 }
@@ -398,28 +450,64 @@ export async function getMemoryJob(id: string): Promise<MemoryJob | undefined> {
 }
 
 export class MemoryJobWriteError extends Error {
-  constructor(readonly code: "job_claim_lost" | "source_deleted") {
+  constructor(readonly code: "job_claim_lost" | "source_deleted" | "source_changed") {
     super(code)
     this.name = "MemoryJobWriteError"
   }
 }
 
+export interface MemoryJobWriteGuardOptions {
+  /** Expected hash per source message id at the time the worker read the window. */
+  expectedSourceHashes?: ReadonlyMap<string, string>
+  /** Deterministic synchronous hash projection of a stored message row. */
+  projectMessage?: (row: StoredMessage) => string
+  /** Expected session `projectId` at job start. */
+  projectId?: string
+  /** Expected session `characterId` at job start. */
+  characterId?: string
+  /** Associated `projectMiningRuns` id, if queued by workspace backfill. */
+  runId?: string | null
+}
+
+/** Check whether a claimed job still owns its active, uncancelled epoch. */
+export async function isMemoryJobClaimActive(claimed: MemoryJob): Promise<boolean> {
+  if (!claimed.leaseOwner) return true
+  const current = await getDb().memoryJobs.get(claimed.id)
+  return Boolean(
+    current &&
+      current.status === "running" &&
+      current.leaseOwner === claimed.leaseOwner &&
+      current.fencingEpoch === claimed.fencingEpoch &&
+      current.cancellationRequestedAt === undefined
+  )
+}
+
 /**
  * Fence a canonical mutation AFTER model work, in the transaction that writes
- * it. Source deletion/cancellation and a newer claim cannot interleave between
- * this check and the write. Never run a provider/vector call in this callback:
- * the returned promise resolves only after the root transaction commits.
- * Lease expiry alone does not revoke an epoch (the same rule as completion).
+ * it. Source deletion/edit/cancellation and a newer claim cannot interleave
+ * between this check and the write. Never run a provider/vector call in this
+ * callback: the returned promise resolves only after the root transaction
+ * commits. Lease expiry alone does not revoke an epoch (the same rule as
+ * completion).
  */
 export async function withMemoryJobWrite<T>(
   claimed: MemoryJob,
   sourceMessageIds: readonly string[],
-  write: () => Promise<T>
+  write: () => Promise<T>,
+  options?: MemoryJobWriteGuardOptions
 ): Promise<T> {
   const db = getDb()
   return db.transaction(
     "rw",
-    [db.memoryJobs, db.sessions, db.messages, db.memories, db.memoryEvidence, db.memoryAuditEvents],
+    [
+      db.memoryJobs,
+      db.sessions,
+      db.messages,
+      db.memories,
+      db.memoryEvidence,
+      db.memoryAuditEvents,
+      db.projectMiningRuns,
+    ],
     async () => {
       const current = await db.memoryJobs.get(claimed.id)
       if (
@@ -432,12 +520,36 @@ export async function withMemoryJobWrite<T>(
       ) {
         throw new MemoryJobWriteError("job_claim_lost")
       }
-      if (!claimed.sessionId || !(await db.sessions.get(claimed.sessionId))) {
+      const runId = options?.runId ?? current.runId
+      if (runId) {
+        const run = await db.projectMiningRuns.get(runId)
+        if (!run || (run.status !== "running" && run.status !== "queued")) {
+          throw new MemoryJobWriteError("job_claim_lost")
+        }
+      }
+      const session = claimed.sessionId ? await db.sessions.get(claimed.sessionId) : undefined
+      if (!session) {
         throw new MemoryJobWriteError("source_deleted")
+      }
+      if (
+        session.memoryLearn === false ||
+        (options?.projectId !== undefined && session.projectId !== options.projectId) ||
+        (options?.characterId !== undefined && session.characterId !== options.characterId)
+      ) {
+        throw new MemoryJobWriteError("source_changed")
       }
       const sources = await db.messages.bulkGet([...new Set(sourceMessageIds)])
       if (sources.some((source) => !source || source.sessionId !== claimed.sessionId)) {
         throw new MemoryJobWriteError("source_deleted")
+      }
+      if (options?.expectedSourceHashes && options.projectMessage) {
+        for (const source of sources) {
+          if (!source) continue
+          const expected = options.expectedSourceHashes.get(source.id)
+          if (expected !== undefined && options.projectMessage(source) !== expected) {
+            throw new MemoryJobWriteError("source_changed")
+          }
+        }
       }
       return write()
     }
