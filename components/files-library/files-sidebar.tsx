@@ -10,6 +10,8 @@
 import type { ComponentType } from "react"
 import { useTranslations } from "next-intl"
 import {
+  BookmarkIcon,
+  BookmarkPlusIcon,
   ClockIcon,
   FileIcon,
   FilmIcon,
@@ -17,15 +19,27 @@ import {
   HardDriveIcon,
   ImageIcon,
   LayoutGridIcon,
+  MoreHorizontalIcon,
+  PencilIcon,
   PenLineIcon,
   ShapesIcon,
   Trash2Icon,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { useFilesOps } from "@/hooks/files-library/files-backend"
 import { displayTitle, type FilesActions } from "@/hooks/files-library/use-files-actions"
-import { ROOT_LIBRARY_FOLDER_ID, type LibraryFolder } from "@/lib/db/files-library-types"
+import {
+  ROOT_LIBRARY_FOLDER_ID,
+  type LibraryFolder,
+  type LibrarySmartCollection,
+} from "@/lib/db/files-library-types"
 import { sameFilesSection } from "@/lib/files-library/deep-link"
 import {
   FILES_TYPE_GROUPS,
@@ -51,9 +65,11 @@ const GROUP_ICONS: Record<FilesTypeGroup, ComponentType<{ className?: string }>>
 
 export interface FilesSidebarProps {
   folders: readonly LibraryFolder[]
+  collections?: readonly LibrarySmartCollection[]
   recents: readonly FilesEntry[]
   trashCount: number
-  actions: Pick<FilesActions, "preview" | "setFolderStyle">
+  actions: Pick<FilesActions, "preview" | "setFolderStyle"> &
+    Partial<Pick<FilesActions, "deleteCollection">>
   /**
    * Drawn in the phone's place sheet: every row and control grows to a 44px
    * touch target.
@@ -197,14 +213,18 @@ function TrashPlace({ count, touch }: { count: number; touch: boolean }) {
 
 export function FilesSidebar({
   folders,
+  collections = [],
   recents,
   trashCount,
   actions,
   touch = false,
 }: FilesSidebarProps) {
   const t = useTranslations("files")
+  const section = useFilesLibraryStore((s) => s.section)
   const setSection = useFilesLibraryStore((s) => s.setSection)
   const openFolderDialog = useFilesLibraryStore((s) => s.openFolderDialog)
+  const openCollectionDialog = useFilesLibraryStore((s) => s.openCollectionDialog)
+  const applyCollection = useFilesLibraryStore((s) => s.applyCollection)
   const { workspaceFiles } = useFilesOps().capabilities
 
   return (
@@ -302,6 +322,103 @@ export function FilesSidebar({
           actions={actions}
           touch={touch}
         />
+
+        <SectionLabel
+          action={
+            <Button
+              variant="ghost"
+              size="icon"
+              className={touch ? "size-10" : "size-6"}
+              aria-label={t("collections.new")}
+              onClick={() => openCollectionDialog({ mode: "create" })}
+              data-testid="files-sidebar-new-collection"
+            >
+              <BookmarkPlusIcon className="size-3.5" aria-hidden />
+            </Button>
+          }
+        >
+          {t("places.collections")}
+        </SectionLabel>
+        {collections.length === 0 ? (
+          <p
+            className="px-2 py-1 text-xs text-muted-foreground"
+            data-testid="files-collections-empty"
+          >
+            {t("collections.empty")}
+          </p>
+        ) : (
+          <ul className="flex flex-col" aria-label={t("places.collections")}>
+            {collections.map((collection) => {
+              const current =
+                section.kind === "collection" && section.collectionId === collection.id
+              return (
+                <li
+                  key={collection.id}
+                  className={cn(
+                    "group flex min-w-0 items-center rounded-md pr-1 hover:bg-accent/60",
+                    current && "bg-accent font-medium"
+                  )}
+                >
+                  <button
+                    type="button"
+                    onClick={() => applyCollection(collection)}
+                    aria-current={current ? "page" : undefined}
+                    className={cn(
+                      "flex min-w-0 flex-1 items-center gap-2 rounded-md px-2 text-left text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/60",
+                      rowHeight(touch)
+                    )}
+                    data-testid={`files-place-collection-${collection.id}`}
+                  >
+                    <BookmarkIcon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
+                    <span className="truncate">{collection.name}</span>
+                  </button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className={cn(
+                          touch
+                            ? "size-9"
+                            : "size-6 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                        )}
+                        aria-label={t("collections.menu", { name: collection.name })}
+                        data-testid={`files-collection-menu-${collection.id}`}
+                      >
+                        <MoreHorizontalIcon className="size-3.5" aria-hidden />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onSelect={() =>
+                          openCollectionDialog({
+                            mode: "edit",
+                            collectionId: collection.id,
+                            name: collection.name,
+                          })
+                        }
+                        data-testid={`files-collection-edit-${collection.id}`}
+                      >
+                        <PencilIcon className="size-4" aria-hidden />
+                        {t("collections.saveCurrent")}
+                      </DropdownMenuItem>
+                      {actions.deleteCollection ? (
+                        <DropdownMenuItem
+                          className="text-destructive focus:text-destructive"
+                          onSelect={() => void actions.deleteCollection?.(collection)}
+                          data-testid={`files-collection-delete-${collection.id}`}
+                        >
+                          <Trash2Icon className="size-4" aria-hidden />
+                          {t("collections.delete")}
+                        </DropdownMenuItem>
+                      ) : null}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </li>
+              )
+            })}
+          </ul>
+        )}
       </div>
       <div className="shrink-0 px-2 py-2">
         <TrashPlace count={trashCount} touch={touch} />

@@ -5798,6 +5798,54 @@ it("v253 adds device-local sync leases without changing v252 bindings", async ()
   }
 })
 
+it("v262 adds libraryItem multi-tags, smart collections and segmented text index without touching existing items", async () => {
+  const name = `cognia-files-tags-fts-v262-${Date.now()}`
+  const previous = new Dexie(name)
+  previous.version(261).stores({
+    ...CURRENT_SCHEMA,
+    libraryItems:
+      "&key, [kind+sourceId], originSessionId, projectId, folderId, favoritedAt, trashedAt, lastOpenedAt, updatedAt",
+    libraryCollections: null,
+    libraryTextSegments: null,
+  })
+  await previous.open()
+  await previous.table("libraryItems").put({
+    key: "artifact:a1",
+    kind: "artifact",
+    sourceId: "a1",
+    favoritedAt: 10,
+    keptAt: 10,
+    createdAt: 10,
+    updatedAt: 10,
+  })
+  previous.close()
+
+  const current = new CogniaDB(name)
+  try {
+    await current.open()
+    expect(current.verno).toBe(CURRENT_SCHEMA_VERSION)
+    expect(current.libraryItems.schema.idxByName.tags?.multi).toBe(true)
+    expect(current.libraryCollections.schema.primKey.keyPath).toBe("id")
+    expect(Object.keys(current.libraryCollections.schema.idxByName)).toEqual(
+      expect.arrayContaining(["updatedAt", "createdAt"])
+    )
+    expect(current.libraryTextSegments.schema.primKey.keyPath).toBe("id")
+    expect(Object.keys(current.libraryTextSegments.schema.idxByName)).toEqual(
+      expect.arrayContaining(["contentKey", "updatedAt"])
+    )
+    expect(await current.libraryItems.get("artifact:a1")).toMatchObject({
+      key: "artifact:a1",
+      favoritedAt: 10,
+      keptAt: 10,
+    })
+    expect(await current.libraryCollections.count()).toBe(0)
+    expect(await current.libraryTextSegments.count()).toBe(0)
+  } finally {
+    current.close()
+    await Dexie.delete(name)
+  }
+})
+
 it("v252 preserves v251 accounts that already share a connection ref", async () => {
   const name = "cognia-connection-accounts-v252-upgrade"
   const previous = new Dexie(name)

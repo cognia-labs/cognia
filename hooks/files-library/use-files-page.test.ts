@@ -10,8 +10,14 @@ const entriesState: { entries: unknown; imagesTruncated: boolean; loadMoreImages
   loadMoreImages: jest.fn(),
 }
 jest.mock("./use-files-entries", () => ({ useFilesEntries: () => entriesState }))
-const folderState: { folders: unknown[] } = { folders: [] }
-jest.mock("./use-files-folders", () => ({ useFilesFolders: () => folderState.folders }))
+const folderState: { folders: unknown[]; collections: unknown[] } = {
+  folders: [],
+  collections: [],
+}
+jest.mock("./use-files-folders", () => ({
+  useFilesFolders: () => folderState.folders,
+  useFilesCollections: () => folderState.collections,
+}))
 const actions = { preview: jest.fn() }
 const actionsFor = jest.fn()
 jest.mock("./use-files-actions", () => ({

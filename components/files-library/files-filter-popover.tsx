@@ -9,7 +9,7 @@
  */
 
 import { useTranslations } from "next-intl"
-import { ListFilterIcon } from "lucide-react"
+import { BookmarkPlusIcon, ListFilterIcon } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -39,17 +39,34 @@ function FilterHeading({ children }: { children: React.ReactNode }) {
   return <p className="text-xs font-medium text-muted-foreground">{children}</p>
 }
 
-export function FilesFilterPopover({ compact = false }: { compact?: boolean } = {}) {
+export function FilesFilterPopover({
+  compact = false,
+  availableTags = [],
+}: {
+  compact?: boolean
+  availableTags?: readonly string[]
+} = {}) {
   const t = useTranslations("files")
   const filters = useFilesLibraryStore((s) => s.filters)
   const setFilters = useFilesLibraryStore((s) => s.setFilters)
   const resetFilters = useFilesLibraryStore((s) => s.resetFilters)
   const projectScope = useFilesLibraryStore((s) => s.projectScope)
   const setProjectScope = useFilesLibraryStore((s) => s.setProjectScope)
+  const search = useFilesLibraryStore((s) => s.search)
+  const lens = useFilesLibraryStore((s) => s.lens)
+  const openCollectionDialog = useFilesLibraryStore((s) => s.openCollectionDialog)
+  const selectedTags = filters.tags ?? []
+  const tagOptions = Array.from(
+    new Map(
+      [...availableTags, ...selectedTags].map((tag) => [tag.toLowerCase(), tag] as const)
+    ).values()
+  )
   const active =
     (filters.formats.length > 0 ? 1 : 0) +
     (filters.modified !== "any" ? 1 : 0) +
-    (filters.size !== "any" ? 1 : 0)
+    (filters.size !== "any" ? 1 : 0) +
+    (selectedTags.length > 0 ? 1 : 0)
+  const canSaveCollection = active > 0 || search.trim().length > 0 || lens !== "suggested"
 
   return (
     <Popover>
@@ -175,8 +192,58 @@ export function FilesFilterPopover({ compact = false }: { compact?: boolean } = 
               })}
             </RadioGroup>
           </div>
+          {tagOptions.length > 0 ? (
+            <>
+              <Separator />
+              <fieldset className="flex flex-col gap-2" data-testid="files-filter-tags">
+                <legend className="mb-1">
+                  <FilterHeading>{t("filter.tags")}</FilterHeading>
+                </legend>
+                <div className="flex max-h-28 flex-wrap gap-1.5 overflow-y-auto">
+                  {tagOptions.map((tag) => {
+                    const checked = selectedTags.some(
+                      (existing) => existing.toLowerCase() === tag.toLowerCase()
+                    )
+                    return (
+                      <Button
+                        key={tag}
+                        type="button"
+                        variant={checked ? "secondary" : "outline"}
+                        size="sm"
+                        className="h-6 px-2 text-xs"
+                        aria-pressed={checked}
+                        onClick={() =>
+                          setFilters({
+                            tags: checked
+                              ? selectedTags.filter(
+                                  (existing) => existing.toLowerCase() !== tag.toLowerCase()
+                                )
+                              : [...selectedTags, tag],
+                          })
+                        }
+                        data-testid={`files-filter-tag-${tag}`}
+                      >
+                        {tag}
+                      </Button>
+                    )
+                  })}
+                </div>
+              </fieldset>
+            </>
+          ) : null}
         </div>
-        <div className="flex justify-end border-t p-2">
+        <div className="flex items-center justify-between gap-2 border-t p-2">
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            onClick={() => openCollectionDialog({ mode: "create" })}
+            disabled={!canSaveCollection}
+            data-testid="files-filter-save-collection"
+          >
+            <BookmarkPlusIcon className="size-3.5" aria-hidden />
+            {t("filter.saveCollection")}
+          </Button>
           <Button
             variant="ghost"
             size="sm"

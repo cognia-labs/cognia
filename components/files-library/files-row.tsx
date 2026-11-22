@@ -40,9 +40,18 @@ export interface FilesRowProps {
   selected: boolean
   onSelect: (key: string, event: RangeSelectionMouseEvent) => void
   now: number
+  snippet?: string
 }
 
-export function FilesRow({ entry, actions, previewed, selected, onSelect, now }: FilesRowProps) {
+export function FilesRow({
+  entry,
+  actions,
+  previewed,
+  selected,
+  onSelect,
+  now,
+  snippet,
+}: FilesRowProps) {
   const t = useTranslations("files")
   const locale = useLocale()
   const title = displayTitle(entry, t)
@@ -159,7 +168,25 @@ export function FilesRow({ entry, actions, previewed, selected, onSelect, now }:
                 {t("card.sourceDeleted")}
               </Badge>
             ) : null}
+            {entry.tags?.slice(0, 2).map((tag) => (
+              <Badge
+                key={tag}
+                variant="secondary"
+                className="h-4 shrink-0 px-1.5 text-[10px]"
+                data-testid={`files-row-tag-${tag}`}
+              >
+                {tag}
+              </Badge>
+            ))}
           </div>
+          {snippet ? (
+            <p
+              className="mt-0.5 truncate pl-11 text-xs text-muted-foreground"
+              data-testid={`files-row-snippet-${entry.key}`}
+            >
+              {snippet}
+            </p>
+          ) : null}
         </TableCell>
         <TableCell className="hidden truncate text-muted-foreground @xl/files:table-cell">
           {source}

@@ -27,7 +27,7 @@
  * "New → Upload files", the system file picker.
  */
 
-import { useCallback, useState, type ReactNode } from "react"
+import { useCallback, useMemo, useState, type ReactNode } from "react"
 import { useTranslations } from "next-intl"
 import { CheckSquareIcon, ChevronDownIcon, PanelLeftIcon, SearchIcon, Trash2Icon } from "lucide-react"
 
@@ -40,6 +40,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from "@/components/
 import { Skeleton } from "@/components/ui/skeleton"
 import { displayTitle } from "@/hooks/files-library/use-files-actions"
 import { useFilesPage } from "@/hooks/files-library/use-files-page"
+import { normalizeLibraryTags } from "@/lib/db/files-library-types"
 import { serializeFilesSection } from "@/lib/files-library/deep-link"
 import type { FilesEntry } from "@/lib/files-library/types"
 import { useFilesLibraryStore } from "@/stores/files-library"
@@ -67,9 +68,25 @@ const TOGGLE = { ctrlKey: true, metaKey: false, shiftKey: false } as const
 export function FilesMobileLibrary() {
   const t = useTranslations("files")
   const files = useFilesPage()
-  const { entries, folders, actions, view, selection, section, lens, trash, page } = files
+  const {
+    entries,
+    folders,
+    collections,
+    actions,
+    view,
+    selection,
+    section,
+    lens,
+    trash,
+    page,
+    searchSnippets,
+  } = files
   const visible = view.visible
-  const placeTitle = useFilesPlaceTitle(folders)
+  const placeTitle = useFilesPlaceTitle(folders, collections)
+  const availableTags = useMemo(
+    () => normalizeLibraryTags((entries ?? []).flatMap((entry) => entry.tags ?? [])),
+    [entries]
+  )
   const search = useFilesLibraryStore((s) => s.search)
   const setSearch = useFilesLibraryStore((s) => s.setSearch)
   const selectedKey = useFilesLibraryStore((s) => s.selectedKey)
@@ -204,7 +221,7 @@ export function FilesMobileLibrary() {
             />
           </InputGroup>
           <FilesSortMenu compact />
-          <FilesFilterPopover compact />
+          <FilesFilterPopover compact availableTags={availableTags} />
         </div>
       </header>
 
@@ -266,6 +283,7 @@ export function FilesMobileLibrary() {
                     onStartSelecting={startSelecting}
                     onToggle={toggle}
                     now={view.now}
+                    snippet={searchSnippets.get(entry.key)}
                   />
                 ))}
               </ul>
@@ -323,6 +341,7 @@ export function FilesMobileLibrary() {
           <SheetDescription className="sr-only">{t("mobile.placesDescription")}</SheetDescription>
           <FilesSidebar
             folders={folders}
+            collections={collections}
             recents={view.recents}
             trashCount={view.trashCount}
             actions={actions}

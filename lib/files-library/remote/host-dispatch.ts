@@ -27,15 +27,20 @@ import {
   restoreLibraryItems,
   setLibraryItemsFavorite,
   setLibraryItemsFolder,
+  setLibraryItemsTags,
   touchLibraryItemOpened,
   trashLibraryItems,
 } from "@/lib/db/files-library-items"
 import {
   createLibraryFolder,
+  deleteLibraryCollection,
   deleteLibraryFolder,
+  LibraryCollectionError,
+  listLibraryCollections,
   listLibraryFolders,
   moveLibraryFolder,
   renameLibraryFolder,
+  saveLibraryCollection,
   setLibraryFolderStyle,
 } from "@/lib/db/files-library-folders"
 import { libraryItemKey, ROOT_LIBRARY_FOLDER_ID } from "@/lib/db/files-library-types"
@@ -58,6 +63,7 @@ import { duplicateFilesEntry } from "../duplicate"
 import { matchesSearch } from "../filter"
 import { renameFilesEntry } from "../rename"
 import { FILES_IMAGE_PAGE_SIZE, loadFilesSources } from "../sources"
+import { extractMatchSnippet, searchFilesBodies } from "../text-index"
 import {
   hasLocalWorkspaceFiles,
   loadWorkspaceFileIndex,
@@ -78,6 +84,8 @@ import {
   FilesRemoteRequestError,
   parseAttachRequest,
   parseCallerDeviceId,
+  parseCollectionId,
+  parseCollectionUpsertRequest,
   parseDuplicateRequest,
   parseFavoriteRequest,
   parseFolderDeleteRequest,
@@ -94,12 +102,15 @@ import {
   parseReadChunkRequest,
   parseRenameRequest,
   parseSearchRequest,
+  parseTagsSetRequest,
   parseUploadChunkRequest,
   parseUploadCommitRequest,
   parseUploadId,
   parseUploadInitRequest,
   refused,
   type FilesRemoteAttach,
+  type FilesRemoteCollections,
+  type FilesRemoteCollectionUpsert,
   type FilesRemoteReadChunk,
   type FilesRemoteDetail,
   type FilesRemoteDuplicate,
@@ -118,6 +129,7 @@ import {
 export interface FilesHostLibrary {
   entries: FilesEntry[]
   imagesTruncated: boolean
+  entryContentKeys?: ReadonlyMap<string, string>
 }
 
 export interface FilesHostDispatchDeps {
@@ -141,6 +153,7 @@ async function loadHostLibrary(imageLimit: number): Promise<FilesHostLibrary> {
   return {
     entries: aggregateFilesEntries(loaded.input),
     imagesTruncated: loaded.imagesTruncated,
+    entryContentKeys: loaded.entryContentKeys,
   }
 }
 
@@ -204,6 +217,7 @@ async function revisionOf(entries: readonly FilesEntry[]): Promise<string> {
       entry.hidden ? 1 : 0,
       entry.sharedLinks ?? 0,
       entry.lastAccessedAt ?? "",
+      (entry.tags ?? []).join(","),
     ].join("|")
   )
   return (await sha256Hex(parts.join("\n"))).slice(0, 32)
@@ -233,24 +247,37 @@ async function search(
   payload: Record<string, unknown>
 ): Promise<FilesRemoteResult<FilesRemoteSearch>> {
   const { query, limit } = parseSearchRequest(payload)
-  const { entries } = await d.loadLibrary(parseImageLimit(payload, FILES_IMAGE_PAGE_SIZE))
+  const library = await d.loadLibrary(parseImageLimit(payload, FILES_IMAGE_PAGE_SIZE))
+  const body = await searchFilesBodies({
+    query,
+    entries: library.entries,
+    ...(library.entryContentKeys ? { entryContentKeys: library.entryContentKeys } : {}),
+    readDocumentText: d.readDocumentText,
+  })
   // The same rule as the page: trashed and removed items are not found.
-  const matched = entries
+  const matched = library.entries
     .filter((entry) => entry.trashedAt === undefined && !entry.hidden)
-    .filter((entry) => matchesSearch(entry, query))
+    .filter((entry) => matchesSearch(entry, query) || body.matchedKeys.has(entry.key))
     .sort((a, b) => b.updatedAt - a.updatedAt || (a.key < b.key ? -1 : 1))
-  const truncated = matched.length > limit
+  const truncated = matched.length > limit || body.truncated
   const hits = matched.slice(0, limit)
   return {
     ok: true,
-    items: hits.map((entry) => ({
-      key: entry.key,
-      kind: entry.kind,
-      title: entry.title,
-      ...(entry.mediaType ? { mediaType: entry.mediaType } : {}),
-      updatedAt: entry.updatedAt,
-      projectIds: entry.projectIds,
-    })),
+    items: hits.map((entry) => {
+      const snippet =
+        body.snippets.get(entry.key) ??
+        (entry.excerpt ? extractMatchSnippet(entry.excerpt, query) : undefined) ??
+        extractMatchSnippet(d.readDocumentText(entry) ?? "", query)
+      return {
+        key: entry.key,
+        kind: entry.kind,
+        title: entry.title,
+        ...(entry.mediaType ? { mediaType: entry.mediaType } : {}),
+        updatedAt: entry.updatedAt,
+        projectIds: entry.projectIds,
+        ...(snippet ? { snippet } : {}),
+      }
+    }),
     ...(truncated ? { truncated: true } : {}),
   }
 }
@@ -325,6 +352,16 @@ async function favorite(
   const request = parseFavoriteRequest(payload)
   const entries = await resolveEntries(d, payload, request.keys)
   if (entries.length > 0) await setLibraryItemsFavorite(entries.map(entrySource), request.favorite)
+  return { ok: true, count: entries.length }
+}
+
+async function tagsSet(
+  d: Resolved,
+  payload: Record<string, unknown>
+): Promise<FilesRemoteResult<{ count: number }>> {
+  const request = parseTagsSetRequest(payload)
+  const entries = await resolveEntries(d, payload, request.keys)
+  if (entries.length > 0) await setLibraryItemsTags(entries.map(entrySource), request.tags)
   return { ok: true, count: entries.length }
 }
 
@@ -513,6 +550,44 @@ async function folderDelete(payload: Record<string, unknown>): Promise<FilesRemo
   return { ok: true }
 }
 
+async function collectionList(
+  payload: Record<string, unknown>
+): Promise<FilesRemoteResult<FilesRemoteCollections>> {
+  const request = parsePageRequest(payload)
+  const ordered = [...(await listLibraryCollections())].sort((a, b) =>
+    a.id < b.id ? -1 : a.id > b.id ? 1 : 0
+  )
+  const page = ordered.slice(request.offset, request.offset + request.pageSize)
+  const next = request.offset + page.length
+  return {
+    ok: true,
+    items: page,
+    ...(next < ordered.length ? { nextPageToken: encodePageToken(next) } : {}),
+  }
+}
+
+async function collectionUpsert(
+  payload: Record<string, unknown>
+): Promise<FilesRemoteResult<FilesRemoteCollectionUpsert>> {
+  const draft = parseCollectionUpsertRequest(payload)
+  try {
+    const collection = await saveLibraryCollection(draft)
+    return { ok: true, collection }
+  } catch (error) {
+    if (error instanceof LibraryCollectionError && error.code === "library_collection_not_found") {
+      return refused("files_remote_not_found")
+    }
+    throw error
+  }
+}
+
+async function collectionDelete(
+  payload: Record<string, unknown>
+): Promise<FilesRemoteResult<object>> {
+  await deleteLibraryCollection(parseCollectionId(payload))
+  return { ok: true }
+}
+
 /**
  * Uploads stage in the session attachment table under the library's sentinel
  * session, so they get its resume, its device binding, its hash and magic-byte
@@ -652,6 +727,8 @@ export async function dispatchFilesHostCommand(
         return await list(d, payload)
       case FILES_REMOTE_COMMANDS.folderList:
         return await folderList(payload)
+      case FILES_REMOTE_COMMANDS.collectionList:
+        return await collectionList(payload)
       case FILES_REMOTE_COMMANDS.search:
         return await search(d, payload)
       case FILES_REMOTE_COMMANDS.get:
@@ -660,6 +737,8 @@ export async function dispatchFilesHostCommand(
         return await readChunk(d, payload)
       case FILES_REMOTE_COMMANDS.favorite:
         return await favorite(d, payload)
+      case FILES_REMOTE_COMMANDS.tagsSet:
+        return await tagsSet(d, payload)
       case FILES_REMOTE_COMMANDS.move:
         return await move(d, payload)
       case FILES_REMOTE_COMMANDS.trash:
@@ -686,6 +765,10 @@ export async function dispatchFilesHostCommand(
         return await folderStyle(payload)
       case FILES_REMOTE_COMMANDS.folderDelete:
         return await folderDelete(payload)
+      case FILES_REMOTE_COMMANDS.collectionUpsert:
+        return await keyed(() => collectionUpsert(payload))
+      case FILES_REMOTE_COMMANDS.collectionDelete:
+        return await collectionDelete(payload)
       case FILES_REMOTE_COMMANDS.uploadInit:
         return await uploadInit(callerDeviceId, payload)
       case FILES_REMOTE_COMMANDS.uploadChunk:

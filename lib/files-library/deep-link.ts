@@ -38,6 +38,8 @@ export function serializeFilesSection(section: FilesSection): string {
       return `group:${section.group}`
     case "folder":
       return `folder:${section.folderId}`
+    case "collection":
+      return `collection:${section.collectionId}`
   }
 }
 
@@ -53,6 +55,10 @@ export function parseFilesSection(value: string | null | undefined): FilesSectio
   if (value.startsWith("folder:")) {
     const folderId = value.slice("folder:".length)
     return folderId ? { kind: "folder", folderId } : undefined
+  }
+  if (value.startsWith("collection:")) {
+    const collectionId = value.slice("collection:".length)
+    return collectionId ? { kind: "collection", collectionId } : undefined
   }
   return undefined
 }

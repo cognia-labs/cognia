@@ -18,19 +18,24 @@ import type {
   LibraryFolder,
   LibraryFolderColor,
   LibraryFolderIcon,
+  LibrarySmartCollection,
+  LibrarySmartCollectionQuery,
 } from "@/lib/db/files-library-types"
 import {
   restoreLibraryItems,
   setLibraryItemsFavorite,
   setLibraryItemsFolder,
+  setLibraryItemsTags,
   touchLibraryItemOpened,
   trashLibraryItems,
 } from "@/lib/db/files-library-items"
 import {
   createLibraryFolder,
+  deleteLibraryCollection,
   deleteLibraryFolder,
   moveLibraryFolder,
   renameLibraryFolder,
+  saveLibraryCollection,
   setLibraryFolderStyle,
   type DeleteLibraryFolderMode,
 } from "@/lib/db/files-library-folders"
@@ -122,6 +127,7 @@ export interface FilesOps {
   mode: "local" | "remote"
   capabilities: FilesCapabilities
   setFavorite(entries: readonly FilesEntry[], favorite: boolean): Promise<void>
+  setTags(entries: readonly FilesEntry[], tags: readonly string[]): Promise<void>
   moveToFolder(entries: readonly FilesEntry[], folderId: string | null): Promise<void>
   trash(entries: readonly FilesEntry[]): Promise<void>
   restore(entries: readonly FilesEntry[]): Promise<void>
@@ -146,6 +152,12 @@ export interface FilesOps {
     style: { color?: LibraryFolderColor | null; icon?: LibraryFolderIcon | null }
   ): Promise<void>
   deleteFolder(folderId: string, mode: DeleteLibraryFolderMode): Promise<void>
+  saveCollection(draft: {
+    id?: string
+    name: string
+    query: LibrarySmartCollectionQuery
+  }): Promise<LibrarySmartCollection>
+  deleteCollection(collectionId: string): Promise<void>
 }
 
 /** This device's own library. */
@@ -155,6 +167,8 @@ export function createLocalFilesOps(): FilesOps {
     capabilities: localFilesCapabilities(),
     setFavorite: (entries, favorite) =>
       setLibraryItemsFavorite(entries.map(entrySource), favorite).then(() => undefined),
+    setTags: (entries, tags) =>
+      setLibraryItemsTags(entries.map(entrySource), tags).then(() => undefined),
     moveToFolder: (entries, folderId) =>
       setLibraryItemsFolder(entries.map(entrySource), folderId).then(() => undefined),
     trash: (entries) => trashLibraryItems(entries.map(entrySource)).then(() => undefined),
@@ -203,6 +217,8 @@ export function createLocalFilesOps(): FilesOps {
     moveFolder: moveLibraryFolder,
     setFolderStyle: (folderId, style) => setLibraryFolderStyle(folderId, style),
     deleteFolder: (folderId, mode) => deleteLibraryFolder(folderId, mode),
+    saveCollection: (draft) => saveLibraryCollection(draft),
+    deleteCollection: (collectionId) => deleteLibraryCollection(collectionId),
   }
 }
 

@@ -10,8 +10,12 @@ const entriesHook = jest.fn((_: unknown) => ({
   loadMoreImages: jest.fn(),
 }))
 const foldersHook = jest.fn((_: unknown) => [])
+const collectionsHook = jest.fn((_: unknown) => [])
 jest.mock("./use-files-entries", () => ({ useFilesEntries: (o: unknown) => entriesHook(o) }))
-jest.mock("./use-files-folders", () => ({ useFilesFolders: (o: unknown) => foldersHook(o) }))
+jest.mock("./use-files-folders", () => ({
+  useFilesFolders: (o: unknown) => foldersHook(o),
+  useFilesCollections: (o: unknown) => collectionsHook(o),
+}))
 
 import type { FilesOps } from "@/lib/files-library/ops"
 import type { FilesEntry } from "@/lib/files-library/types"

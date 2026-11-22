@@ -46,6 +46,7 @@ export interface FilesListTableProps {
   trash: boolean
   actions: FilesActions
   now: number
+  searchSnippets?: ReadonlyMap<string, string>
 }
 
 export function FilesListTable({
@@ -64,6 +65,7 @@ export function FilesListTable({
   trash,
   actions,
   now,
+  searchSnippets,
 }: FilesListTableProps) {
   const t = useTranslations("files")
   const allSelected = totalInView > 0 && selectedCount >= totalInView
@@ -139,6 +141,7 @@ export function FilesListTable({
               selected={isSelected(entry.key)}
               onSelect={onSelect}
               now={now}
+              snippet={searchSnippets?.get(entry.key)}
             />
           ))}
         </TableBody>

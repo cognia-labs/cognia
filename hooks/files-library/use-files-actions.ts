@@ -18,12 +18,14 @@ import { loggers } from "@cognia/logging"
 
 import type { DroppedFileEntry } from "@/lib/chat/drop-entries"
 import { LibraryItemError } from "@/lib/db/files-library-items"
-import { LibraryFolderError } from "@/lib/db/files-library-folders"
+import { LibraryCollectionError, LibraryFolderError } from "@/lib/db/files-library-folders"
 import {
   ROOT_LIBRARY_FOLDER_ID,
   type LibraryFolder,
   type LibraryFolderColor,
   type LibraryFolderIcon,
+  type LibrarySmartCollection,
+  type LibrarySmartCollectionQuery,
 } from "@/lib/db/files-library-types"
 import { deleteDocumentTemplate, DocumentTemplateError } from "@/lib/db/document-templates"
 import { SessionAssetError } from "@/lib/db/session-assets"
@@ -54,6 +56,7 @@ function errorKey(error: unknown): string {
   if (
     error instanceof LibraryItemError ||
     error instanceof LibraryFolderError ||
+    error instanceof LibraryCollectionError ||
     error instanceof FilesUseInChatError ||
     error instanceof FilesRenameError ||
     error instanceof FilesDuplicateError ||
@@ -75,6 +78,7 @@ export interface FilesActions {
   preview: (entry: FilesEntry) => void
   toggleFavorite: (entry: FilesEntry) => Promise<void>
   setFavorite: (entries: readonly FilesEntry[], favorite: boolean) => Promise<void>
+  setTags: (entries: readonly FilesEntry[], tags: readonly string[]) => Promise<boolean>
   moveToFolder: (entries: readonly FilesEntry[], folderId: string | null) => Promise<void>
   /** Into the Trash, with an Undo on the toast. */
   trash: (entries: readonly FilesEntry[]) => Promise<void>
@@ -107,6 +111,12 @@ export interface FilesActions {
     folderId: string,
     style: { color?: LibraryFolderColor | null; icon?: LibraryFolderIcon | null }
   ) => Promise<void>
+  saveCollection: (draft: {
+    id?: string
+    name: string
+    query: LibrarySmartCollectionQuery
+  }) => Promise<LibrarySmartCollection | null>
+  deleteCollection: (collection: LibrarySmartCollection) => Promise<void>
 }
 
 /**
@@ -208,6 +218,25 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
   const toggleFavorite = useCallback(
     (entry: FilesEntry) => setFavorite([entry], entry.favoritedAt === undefined),
     [setFavorite]
+  )
+
+  const setTags = useCallback(
+    async (entries: readonly FilesEntry[], tags: readonly string[]) => {
+      if (entries.length === 0) return false
+      try {
+        await ops.setTags(entries, tags)
+        toast.success(
+          entries.length === 1
+            ? t("toasts.tagsSaved", { title: displayTitle(entries[0]!, t) })
+            : t("toasts.tagsSavedMany", { count: entries.length })
+        )
+        return true
+      } catch (error) {
+        fail("tags", error)
+        return false
+      }
+    },
+    [ops, t, fail]
   )
 
   const moveToFolder = useCallback(
@@ -612,11 +641,44 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
     [ops, fail]
   )
 
+  const saveCollection = useCallback(
+    async (draft: { id?: string; name: string; query: LibrarySmartCollectionQuery }) => {
+      try {
+        const saved = await ops.saveCollection(draft)
+        toast.success(
+          t(draft.id ? "toasts.collectionUpdated" : "toasts.collectionSaved", { name: saved.name })
+        )
+        return saved
+      } catch (error) {
+        fail("save-collection", error)
+        return null
+      }
+    },
+    [ops, t, fail]
+  )
+
+  const deleteCollection = useCallback(
+    async (collection: LibrarySmartCollection) => {
+      try {
+        await ops.deleteCollection(collection.id)
+        const current = useFilesLibraryStore.getState().section
+        if (current.kind === "collection" && current.collectionId === collection.id) {
+          useFilesLibraryStore.getState().setSection({ kind: "all" })
+        }
+        toast.success(t("toasts.collectionDeleted", { name: collection.name }))
+      } catch (error) {
+        fail("delete-collection", error)
+      }
+    },
+    [ops, t, fail]
+  )
+
   return {
     open,
     preview,
     toggleFavorite,
     setFavorite,
+    setTags,
     moveToFolder,
     trash,
     restore,
@@ -634,6 +696,8 @@ export function useFilesActions(ops: FilesOps = DEFAULT_OPS): FilesActions {
     deleteTemplate,
     moveFolder,
     setFolderStyle,
+    saveCollection,
+    deleteCollection,
   }
 }
 

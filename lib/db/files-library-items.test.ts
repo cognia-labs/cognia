@@ -22,10 +22,11 @@ import {
   setLibraryItemFolder,
   setLibraryItemsFavorite,
   setLibraryItemsFolder,
+  setLibraryItemsTags,
   touchLibraryItemOpened,
   trashLibraryItems,
 } from "./files-library-items"
-import { createLibraryFolder } from "./files-library-folders"
+import { createLibraryFolder, saveLibraryCollection } from "./files-library-folders"
 import { ROOT_LIBRARY_FOLDER_ID } from "./files-library-types"
 import { LIBRARY_REF_SESSION_ID } from "./message-media-refs"
 import { putLibraryAsset, putSessionAsset } from "./session-assets"
@@ -341,8 +342,16 @@ describe("project cascade and full clear", () => {
     expect(await db.messageMedia.get("h1")).toBeUndefined()
   })
 
-  it("clears both tables and every library ref", async () => {
+  it("clears all Files tables, collections, text segments and every library ref", async () => {
     await createLibraryFolder({ name: "F" })
+    await saveLibraryCollection({ name: "Saved", query: { search: "spec" } })
+    await getDb().libraryTextSegments.put({
+      id: "doc:artifact:a1:1:4:0",
+      contentKey: "doc:artifact:a1:1:4",
+      segmentIndex: 0,
+      text: "spec",
+      updatedAt: 1,
+    })
     await putLibraryAsset({
       assetId: "u1",
       blob: new Blob(["x"], { type: "text/plain" }),
@@ -352,6 +361,8 @@ describe("project cascade and full clear", () => {
     await clearLibraryData()
     expect(await getDb().libraryItems.count()).toBe(0)
     expect(await getDb().libraryFolders.count()).toBe(0)
+    expect(await getDb().libraryCollections.count()).toBe(0)
+    expect(await getDb().libraryTextSegments.count()).toBe(0)
     expect(await pins()).toEqual([])
   })
 })
@@ -483,5 +494,19 @@ describe("Trash (ADR-0223)", () => {
     expect(named.displayName).toBe("Diagram")
     const cleared = await setLibraryItemDisplayName(image, "   ")
     expect(cleared.displayName).toBeUndefined()
+  })
+
+  it("normalizes and updates multi-tags as lightweight metadata without pinning bytes", async () => {
+    const [tagged] = await setLibraryItemsTags([image], ["  Spec ", "q4", "SPEC", ""])
+    expect(tagged!.tags).toEqual(["Spec", "q4"])
+    expect(tagged!.keptAt).toBeUndefined()
+    expect(await pins()).toEqual([])
+
+    const byTag = await getDb().libraryItems.where("tags").equals("Spec").toArray()
+    expect(byTag.map((row) => row.key)).toEqual(["image:h1"])
+
+    const [cleared] = await setLibraryItemsTags([image], [])
+    expect(cleared!.tags).toBeUndefined()
+    expect(await pins()).toEqual([])
   })
 })

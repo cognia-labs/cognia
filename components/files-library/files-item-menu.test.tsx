@@ -170,6 +170,7 @@ it("opens the same entries on right-click", async () => {
     "Preview",
     "Use in chat",
     "Add to favorites",
+    "Edit tags…",
     "Move to folder…",
     "Rename…",
     "Duplicate",

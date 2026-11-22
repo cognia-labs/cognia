@@ -13,13 +13,14 @@
  * bottom bulk dock. Neither recomputes what the other already knows.
  */
 
-import { useCallback, useMemo, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import type { LibraryFolder } from "@/lib/db/files-library-types"
-import { FILES_BODY_EXCERPT_CHARS } from "@/lib/files-library/aggregate"
+import type { LibraryFolder, LibrarySmartCollection } from "@/lib/db/files-library-types"
+import { extractMatchSnippet } from "@/lib/files-library/text-index"
 import { matchesLens, matchesProject, matchesSection } from "@/lib/files-library/filter"
 import type { FilesOps } from "@/lib/files-library/ops"
 import type { FilesEntry, FilesLens, FilesSection } from "@/lib/files-library/types"
+import { hasLocalWorkspaceFiles } from "@/lib/files-library/workspace-files-io"
 import { useFilesLibraryStore } from "@/stores/files-library"
 import { useProjectStore } from "@/stores/project/project-store"
 
@@ -32,10 +33,14 @@ import { useFilesView, type FilesView } from "./use-files-view"
 /** Items rendered per "Show more" step; keeps a large library's first paint cheap. */
 export const FILES_PAGE_SIZE = 60
 
+const NO_COLLECTIONS: LibrarySmartCollection[] = []
+const NO_SNIPPETS: ReadonlyMap<string, string> = new Map()
+
 export interface FilesPage {
   /** Every aggregated entry (undefined while the first load runs). */
   entries: FilesEntry[] | undefined
   folders: LibraryFolder[]
+  collections: LibrarySmartCollection[]
   actions: FilesActions
   view: FilesView
   selection: FilesSelection
@@ -75,9 +80,11 @@ export interface FilesPage {
   retrySearch?: () => void
   /** True when the remote body search hit its result cap. */
   searchTruncated?: boolean
+  /** Match snippets (`entry.key -> snippet`) for the active search query. */
+  searchSnippets: ReadonlyMap<string, string>
   /**
-   * True while searching a place that contains path-only workspace files,
-   * unextracted binary uploads, or bodies longer than the 20k-char excerpt cap.
+   * True while searching a place that contains unextracted binary uploads or
+   * workspace files whose disk contents cannot be searched from this device.
    */
   searchBounded: boolean
 }
@@ -97,6 +104,7 @@ export function useFilesPage(): FilesPage {
 
 function useFilesPageOver(source: FilesSource, ops: FilesOps): FilesPage {
   const { entries, imagesTruncated, loadMoreImages, folders } = source
+  const collections = source.collections ?? NO_COLLECTIONS
   const actions = useFilesActions(ops)
   const view = useFilesView(entries, folders, source.contentMatches)
   const selection = useFilesSelection(view.visible)
@@ -109,7 +117,22 @@ function useFilesPageOver(source: FilesSource, ops: FilesOps): FilesPage {
   const projectScope = useFilesLibraryStore((s) => s.projectScope)
   const search = useFilesLibraryStore((s) => s.search)
   const selectedKey = useFilesLibraryStore((s) => s.selectedKey)
+  const applyCollection = useFilesLibraryStore((s) => s.applyCollection)
   const activeProjectId = useProjectStore((s) => s.activeProjectId)
+  const appliedCollectionRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (section.kind !== "collection") {
+      appliedCollectionRef.current = null
+      return
+    }
+    if (appliedCollectionRef.current === section.collectionId) return
+    const found = collections.find((c) => c.id === section.collectionId)
+    if (found) {
+      appliedCollectionRef.current = found.id
+      applyCollection(found)
+    }
+  }, [section, collections, applyCollection])
 
   const visible = view.visible
   // "Show more" lasts until the view changes, not until an item is trashed.
@@ -136,6 +159,7 @@ function useFilesPageOver(source: FilesSource, ops: FilesOps): FilesPage {
     [visible, viewKey]
   )
 
+  const canSearchWorkspaceContent = ops.mode === "remote" || hasLocalWorkspaceFiles()
   const searchBounded = useMemo(() => {
     if (!entries || !search.trim()) return false
     return entries.some(
@@ -143,11 +167,22 @@ function useFilesPageOver(source: FilesSource, ops: FilesOps): FilesPage {
         matchesSection(entry, section, lens) &&
         (section.kind === "trash" || matchesLens(entry, lens)) &&
         matchesProject(entry, projectScope, activeProjectId) &&
-        (entry.kind === "workspace-file" ||
-          ((entry.kind === "upload" || entry.kind === "session-upload") && !entry.excerpt) ||
-          entry.searchText.length >= FILES_BODY_EXCERPT_CHARS)
+        ((entry.kind === "workspace-file" && !canSearchWorkspaceContent) ||
+          ((entry.kind === "upload" || entry.kind === "session-upload") && !entry.excerpt))
     )
-  }, [entries, search, section, lens, projectScope, activeProjectId])
+  }, [entries, search, section, lens, projectScope, activeProjectId, canSearchWorkspaceContent])
+
+  const searchSnippets = useMemo(() => {
+    const query = search.trim()
+    if (!query || !visible) return NO_SNIPPETS
+    const merged = new Map<string, string>(source.searchSnippets)
+    for (const entry of visible) {
+      if (merged.has(entry.key)) continue
+      const fallback = entry.excerpt ? extractMatchSnippet(entry.excerpt, query) : undefined
+      if (fallback) merged.set(entry.key, fallback)
+    }
+    return merged
+  }, [search, visible, source.searchSnippets])
 
   const folderItemCounts = useMemo(() => {
     const counts = new Map<string, number>()
@@ -167,6 +202,7 @@ function useFilesPageOver(source: FilesSource, ops: FilesOps): FilesPage {
   return {
     entries,
     folders,
+    collections,
     actions,
     view,
     selection,
@@ -191,6 +227,7 @@ function useFilesPageOver(source: FilesSource, ops: FilesOps): FilesPage {
     previewed: entries?.find((entry) => entry.key === selectedKey),
     ops,
     searchBounded,
+    searchSnippets,
     ...(source.refresh ? { refresh: source.refresh } : {}),
     ...(source.error ? { error: source.error } : {}),
     ...(source.searchError ? { searchError: source.searchError } : {}),

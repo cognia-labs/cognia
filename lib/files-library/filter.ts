@@ -34,6 +34,8 @@ export interface FilesFilters {
   modified: FilesModifiedWithin
   size: FilesSizeBand
   projectScope: FilesProjectScope
+  /** Empty / absent = any tag. Every listed tag must appear on the item (case-insensitive). */
+  tags?: readonly string[]
 }
 
 export const DEFAULT_FILES_FILTERS: FilesFilters = {
@@ -41,6 +43,7 @@ export const DEFAULT_FILES_FILTERS: FilesFilters = {
   modified: "any",
   size: "any",
   projectScope: "current",
+  tags: [],
 }
 
 export interface FilesQuery {
@@ -65,8 +68,20 @@ export function hasActiveFilters(filters: FilesFilters, search: string): boolean
     search.trim().length > 0 ||
     filters.formats.length > 0 ||
     filters.modified !== "any" ||
-    filters.size !== "any"
+    filters.size !== "any" ||
+    (filters.tags?.length ?? 0) > 0
   )
+}
+
+/** Every filter tag must appear on `entry.tags` (case-insensitive). */
+export function matchesTags(
+  entry: Pick<FilesEntry, "tags">,
+  tags: readonly string[] | undefined
+): boolean {
+  if (!tags || tags.length === 0) return true
+  if (!entry.tags || entry.tags.length === 0) return false
+  const present = new Set(entry.tags.map((tag) => tag.toLowerCase()))
+  return tags.every((tag) => present.has(tag.toLowerCase()))
 }
 
 /** Uploads whose bytes are an image count as images too (a duplicated image is one). */
@@ -184,8 +199,11 @@ export function matchesSection(
   if (entry.trashedAt !== undefined || entry.hidden) return false
   switch (section.kind) {
     case "all":
+    case "collection":
       return (
-        entry.kind !== "workspace-file" || (lens === "favorites" && entry.favoritedAt !== undefined)
+        entry.kind !== "workspace-file" ||
+        (lens === "favorites" && entry.favoritedAt !== undefined) ||
+        (entry.tags?.length ?? 0) > 0
       )
     case "recent":
       return (
@@ -212,10 +230,13 @@ export function filterFilesEntries(
       matchesSection(entry, query.section, query.lens) &&
       (query.section.kind === "trash" || matchesLens(entry, query.lens)) &&
       (formats === null || formats.has(filesFormatOf(entry))) &&
+      matchesTags(entry, filters.tags) &&
       matchesModified(entry, filters.modified, query.now) &&
       matchesSize(entry, filters.size) &&
       matchesProject(entry, filters.projectScope, query.activeProjectId) &&
-      (matchesSearch(entry, query.search) || query.contentMatches?.has(entry.key) === true)
+      (query.search.trim().length === 0 ||
+        matchesSearch(entry, query.search) ||
+        query.contentMatches?.has(entry.key) === true)
   )
 }
 

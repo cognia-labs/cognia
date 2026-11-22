@@ -3,6 +3,7 @@
     "deleteForever": "Delete forever",
     "download": "Download",
     "duplicate": "Duplicate",
+    "editTags": "Edit tags…",
     "favorite": "Add to favorites",
     "moveToFolder": "Move to folder…",
     "open": "Open",
@@ -33,6 +34,23 @@
     "sourceDeleted": "Conversation deleted",
     "trashed": "Deleted {date}",
     "usedIn": "In {count, plural, one {# conversation} other {# conversations}}"
+  },
+  "collectionDialog": {
+    "cancel": "Cancel",
+    "create": "Save collection",
+    "createTitle": "Save Smart Collection",
+    "description": "Saves your current search, lens, tags and filters as a live view synced across paired devices.",
+    "editTitle": "Update Smart Collection",
+    "nameLabel": "Name",
+    "placeholder": "Collection name",
+    "save": "Update"
+  },
+  "collections": {
+    "delete": "Delete collection",
+    "empty": "No saved collections",
+    "menu": "Collection actions for {name}",
+    "new": "Save Smart Collection",
+    "saveCurrent": "Update with current filters…"
   },
   "columns": {
     "actions": "Actions",
@@ -77,6 +95,10 @@
       "title": "Nothing here yet"
     },
     "clear": "Clear filters",
+    "collection": {
+      "description": "Nothing matches this Smart Collection’s saved query right now.",
+      "title": "No matching items"
+    },
     "favorites": {
       "description": "Favorite an item to keep it at hand. Favorites stay even if their conversation is deleted.",
       "title": "No favorites"
@@ -160,6 +182,8 @@
     "files_workspace_too_large": "This file is too large to read here.",
     "files_workspace_unavailable": "The workspace this file is in can't be reached right now.",
     "headless_host": "The paired host can’t manage its Files library. Open Files on the desktop app.",
+    "library_collection_name_required": "Enter a collection name.",
+    "library_collection_not_found": "That collection no longer exists.",
     "library_folder_cycle": "A folder can’t be moved into itself.",
     "library_folder_name_required": "Enter a folder name.",
     "library_folder_not_found": "That folder no longer exists.",
@@ -194,6 +218,7 @@
       "year": "Past year"
     },
     "reset": "Reset",
+    "saveCollection": "Save collection…",
     "size": "Size",
     "sizes": {
       "any": "Any size",
@@ -201,7 +226,8 @@
       "large": "10–100 MB",
       "medium": "1–10 MB",
       "small": "Under 1 MB"
-    }
+    },
+    "tags": "Tags"
   },
   "folderDialog": {
     "cancel": "Cancel",
@@ -294,6 +320,7 @@
       "favorite": "Favorite",
       "move": "Move",
       "share": "Share",
+      "tags": "Tags",
       "trash": "Trash",
       "unfavorite": "Unfavorite"
     },
@@ -333,6 +360,7 @@
   "newChatTitle": "About {title}",
   "places": {
     "all": "All",
+    "collections": "Smart Collections",
     "folders": "Folders",
     "groups": {
       "artifacts": "Artifacts",
@@ -369,8 +397,10 @@
     },
     "label": "Preview",
     "loading": "Loading preview",
+    "noTags": "No tags",
     "openConversation": "Open conversation",
     "sourceDeleted": "Its conversation was deleted. Files keeps it because it is a favorite or in a folder.",
+    "tags": "Tags",
     "trashedNotice": "Moved to the Trash on {date}. It will be deleted for good on {purge}.",
     "unavailable": "The content is no longer stored on this device.",
     "workspaceAdoption": {
@@ -435,6 +465,18 @@
     "label": "Sort",
     "labelActive": "Sort by {column} ({direction})"
   },
+  "tagsDialog": {
+    "add": "Add",
+    "cancel": "Cancel",
+    "empty": "No tags on this selection.",
+    "label": "Add tags",
+    "placeholder": "e.g. spec, q4, review",
+    "remove": "Remove tag {tag}",
+    "retentionHint": "Tags organize items across folders without keeping media after a conversation is deleted. Use Favorites or Folders to keep items.",
+    "save": "Save tags",
+    "suggestions": "Existing tags",
+    "title": "Edit tags"
+  },
   "templates": {
     "collapse": "Hide templates",
     "create": "New document from {name}",
@@ -449,6 +491,9 @@
     "attached": "“{title}” is attached to your next message.",
     "bound": "“{title}” is too large for the message box, so it was added to the conversation’s files instead. The agent can read it with its attachment tools.",
     "boundOnHost": "“{title}” was added to the conversation’s files on the desktop. The agent can read it with its attachment tools.",
+    "collectionDeleted": "Deleted collection “{name}”.",
+    "collectionSaved": "Saved collection “{name}”.",
+    "collectionUpdated": "Updated collection “{name}”.",
     "deletedForever": "Deleted {count, plural, one {# item} other {# items}} forever.",
     "dropTruncated": "Only the first {count} files of the dropped folders were uploaded.",
     "duplicated": "Duplicated “{title}”.",
@@ -464,6 +509,8 @@
     "renamed": "Renamed to “{title}”.",
     "restored": "Restored {count, plural, one {# item} other {# items}}.",
     "retiredHint": "{count, plural, one {# item stays in its conversation or on the canvas.} other {# items stay in their conversations or on the canvas.}}",
+    "tagsSaved": "Updated tags for “{title}”.",
+    "tagsSavedMany": "Updated tags on {count, plural, one {# item} other {# items}}.",
     "templateDeleted": "Deleted the template “{name}”.",
     "trashed": "Moved “{title}” to the Trash.",
     "trashedHint": "Items stay in the Trash for 30 days.",

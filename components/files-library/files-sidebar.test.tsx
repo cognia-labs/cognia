@@ -163,4 +163,29 @@ describe("the Workspace files group (ADR-0223 §8)", () => {
     await userEvent.setup().click(group)
     expect(useFilesLibraryStore.getState().section).toEqual({ kind: "group", group: "workspace" })
   })
+
+  it("renders Smart Collections and applies a collection query when clicked", async () => {
+    const collection = {
+      id: "lbc_specs",
+      name: "Specs",
+      query: { search: "architecture", lens: "mine" as const, tags: ["spec"] },
+      createdAt: 1,
+      updatedAt: 1,
+    }
+    render(
+      <FilesSidebar
+        folders={folders}
+        collections={[collection]}
+        recents={[]}
+        trashCount={0}
+        actions={{ preview: jest.fn(), setFolderStyle: jest.fn() }}
+      />
+    )
+    await userEvent.setup().click(screen.getByTestId("files-place-collection-lbc_specs"))
+    const state = useFilesLibraryStore.getState()
+    expect(state.section).toEqual({ kind: "collection", collectionId: "lbc_specs" })
+    expect(state.search).toBe("architecture")
+    expect(state.lens).toBe("mine")
+    expect(state.filters.tags).toEqual(["spec"])
+  })
 })

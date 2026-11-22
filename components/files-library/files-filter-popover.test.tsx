@@ -35,7 +35,7 @@ it("toggles formats and picks a modified range and a size band", async () => {
 
 it("counts active filters on the trigger and resets them", async () => {
   useFilesLibraryStore.setState({
-    filters: { formats: ["code"], modified: "day", size: "any" },
+    filters: { formats: ["code"], modified: "day", size: "any", tags: [] },
     search: "x",
   })
   const user = userEvent.setup()
@@ -45,6 +45,20 @@ it("counts active filters on the trigger and resets them", async () => {
   await user.click(screen.getByRole("button", { name: "Reset" }))
   expect(useFilesLibraryStore.getState().filters).toEqual(DEFAULT_FILES_VIEW_FILTERS)
   expect(useFilesLibraryStore.getState().search).toBe("")
+})
+
+it("toggles tag chips and opens the save-collection dialog when criteria are active", async () => {
+  const user = userEvent.setup()
+  render(<FilesFilterPopover availableTags={["Spec", "Urgent"]} />)
+  await user.click(screen.getByRole("button", { name: "Filter" }))
+  expect(screen.getByTestId("files-filter-save-collection")).toBeDisabled()
+
+  await user.click(screen.getByTestId("files-filter-tag-Spec"))
+  expect(useFilesLibraryStore.getState().filters.tags).toEqual(["Spec"])
+  expect(screen.getByTestId("files-filter-save-collection")).toBeEnabled()
+
+  await user.click(screen.getByTestId("files-filter-save-collection"))
+  expect(useFilesLibraryStore.getState().collectionDialog).toEqual({ mode: "create" })
 })
 
 it("switches the workspace scope without counting it as a filter", async () => {

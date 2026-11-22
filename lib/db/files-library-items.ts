@@ -19,6 +19,7 @@ import { getDb } from "./schema"
 import {
   isLibraryItemKept,
   libraryItemKey,
+  normalizeLibraryTags,
   ROOT_LIBRARY_FOLDER_ID,
   type LibraryItemGeneratedVideo,
   type LibraryItemKind,
@@ -334,6 +335,29 @@ export async function setLibraryItemDisplayName(
 }
 
 /**
+ * Replace the tags on `sources` in one transaction. Tags are lightweight
+ * organizational metadata and do NOT mark an item kept (`isLibraryItemKept`).
+ */
+export async function setLibraryItemsTags(
+  sources: readonly LibraryItemSource[],
+  tags: readonly string[]
+): Promise<LibraryItemRow[]> {
+  const normalized = normalizeLibraryTags(tags)
+  return mutateItems(sources, (row) => ({
+    ...row,
+    tags: normalized.length > 0 ? normalized : undefined,
+  }))
+}
+
+export async function setLibraryItemTags(
+  source: LibraryItemSource,
+  tags: readonly string[]
+): Promise<LibraryItemRow> {
+  const [row] = await setLibraryItemsTags([source], tags)
+  return row!
+}
+
+/**
  * Remember that a share link made from Files carries these items. Codes no
  * longer in `liveCodes` (revoked, expired or forgotten links) are dropped on
  * the way, so the list never outgrows the links that still exist. Sharing
@@ -564,14 +588,18 @@ export async function deleteLibraryItemsForProject(
   return outcome.count
 }
 
-/** Full wipe ("clear all data"): both Files tables and every `library:` ref row. */
+/** Full wipe ("clear all data"): all Files tables and every `library:` ref row. */
 export async function clearLibraryData(): Promise<void> {
   const db = getDb()
   const released = await db.transaction(
     "rw",
-    db.libraryItems,
-    db.libraryFolders,
-    db.messageMediaRefs,
+    [
+      db.libraryItems,
+      db.libraryFolders,
+      db.libraryCollections,
+      db.libraryTextSegments,
+      db.messageMediaRefs,
+    ],
     async () => {
       const refs = await db.messageMediaRefs
         .where("messageId")
@@ -580,6 +608,8 @@ export async function clearLibraryData(): Promise<void> {
       for (const ref of refs) await db.messageMediaRefs.delete([ref.messageId, ref.hash])
       await db.libraryItems.clear()
       await db.libraryFolders.clear()
+      await db.libraryCollections.clear()
+      await db.libraryTextSegments.clear()
       return refs.map((ref) => ref.hash)
     }
   )

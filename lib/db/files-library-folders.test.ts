@@ -2,14 +2,17 @@ import { getDb } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
 import {
   createLibraryFolder,
+  deleteLibraryCollection,
   deleteLibraryFolder,
   getLibraryFolder,
   getLibraryFolderDescendantIds,
   getLibraryFolderPath,
   listChildLibraryFolders,
+  listLibraryCollections,
   listLibraryFolders,
   moveLibraryFolder,
   renameLibraryFolder,
+  saveLibraryCollection,
   setLibraryFolderStyle,
   updateLibraryFolder,
 } from "./files-library-folders"
@@ -165,5 +168,55 @@ describe("deleteLibraryFolder", () => {
 
   it("ignores a missing folder", async () => {
     await expect(deleteLibraryFolder("lbf_missing", "cascade")).resolves.toBeUndefined()
+  })
+})
+
+describe("Smart Collections CRUD", () => {
+  beforeEach(async () => {
+    await getDb().libraryCollections.clear()
+  })
+
+  it("saves, updates, normalizes queries and deletes Smart Collections", async () => {
+    const created = await saveLibraryCollection({
+      name: "  Q4 Specs  ",
+      query: {
+        search: "  roadmap  ",
+        lens: "mine",
+        formats: ["document", "document"],
+        tags: ["Spec", "spec", "  q4 "],
+        modified: "any",
+        size: "small",
+        projectScope: "all",
+      },
+    })
+    expect(created.id).toMatch(/^lbc_/)
+    expect(created.name).toBe("Q4 Specs")
+    expect(created.query).toEqual({
+      search: "roadmap",
+      lens: "mine",
+      formats: ["document"],
+      tags: ["Spec", "q4"],
+      size: "small",
+      projectScope: "all",
+    })
+
+    const updated = await saveLibraryCollection({
+      id: created.id,
+      name: "Alpha Specs",
+      query: { search: "alpha", tags: ["urgent"] },
+    })
+    expect(updated.id).toBe(created.id)
+    expect(updated.name).toBe("Alpha Specs")
+    expect((await listLibraryCollections()).map((c) => c.name)).toEqual(["Alpha Specs"])
+
+    await expect(
+      saveLibraryCollection({ id: "lbc_missing", name: "Ghost", query: {} })
+    ).rejects.toMatchObject({ code: "library_collection_not_found" })
+    await expect(saveLibraryCollection({ name: "   ", query: {} })).rejects.toMatchObject({
+      code: "library_collection_name_required",
+    })
+
+    await deleteLibraryCollection(created.id)
+    expect(await listLibraryCollections()).toEqual([])
   })
 })

@@ -79,12 +79,16 @@ describe("files remote commands", () => {
     }
   })
 
-  it("pages both lists by token", () => {
+  it("pages list commands by token", () => {
     const paged = contractFilesCommands()
       .filter((command) => command.pagination === "page-token")
       .map((command) => command.name)
       .sort()
-    expect(paged).toEqual(["files_library_folder_list", "files_library_list"])
+    expect(paged).toEqual([
+      "files_library_collection_list",
+      "files_library_folder_list",
+      "files_library_list",
+    ])
   })
 
   it("asks a body idempotencyKey of exactly the keyed writes", () => {

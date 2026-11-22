@@ -10,6 +10,7 @@ jest.mock("@/lib/db/files-library-items", () => {
     restoreLibraryItems: jest.fn(async () => undefined),
     setLibraryItemsFavorite: jest.fn(async () => undefined),
     setLibraryItemsFolder: jest.fn(async () => undefined),
+    setLibraryItemsTags: jest.fn(async () => undefined),
     touchLibraryItemOpened: jest.fn(async () => undefined),
     trashLibraryItems: jest.fn(async () => undefined),
   }
@@ -38,6 +39,7 @@ import {
   restoreLibraryItems,
   setLibraryItemsFavorite,
   setLibraryItemsFolder,
+  setLibraryItemsTags,
   trashLibraryItems,
 } from "@/lib/db/files-library-items"
 import { listLibraryFolders } from "@/lib/db/files-library-folders"
@@ -539,4 +541,66 @@ it("keeps the folder writes on the real folder table", async () => {
   expect(await byId()).toMatchObject({ name: "Papers", color: "blue" })
   await call("files_library_folder_delete", { folderId, cascade: false })
   expect(await byId()).toBeUndefined()
+})
+
+it("syncs multi-tags, smart collections and centered search snippets across paired devices", async () => {
+  library = [
+    entry("artifact:a1", {
+      title: "Architecture",
+      projectIds: ["p1"],
+      updatedAt: 50,
+    }),
+  ]
+  texts = {
+    "artifact:a1": `${"intro ".repeat(30)}UNIQUE_SENTINEL_TOKEN appears in the middle${" outro".repeat(30)}`,
+  }
+
+  await expect(
+    call("files_library_tags_set", {
+      keys: ["artifact:a1", "artifact:missing"],
+      tags: [" Spec ", "q4", "spec"],
+      idempotencyKey: "tag-1",
+    })
+  ).resolves.toEqual({ ok: true, count: 1 })
+  expect(setLibraryItemsTags).toHaveBeenCalledWith(
+    [expect.objectContaining({ kind: "artifact", sourceId: "a1" })],
+    ["Spec", "q4"]
+  )
+
+  const saved = await call("files_library_collection_upsert", {
+    name: "  Q4 Specs  ",
+    query: { search: "sentinel", tags: ["Spec"], formats: ["document"], projectScope: "all" },
+    idempotencyKey: "col-1",
+  })
+  expect(saved).toMatchObject({
+    ok: true,
+    collection: {
+      name: "Q4 Specs",
+      query: { search: "sentinel", tags: ["Spec"], formats: ["document"], projectScope: "all" },
+    },
+  })
+  const collectionId = (saved.collection as { id: string }).id
+  await expect(call("files_library_collection_list", {})).resolves.toMatchObject({
+    ok: true,
+    items: [expect.objectContaining({ id: collectionId, name: "Q4 Specs" })],
+  })
+
+  const searchRes = await call("files_library_search", { query: "UNIQUE_SENTINEL_TOKEN" })
+  expect(searchRes).toMatchObject({
+    ok: true,
+    items: [
+      expect.objectContaining({
+        key: "artifact:a1",
+        snippet: expect.stringContaining("UNIQUE_SENTINEL_TOKEN"),
+      }),
+    ],
+  })
+
+  await expect(
+    call("files_library_collection_delete", { collectionId, idempotencyKey: "col-del-1" })
+  ).resolves.toEqual({ ok: true })
+  await expect(call("files_library_collection_list", {})).resolves.toEqual({
+    ok: true,
+    items: [],
+  })
 })

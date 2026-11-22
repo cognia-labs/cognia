@@ -24,6 +24,7 @@ import {
   Share2Icon,
   StarIcon,
   StarOffIcon,
+  TagIcon,
   Trash2Icon,
 } from "lucide-react"
 
@@ -107,6 +108,7 @@ export function FilesMobileBulkBar({
   const openMove = useFilesLibraryStore((s) => s.openMove)
   const openDeleteForever = useFilesLibraryStore((s) => s.openDeleteForever)
   const openShare = useFilesLibraryStore((s) => s.openShare)
+  const openTags = useFilesLibraryStore((s) => s.openTags)
   const shareHeldBack = useFilesOps().capabilities.share !== true
   const count = selected.length
   const none = count === 0
@@ -171,13 +173,20 @@ export function FilesMobileBulkBar({
           />
         </div>
       ) : (
-        <div className="grid grid-cols-5 border-t">
+        <div className="grid grid-cols-6 border-t">
           <DockButton
             label={allFavorite ? t("mobile.dock.unfavorite") : t("mobile.dock.favorite")}
             icon={allFavorite ? StarOffIcon : StarIcon}
             disabled={none}
             onClick={() => void actions.setFavorite(selected, !allFavorite)}
             testId="files-mobile-bulk-favorite"
+          />
+          <DockButton
+            label={t("mobile.dock.tags")}
+            icon={TagIcon}
+            disabled={none}
+            onClick={() => openTags(keys)}
+            testId="files-mobile-bulk-tags"
           />
           <DockButton
             label={t("mobile.dock.move")}

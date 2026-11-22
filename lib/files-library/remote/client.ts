@@ -20,6 +20,8 @@ import type {
   LibraryFolder,
   LibraryFolderColor,
   LibraryFolderIcon,
+  LibrarySmartCollection,
+  LibrarySmartCollectionQuery,
 } from "@/lib/db/files-library-types"
 import { isLibraryItemKept } from "@/lib/db/files-library-types"
 import { LIBRARY_REF_SESSION_ID } from "@/lib/db/message-media-refs"
@@ -41,6 +43,8 @@ import {
   isFilesRemoteListPage,
   isRefused,
   type FilesRemoteAttach,
+  type FilesRemoteCollections,
+  type FilesRemoteCollectionUpsert,
   type FilesRemoteDetail,
   type FilesRemoteDuplicate,
   type FilesRemoteErrorCode,
@@ -141,11 +145,13 @@ export interface FilesRemoteClient {
   /** Every entry the host lists, read page by page. */
   list(imageLimit: number): Promise<FilesRemoteLibrary>
   folders(): Promise<LibraryFolder[]>
+  collections?(): Promise<LibrarySmartCollection[]>
   search(query: string, imageLimit: number, limit?: number): Promise<FilesRemoteSearchHit[]>
   /** Full search response including whether more body matches existed past `limit`. */
   searchQuery?(query: string, imageLimit: number, limit?: number): Promise<FilesRemoteSearch>
   get(key: string, imageLimit: number): Promise<FilesRemoteDetail>
   favorite(keys: readonly string[], favorite: boolean, imageLimit: number): Promise<void>
+  setTags?(keys: readonly string[], tags: readonly string[], imageLimit: number): Promise<void>
   move(keys: readonly string[], folderId: string | null, imageLimit: number): Promise<void>
   trash(keys: readonly string[], imageLimit: number): Promise<void>
   restore(keys: readonly string[], imageLimit: number): Promise<void>
@@ -168,6 +174,12 @@ export interface FilesRemoteClient {
     style: { color?: LibraryFolderColor | null; icon?: LibraryFolderIcon | null }
   ): Promise<void>
   deleteFolder(folderId: string, cascade: boolean): Promise<void>
+  saveCollection?(draft: {
+    id?: string
+    name: string
+    query: LibrarySmartCollectionQuery
+  }): Promise<LibrarySmartCollection>
+  deleteCollection?(collectionId: string): Promise<void>
   /** Upload one file (at most `FILES_REMOTE_MAX_BYTES`) into the host's library. */
   upload(
     file: File,
@@ -326,6 +338,21 @@ export function createFilesRemoteClient(
       } while (pageToken)
       return [...byId.values()]
     },
+    async collections() {
+      const byId = new Map<string, LibrarySmartCollection>()
+      let pageToken: string | undefined
+      do {
+        const page = await read<FilesRemoteCollections>(FILES_REMOTE_COMMANDS.collectionList, {
+          pageSize: FILES_REMOTE_PAGE_SIZE_DEFAULT,
+          ...(pageToken ? { pageToken } : {}),
+        })
+        for (const item of page.items) byId.set(item.id, item)
+        pageToken = page.nextPageToken
+      } while (pageToken)
+      return [...byId.values()].sort(
+        (a, b) => a.name.localeCompare(b.name) || a.createdAt - b.createdAt
+      )
+    },
     async search(query, imageLimit, limit = 50) {
       return (
         await read<FilesRemoteSearch>(FILES_REMOTE_COMMANDS.search, { query, imageLimit, limit })
@@ -339,6 +366,9 @@ export function createFilesRemoteClient(
     },
     async favorite(keys, favorite, imageLimit) {
       await write(FILES_REMOTE_COMMANDS.favorite, { keys, favorite, imageLimit })
+    },
+    async setTags(keys, tags, imageLimit) {
+      await write(FILES_REMOTE_COMMANDS.tagsSet, { keys, tags, imageLimit })
     },
     async move(keys, folderId, imageLimit) {
       await write(FILES_REMOTE_COMMANDS.move, { keys, folderId, imageLimit })
@@ -403,6 +433,21 @@ export function createFilesRemoteClient(
     },
     async deleteFolder(folderId, cascade) {
       await write(FILES_REMOTE_COMMANDS.folderDelete, { folderId, cascade })
+    },
+    async saveCollection(draft) {
+      const res = await write<FilesRemoteCollectionUpsert>(
+        FILES_REMOTE_COMMANDS.collectionUpsert,
+        {
+          ...(draft.id ? { collectionId: draft.id } : {}),
+          name: draft.name,
+          query: draft.query,
+        },
+        { bodyKey: true }
+      )
+      return res.collection
+    },
+    async deleteCollection(collectionId) {
+      await write(FILES_REMOTE_COMMANDS.collectionDelete, { collectionId })
     },
     async upload(file, opts) {
       if (file.size > FILES_REMOTE_MAX_BYTES) throw new FilesRemoteError("files_remote_too_large")

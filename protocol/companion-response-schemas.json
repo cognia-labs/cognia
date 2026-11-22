@@ -13621,6 +13621,12 @@
         "sharedLinks": {
           "type": "number"
         },
+        "tags": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
         "mediaHash": {
           "type": "string"
         },
@@ -13772,6 +13778,102 @@
         }
       ]
     },
+    "FilesRemoteSmartCollection": {
+      "type": "object",
+      "required": ["id", "name", "query", "createdAt", "updatedAt"],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "query": {
+          "type": "object",
+          "properties": {
+            "search": { "type": "string" },
+            "lens": {
+              "type": "string",
+              "enum": ["suggested", "favorites", "mine", "ai", "shared"]
+            },
+            "formats": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "modified": {
+              "type": "string",
+              "enum": ["any", "day", "week", "month", "year"]
+            },
+            "size": {
+              "type": "string",
+              "enum": ["any", "small", "medium", "large", "huge"]
+            },
+            "tags": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "projectScope": {
+              "type": "string",
+              "enum": ["current", "all"]
+            }
+          },
+          "additionalProperties": false
+        },
+        "createdAt": {
+          "type": "number"
+        },
+        "updatedAt": {
+          "type": "number"
+        }
+      },
+      "additionalProperties": false
+    },
+    "FilesRemoteCollectionPage": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["ok", "items"],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "items": {
+              "type": "array",
+              "items": {
+                "$ref": "#/$defs/FilesRemoteSmartCollection"
+              }
+            },
+            "nextPageToken": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/FilesRemoteRefused"
+        }
+      ]
+    },
+    "FilesRemoteCollectionUpsert": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["ok", "collection"],
+          "properties": {
+            "ok": {
+              "const": true
+            },
+            "collection": {
+              "$ref": "#/$defs/FilesRemoteSmartCollection"
+            }
+          },
+          "additionalProperties": false
+        },
+        {
+          "$ref": "#/$defs/FilesRemoteRefused"
+        }
+      ]
+    },
     "FilesRemoteSearch": {
       "oneOf": [
         {
@@ -13815,6 +13917,9 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "snippet": {
+                    "type": "string"
                   }
                 },
                 "additionalProperties": false
@@ -23852,6 +23957,9 @@
     "files_library_folder_list": {
       "$ref": "#/$defs/FilesRemoteFolderPage"
     },
+    "files_library_collection_list": {
+      "$ref": "#/$defs/FilesRemoteCollectionPage"
+    },
     "files_library_search": {
       "$ref": "#/$defs/FilesRemoteSearch"
     },
@@ -23862,6 +23970,9 @@
       "$ref": "#/$defs/FilesRemoteReadChunk"
     },
     "files_library_favorite": {
+      "$ref": "#/$defs/FilesRemoteCount"
+    },
+    "files_library_tags_set": {
       "$ref": "#/$defs/FilesRemoteCount"
     },
     "files_library_move": {
@@ -23901,6 +24012,12 @@
       "$ref": "#/$defs/FilesRemoteOk"
     },
     "files_library_folder_delete": {
+      "$ref": "#/$defs/FilesRemoteOk"
+    },
+    "files_library_collection_upsert": {
+      "$ref": "#/$defs/FilesRemoteCollectionUpsert"
+    },
+    "files_library_collection_delete": {
       "$ref": "#/$defs/FilesRemoteOk"
     },
     "files_library_upload_init": {

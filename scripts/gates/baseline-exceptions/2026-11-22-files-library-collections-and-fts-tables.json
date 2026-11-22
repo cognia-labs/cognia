@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/modules-baseline.json",
+  "measure": "size:tables",
+  "allowGrowth": 1,
+  "owner": "lib/files-library",
+  "repaymentPhase": "1",
+  "reason": "Files gap audit G01 and G06 add libraryCollections (saved Smart Collections synced to paired devices) and libraryTextSegments (content-addressed 4-8 KiB full-text search segments) in schema v262; net table count grows by 1 over the 404 baseline after v260 dropped workflowTriggers."
+}

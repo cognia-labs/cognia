@@ -53,6 +53,7 @@ export interface FilesMobileRowProps {
   onStartSelecting: (key: string) => void
   onToggle: (key: string) => void
   now: number
+  snippet?: string
 }
 
 export const FilesMobileRow = memo(function FilesMobileRow({
@@ -64,6 +65,7 @@ export const FilesMobileRow = memo(function FilesMobileRow({
   onStartSelecting,
   onToggle,
   now,
+  snippet,
 }: FilesMobileRowProps) {
   const t = useTranslations("files")
   const locale = useLocale()
@@ -198,7 +200,20 @@ export const FilesMobileRow = memo(function FilesMobileRow({
                   {t("card.sourceDeleted")}
                 </Badge>
               ) : null}
+              {entry.tags?.slice(0, 2).map((tag) => (
+                <Badge key={tag} variant="secondary" className="h-4 shrink-0 px-1 text-[10px]">
+                  {tag}
+                </Badge>
+              ))}
             </span>
+            {snippet ? (
+              <span
+                className="block truncate text-[11px] text-muted-foreground"
+                data-testid={`files-mobile-snippet-${entry.key}`}
+              >
+                {snippet}
+              </span>
+            ) : null}
           </span>
         </span>
       </LongPress>

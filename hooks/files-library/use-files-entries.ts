@@ -25,6 +25,7 @@ export interface UseFilesEntriesResult {
   /** More images exist than are loaded. */
   imagesTruncated: boolean
   loadMoreImages: () => void
+  entryContentKeys?: ReadonlyMap<string, string>
 }
 
 /**
@@ -59,5 +60,10 @@ export function useFilesEntries({
     () => setImageLimit((limit) => limit + FILES_IMAGE_PAGE_SIZE),
     []
   )
-  return { entries, imagesTruncated: loaded?.imagesTruncated ?? false, loadMoreImages }
+  return {
+    entries,
+    imagesTruncated: loaded?.imagesTruncated ?? false,
+    loadMoreImages,
+    ...(loaded?.entryContentKeys ? { entryContentKeys: loaded.entryContentKeys } : {}),
+  }
 }

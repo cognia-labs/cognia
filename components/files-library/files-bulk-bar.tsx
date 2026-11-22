@@ -16,6 +16,7 @@ import {
   Share2Icon,
   StarIcon,
   StarOffIcon,
+  TagIcon,
   Trash2Icon,
   XIcon,
 } from "lucide-react"
@@ -74,6 +75,7 @@ export function FilesBulkBar({ selected, folders, trash, actions, onClear }: Fil
   const openMove = useFilesLibraryStore((s) => s.openMove)
   const openDeleteForever = useFilesLibraryStore((s) => s.openDeleteForever)
   const openShare = useFilesLibraryStore((s) => s.openShare)
+  const openTags = useFilesLibraryStore((s) => s.openTags)
   const { capabilities } = useFilesOps()
   if (selected.length === 0) return null
   const keys = selected.map((entry) => entry.key)
@@ -116,6 +118,12 @@ export function FilesBulkBar({ selected, folders, trash, actions, onClear }: Fil
               icon={allFavorite ? StarOffIcon : StarIcon}
               onClick={() => void actions.setFavorite(selected, !allFavorite)}
               testId="files-bulk-favorite"
+            />
+            <BulkButton
+              label={t("actions.editTags")}
+              icon={TagIcon}
+              onClick={() => openTags(keys)}
+              testId="files-bulk-tags"
             />
             <BulkButton
               label={t("actions.moveToFolder")}

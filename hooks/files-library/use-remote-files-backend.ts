@@ -21,7 +21,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 
-import type { LibraryFolder } from "@/lib/db/files-library-types"
+import type { LibraryFolder, LibrarySmartCollection } from "@/lib/db/files-library-types"
 import { FILES_IMAGE_PAGE_SIZE } from "@/lib/files-library/sources"
 import { FilesRemoteError, type FilesRemoteClient } from "@/lib/files-library/remote/client"
 import { liveFilesRemoteClient } from "@/lib/files-library/remote/live-transport"
@@ -39,11 +39,13 @@ export const FILES_REMOTE_REFRESH_MS = 30_000
 export const FILES_REMOTE_SEARCH_DEBOUNCE_MS = 250
 
 const NO_FOLDERS: LibraryFolder[] = []
+const NO_COLLECTIONS: LibrarySmartCollection[] = []
 
 interface ListState {
   entries?: FilesEntry[]
   imagesTruncated: boolean
   folders: LibraryFolder[]
+  collections: LibrarySmartCollection[]
   listRevision: number
   error?: string
 }
@@ -51,6 +53,7 @@ interface ListState {
 interface RemoteSearchState {
   for: string
   keys?: ReadonlySet<string>
+  snippets?: ReadonlyMap<string, string>
   truncated?: boolean
   error?: string
 }
@@ -72,6 +75,7 @@ export function useRemoteFilesBackend(
   const [state, setState] = useState<ListState>({
     imagesTruncated: false,
     folders: NO_FOLDERS,
+    collections: NO_COLLECTIONS,
     listRevision: 0,
   })
   const generation = useRef(0)
@@ -83,15 +87,19 @@ export function useRemoteFilesBackend(
   const refresh = useCallback(async () => {
     const run = ++generation.current
     try {
-      const [library, folders] = await Promise.all([
+      const [library, folders, collections] = await Promise.all([
         client.list(imageLimitRef.current),
         client.folders(),
+        client.collections
+          ? client.collections().catch(() => NO_COLLECTIONS)
+          : Promise.resolve(NO_COLLECTIONS),
       ])
       if (run !== generation.current) return
       setState((previous) => ({
         entries: library.entries,
         imagesTruncated: library.imagesTruncated,
         folders,
+        collections,
         listRevision: previous.listRevision + 1,
       }))
     } catch (error) {
@@ -142,9 +150,14 @@ export function useRemoteFilesBackend(
       void ask
         .then((answer) => {
           if (run !== searchGenRef.current) return
+          const snippets = new Map<string, string>()
+          for (const hit of answer.items) {
+            if (hit.snippet) snippets.set(hit.key, hit.snippet)
+          }
           setMatches({
             for: rawSearch,
             keys: new Set(answer.items.map((hit) => hit.key)),
+            ...(snippets.size > 0 ? { snippets } : {}),
             ...(answer.truncated ? { truncated: true } : {}),
           })
         })
@@ -200,6 +213,7 @@ export function useRemoteFilesBackend(
   )
   const currentSearch = matches && matches.for === search ? matches : undefined
   const contentMatches = currentSearch?.keys
+  const searchSnippets = currentSearch?.snippets
   const searchTruncated = currentSearch?.truncated
   const searchError = currentSearch?.error
 
@@ -210,9 +224,11 @@ export function useRemoteFilesBackend(
         imagesTruncated: state.imagesTruncated,
         loadMoreImages,
         folders: state.folders,
+        collections: state.collections,
         refresh,
         retrySearch,
         ...(contentMatches ? { contentMatches } : {}),
+        ...(searchSnippets ? { searchSnippets } : {}),
         ...(searchTruncated ? { searchTruncated } : {}),
         ...(searchError ? { searchError } : {}),
         ...(state.error ? { error: state.error } : {}),
@@ -226,6 +242,7 @@ export function useRemoteFilesBackend(
       refresh,
       retrySearch,
       contentMatches,
+      searchSnippets,
       searchTruncated,
       searchError,
       ops,

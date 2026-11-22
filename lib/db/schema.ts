@@ -434,7 +434,7 @@ export const LEGACY_COGNIA_DB_NAME = "cognia-claude"
 /** Bump when CURRENT_SCHEMA changes. IndexedDB only runs an upgrade when this
  * number INCREASES, so editing CURRENT_SCHEMA without bumping leaves every
  * existing database on its old store set with no error of any kind. */
-export const CURRENT_SCHEMA_VERSION = 261
+export const CURRENT_SCHEMA_VERSION = 262
 
 /**
  * The immutable cumulative v240 schema baseline.
@@ -1125,6 +1125,12 @@ export const CURRENT_SCHEMA: Record<string, string | null> = {
   // a late row or a corrected one however old its `at`.
   sessionUsage:
     "&messageId, sessionId, [sessionId+at], at, model, characterId, surface, providerId, projectId, [projectId+at], runId, sourceId, [sourceId+sourceSessionId], [syncRevision+messageId]",
+  // v262 — Files multi-tags (`*tags` multi-entry index), Smart Collections, and
+  // content-addressed segmented full-text search slices (`4–8 KiB` per row).
+  libraryItems:
+    "&key, kind, originSessionId, folderId, favoritedAt, lastOpenedAt, hiddenAt, trashedAt, projectId, *tags",
+  libraryCollections: "&id, updatedAt, createdAt",
+  libraryTextSegments: "&id, contentKey, updatedAt",
 }
 
 let databaseConnectionSequence = 0
@@ -1824,6 +1830,8 @@ export class CogniaDB extends Dexie {
   // v231 — Files page metadata. See `lib/db/files-library-types.ts`.
   libraryItems!: Table<LibraryItemRow, string>
   libraryFolders!: Table<LibraryFolder, string>
+  libraryCollections!: Table<import("./files-library-types").LibrarySmartCollection, string>
+  libraryTextSegments!: Table<import("./files-library-types").LibraryTextSegment, string>
   documentTemplates!: Table<DocumentTemplateRow, string>
   // v194 — ADR-0149 identity projection. See `lib/db/identity.ts`.
   users!: Table<User, string>

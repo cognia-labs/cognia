@@ -5860,12 +5860,14 @@ fn files_library_commands_are_bridged_and_bind_the_caller() {
     let reads = [
         "files_library_list",
         "files_library_folder_list",
+        "files_library_collection_list",
         "files_library_search",
         "files_library_get",
         "files_library_read_chunk",
     ];
     let writes = [
         "files_library_favorite",
+        "files_library_tags_set",
         "files_library_move",
         "files_library_trash",
         "files_library_restore",
@@ -5879,6 +5881,8 @@ fn files_library_commands_are_bridged_and_bind_the_caller() {
         "files_library_folder_move",
         "files_library_folder_style",
         "files_library_folder_delete",
+        "files_library_collection_upsert",
+        "files_library_collection_delete",
         "files_library_upload_init",
         "files_library_upload_chunk",
         "files_library_upload_commit",

@@ -17,7 +17,11 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import type { FilesActions } from "@/hooks/files-library/use-files-actions"
-import { ROOT_LIBRARY_FOLDER_ID, type LibraryFolder } from "@/lib/db/files-library-types"
+import {
+  ROOT_LIBRARY_FOLDER_ID,
+  type LibraryFolder,
+  type LibrarySmartCollection,
+} from "@/lib/db/files-library-types"
 import { libraryFolderPath } from "@/lib/files-library/folder-tree"
 import type { FilesSection } from "@/lib/files-library/types"
 import { cn } from "@/lib/utils"
@@ -28,16 +32,20 @@ import { useFilesFolderMenu } from "./files-folder-menu"
 import { FilesMenuNodes } from "./files-menu"
 
 /** The header title for a place. */
-export function useFilesPlaceTitle(folders: readonly LibraryFolder[]): string {
+export function useFilesPlaceTitle(
+  folders: readonly LibraryFolder[],
+  collections: readonly LibrarySmartCollection[] = []
+): string {
   const t = useTranslations("files")
   const section = useFilesLibraryStore((s) => s.section)
-  return placeTitle(section, folders, t)
+  return placeTitle(section, folders, t, collections)
 }
 
 export function placeTitle(
   section: FilesSection,
   folders: readonly LibraryFolder[],
-  t: (key: string) => string
+  t: (key: string) => string,
+  collections: readonly LibrarySmartCollection[] = []
 ): string {
   switch (section.kind) {
     case "all":
@@ -51,6 +59,11 @@ export function placeTitle(
     case "folder":
       if (section.folderId === ROOT_LIBRARY_FOLDER_ID) return t("folders.root")
       return folders.find((folder) => folder.id === section.folderId)?.name ?? t("folders.root")
+    case "collection":
+      return (
+        collections.find((collection) => collection.id === section.collectionId)?.name ??
+        t("places.collections")
+      )
   }
 }
 

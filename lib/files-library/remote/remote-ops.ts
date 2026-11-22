@@ -94,6 +94,10 @@ export function createRemoteFilesOps({
     capabilities: PAIRED_FILES_CAPABILITIES,
     setFavorite: (entries, favorite) =>
       changed(client.favorite(keysOf(entries), favorite, imageLimit())),
+    setTags: (entries, tags) => {
+      if (!client.setTags) throw new FilesRemoteError("files_remote_invalid_request")
+      return changed(client.setTags(keysOf(entries), tags, imageLimit()))
+    },
     moveToFolder: (entries, folderId) =>
       changed(client.move(keysOf(entries), folderId, imageLimit())),
     trash: (entries) => changed(client.trash(keysOf(entries), imageLimit())),
@@ -196,5 +200,13 @@ export function createRemoteFilesOps({
     moveFolder: (folderId, parentId) => changed(client.moveFolder(folderId, parentId)),
     setFolderStyle: (folderId, style) => changed(client.setFolderStyle(folderId, style)),
     deleteFolder: (folderId, mode) => changed(client.deleteFolder(folderId, mode === "cascade")),
+    saveCollection: (draft) => {
+      if (!client.saveCollection) throw new FilesRemoteError("files_remote_invalid_request")
+      return changed(client.saveCollection(draft))
+    },
+    deleteCollection: (collectionId) => {
+      if (!client.deleteCollection) throw new FilesRemoteError("files_remote_invalid_request")
+      return changed(client.deleteCollection(collectionId))
+    },
   }
 }

@@ -117,7 +117,43 @@ export interface LibraryItemRow {
    * shows while one of these codes is still live there.
    */
   sharedLinkCodes?: string[]
+  /**
+   * Lightweight organizational tags on the item. Tags never mark an item kept
+   * (`isLibraryItemKept`): retention stays governed by Favorites, Folders,
+   * Files-owned uploads and Trash (ADR-0200).
+   */
+  tags?: string[]
   createdAt: number
+  updatedAt: number
+}
+
+export interface LibrarySmartCollectionQuery {
+  search?: string
+  lens?: "suggested" | "favorites" | "mine" | "ai" | "shared"
+  formats?: string[]
+  modified?: "any" | "day" | "week" | "month" | "year"
+  size?: "any" | "small" | "medium" | "large" | "huge"
+  tags?: string[]
+  projectScope?: "current" | "all"
+}
+
+export interface LibrarySmartCollection {
+  /** "lbc_" prefix. */
+  id: string
+  name: string
+  query: LibrarySmartCollectionQuery
+  createdAt: number
+  updatedAt: number
+}
+
+export interface LibraryTextSegment {
+  /** `${contentKey}:${segmentIndex}` */
+  id: string
+  /** Content-addressed upload hash or versioned document fingerprint. */
+  contentKey: string
+  segmentIndex: number
+  /** 4–8 KiB UTF-16 text slice for full-body search and match snippets. */
+  text: string
   updatedAt: number
 }
 
@@ -213,6 +249,31 @@ export function libraryItemKey(kind: LibraryItemKind, sourceId: string): string 
 
 /** How long an item stays in the Files Trash before the purge takes it (ADR-0223). */
 export const FILES_TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+
+export const LIBRARY_TAG_MAX_LENGTH = 48
+export const LIBRARY_ITEM_MAX_TAGS = 20
+
+/** Trim and collapse whitespace on one tag; empty when blank. */
+export function normalizeLibraryTag(raw: string): string {
+  return raw.trim().replace(/\s+/g, " ").slice(0, LIBRARY_TAG_MAX_LENGTH)
+}
+
+/** Deduplicate tags case-insensitively while preserving the first-seen casing. */
+export function normalizeLibraryTags(tags: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of tags) {
+    if (typeof raw !== "string") continue
+    const tag = normalizeLibraryTag(raw)
+    if (!tag) continue
+    const key = tag.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(tag)
+    if (out.length >= LIBRARY_ITEM_MAX_TAGS) break
+  }
+  return out
+}
 
 /**
  * A kept item survives deletion of its source conversation. A trashed item is

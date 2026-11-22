@@ -7,14 +7,18 @@
 import { create } from "zustand"
 import { persist } from "zustand/middleware"
 import { DEFAULT_FILES_LENS, DEFAULT_FILES_SECTION } from "@/lib/files-library/deep-link"
-import type { FilesFormat } from "@/lib/files-library/format"
-import type {
-  FilesLens,
-  FilesModifiedWithin,
-  FilesProjectScope,
-  FilesSection,
-  FilesSizeBand,
-  FilesSort,
+import type { LibrarySmartCollection } from "@/lib/db/files-library-types"
+import { FILES_FORMATS, type FilesFormat } from "@/lib/files-library/format"
+import {
+  FILES_LENSES,
+  FILES_MODIFIED_WITHIN,
+  FILES_SIZE_BANDS,
+  type FilesLens,
+  type FilesModifiedWithin,
+  type FilesProjectScope,
+  type FilesSection,
+  type FilesSizeBand,
+  type FilesSort,
 } from "@/lib/files-library/types"
 import { persistLocalStorage } from "@/stores/persist-storage"
 
@@ -24,17 +28,23 @@ export type FilesViewMode = "grid" | "list"
 export type FilesFolderDialog =
   { mode: "create"; parentId: string } | { mode: "rename"; folderId: string; name: string } | null
 
+/** A Smart Collection dialog: save current query as new, or rename/update an existing one. */
+export type FilesCollectionDialog =
+  { mode: "create" } | { mode: "edit"; collectionId: string; name: string } | null
+
 /** The popover filters, without the workspace scope (a persisted preference). */
 export interface FilesViewFilters {
   formats: FilesFormat[]
   modified: FilesModifiedWithin
   size: FilesSizeBand
+  tags?: string[]
 }
 
 export const DEFAULT_FILES_VIEW_FILTERS: FilesViewFilters = {
   formats: [],
   modified: "any",
   size: "any",
+  tags: [],
 }
 
 /** Sidebar width bounds, in pixels. */
@@ -82,6 +92,10 @@ interface FilesLibraryState {
   saveTemplateTarget: string | null
   /** Entry keys the share dialog shares as one link. */
   shareTarget: string[] | null
+  /** Entry keys the tag editor dialog acts on. */
+  tagTarget: string[] | null
+  /** Smart Collection create / edit dialog target. */
+  collectionDialog: FilesCollectionDialog
 
   setViewMode: (mode: FilesViewMode) => void
   setSort: (sort: FilesSort | null) => void
@@ -113,6 +127,11 @@ interface FilesLibraryState {
   closeSaveTemplate: () => void
   openShare: (keys: string[]) => void
   closeShare: () => void
+  openTags: (keys: string[]) => void
+  closeTags: () => void
+  openCollectionDialog: (dialog: Exclude<FilesCollectionDialog, null>) => void
+  closeCollectionDialog: () => void
+  applyCollection: (collection: LibrarySmartCollection) => void
 }
 
 type Persisted = Pick<
@@ -149,6 +168,8 @@ export const useFilesLibraryStore = create<FilesLibraryState>()(
       deleteFolderTarget: null,
       saveTemplateTarget: null,
       shareTarget: null,
+      tagTarget: null,
+      collectionDialog: null,
 
       setViewMode: (viewMode) => set({ viewMode }),
       setSort: (sort) => set({ sort }),
@@ -188,6 +209,43 @@ export const useFilesLibraryStore = create<FilesLibraryState>()(
       closeSaveTemplate: () => set({ saveTemplateTarget: null }),
       openShare: (keys) => set({ shareTarget: keys }),
       closeShare: () => set({ shareTarget: null }),
+      openTags: (keys) => set({ tagTarget: keys }),
+      closeTags: () => set({ tagTarget: null }),
+      openCollectionDialog: (collectionDialog) => set({ collectionDialog }),
+      closeCollectionDialog: () => set({ collectionDialog: null }),
+      applyCollection: (collection) => {
+        const q = collection.query
+        const lens =
+          q.lens && (FILES_LENSES as readonly string[]).includes(q.lens)
+            ? (q.lens as FilesLens)
+            : DEFAULT_FILES_LENS
+        const formats = (q.formats ?? []).filter((f): f is FilesFormat =>
+          (FILES_FORMATS as readonly string[]).includes(f)
+        )
+        const modified =
+          q.modified && (FILES_MODIFIED_WITHIN as readonly string[]).includes(q.modified)
+            ? (q.modified as FilesModifiedWithin)
+            : "any"
+        const size =
+          q.size && (FILES_SIZE_BANDS as readonly string[]).includes(q.size)
+            ? (q.size as FilesSizeBand)
+            : "any"
+        set((state) => ({
+          section: { kind: "collection", collectionId: collection.id },
+          selectedKey: null,
+          lens,
+          search: q.search ?? "",
+          filters: {
+            formats,
+            modified,
+            size,
+            tags: q.tags ? [...q.tags] : [],
+          },
+          ...(q.projectScope
+            ? { projectScope: q.projectScope }
+            : { projectScope: state.projectScope }),
+        }))
+      },
     }),
     {
       name: "files-library-prefs",

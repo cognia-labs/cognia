@@ -19,6 +19,7 @@ jest.mock("@/lib/db/files-library-items", () => {
     restoreLibraryItems: jest.fn(async () => {}),
     setLibraryItemsFavorite: jest.fn(async () => {}),
     setLibraryItemsFolder: jest.fn(async () => {}),
+    setLibraryItemsTags: jest.fn(async () => {}),
     touchLibraryItemOpened: jest.fn(async () => {}),
     trashLibraryItems: jest.fn(async () => {}),
   }
@@ -29,11 +30,25 @@ jest.mock("@/lib/db/files-library-folders", () => {
       super(code)
     }
   }
+  class LibraryCollectionError extends Error {
+    constructor(readonly code: string) {
+      super(code)
+    }
+  }
   return {
     LibraryFolderError,
+    LibraryCollectionError,
     createLibraryFolder: jest.fn(async ({ name }: { name: string }) => ({ id: `lbf_${name}` })),
     moveLibraryFolder: jest.fn(async () => {}),
     setLibraryFolderStyle: jest.fn(async () => {}),
+    saveLibraryCollection: jest.fn(async ({ name, query }: { name: string; query: unknown }) => ({
+      id: "lbc_saved",
+      name,
+      query,
+      createdAt: 1,
+      updatedAt: 1,
+    })),
+    deleteLibraryCollection: jest.fn(async () => {}),
   }
 })
 jest.mock("@/lib/files/download", () => ({ downloadBlob: jest.fn() }))

@@ -121,7 +121,11 @@ export function FilesSortMenu({ compact = false }: { compact?: boolean } = {}) {
   )
 }
 
-export function FilesToolbar() {
+export function FilesToolbar({
+  availableTags = [],
+}: {
+  availableTags?: readonly string[]
+} = {}) {
   const t = useTranslations("files")
   const viewMode = useFilesLibraryStore((s) => s.viewMode)
   const setViewMode = useFilesLibraryStore((s) => s.setViewMode)
@@ -129,7 +133,7 @@ export function FilesToolbar() {
   return (
     <div className="flex items-center gap-2" data-testid="files-toolbar">
       <FilesSortMenu />
-      <FilesFilterPopover />
+      <FilesFilterPopover availableTags={availableTags} />
 
       <ToggleGroup
         type="single"

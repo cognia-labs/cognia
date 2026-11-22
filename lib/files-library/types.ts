@@ -20,6 +20,7 @@ export type FilesSection =
   | { kind: "all" }
   | { kind: "group"; group: FilesTypeGroup }
   | { kind: "folder"; folderId: string }
+  | { kind: "collection"; collectionId: string }
   | { kind: "recent" }
   | { kind: "trash" }
 
@@ -140,6 +141,8 @@ export interface FilesEntry {
   trashedAt?: number
   /** Live share links made from Files that carry the item (ADR-0223); absent = none. */
   sharedLinks?: number
+  /** Lightweight organizational tags on the item; absent when untagged. */
+  tags?: string[]
   /** `messageMedia` key of the bytes (images and uploads). */
   mediaHash?: string
   /** sha-256 of the original bytes (uploads). */

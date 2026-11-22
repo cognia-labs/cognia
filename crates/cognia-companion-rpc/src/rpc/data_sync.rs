@@ -84,10 +84,12 @@ pub(super) const COMMANDS: &[&str] = &[
     "pet_chat_clear",
     "files_library_list",
     "files_library_folder_list",
+    "files_library_collection_list",
     "files_library_search",
     "files_library_get",
     "files_library_read_chunk",
     "files_library_favorite",
+    "files_library_tags_set",
     "files_library_move",
     "files_library_trash",
     "files_library_restore",
@@ -101,6 +103,8 @@ pub(super) const COMMANDS: &[&str] = &[
     "files_library_folder_move",
     "files_library_folder_style",
     "files_library_folder_delete",
+    "files_library_collection_upsert",
+    "files_library_collection_delete",
     "files_library_upload_init",
     "files_library_upload_chunk",
     "files_library_upload_commit",
@@ -452,7 +456,11 @@ pub(super) async fn dispatch(
             // degraded-store path.
             let transport = cognia_companion::ws_bridge::resolve_bridge_transport(state)
                 .map_err(RpcError::service_unavailable)?;
-            let transport = cognia_companion::data_plane::PairedReaderTransport::bind(transport, paired_reader);
+            let transport = cognia_companion::data_plane::PairedReaderTransport::bind_device(
+                transport,
+                paired_reader,
+                device_id,
+            );
             // The principal's `tenant_id` is a *tenant*; the responder on the
             // far side (`desktop-sync-source`) checks it against its unlocked
             // local account id and refuses a mismatch. Translating here is the
@@ -921,10 +929,12 @@ pub(super) async fn dispatch(
         // the upload staging are scoped to the device.
         | "files_library_list"
         | "files_library_folder_list"
+        | "files_library_collection_list"
         | "files_library_search"
         | "files_library_get"
         | "files_library_read_chunk"
         | "files_library_favorite"
+        | "files_library_tags_set"
         | "files_library_move"
         | "files_library_trash"
         | "files_library_restore"
@@ -938,6 +948,8 @@ pub(super) async fn dispatch(
         | "files_library_folder_move"
         | "files_library_folder_style"
         | "files_library_folder_delete"
+        | "files_library_collection_upsert"
+        | "files_library_collection_delete"
         | "files_library_upload_init"
         | "files_library_upload_chunk"
         | "files_library_upload_commit"
@@ -1182,7 +1194,21 @@ pub(super) async fn dispatch(
             // ADR-0060: some TS dispatch arms must know the authenticated
             // caller device. Injected server-side (overwriting any
             // client-sent value) so a device can never spoof another's id.
-            let args = if name == "host_state_submit" { paired_reader.stamp(args) } else { args };
+            let args = if matches!(
+                name,
+                "host_state_submit"
+                    | "memory_search"
+                    | "memory_list"
+                    | "memory_store"
+                    | "memory_update"
+                    | "memory_forget"
+                    | "memory_mutate"
+                    | "retrieval_profile_dek_export"
+            ) {
+                paired_reader.stamp(args)
+            } else {
+                args
+            };
             let args = inject_caller_device_id(name, args, device_id);
             let args = inject_caller_event_streams(name, args, device_id);
             let args = inject_caller_device_grants(name, args, state, device_id, tenant_id);

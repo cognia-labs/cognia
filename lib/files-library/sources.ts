@@ -12,8 +12,9 @@ import { createDexieMediaJobStore, generatedVideoRecord } from "@/lib/db/media-g
 import { getDb } from "@/lib/db/schema"
 import { getSessionsByIds } from "@/lib/db/sessions"
 import { listLibraryItems } from "@/lib/db/files-library-items"
-import { isLibraryItemKept } from "@/lib/db/files-library-types"
+import { isLibraryItemKept, libraryItemKey } from "@/lib/db/files-library-types"
 import { isConversationRefSession } from "@/lib/db/message-media-refs"
+import { documentTextContentKey, syncFilesTextIndex, uploadTextContentKey } from "./text-index"
 import {
   listAllSessionAssets,
   listLibraryAssets,
@@ -134,15 +135,19 @@ export function rawGeneratedVideos(rows: readonly MediaGenerationJobRow[]): RawG
   return out
 }
 
-function extractedText(asset: ListedSessionAsset): string | undefined {
+function fullExtractedText(asset: ListedSessionAsset): string | undefined {
   const segments = asset.extractedContent?.segments
   if (!segments?.length) return undefined
-  let text = ""
+  const parts: string[] = []
   for (const segment of segments) {
-    if (text.length >= FILES_BODY_EXCERPT_CHARS) break
-    text += (text ? "\n" : "") + segment.text
+    if (segment.text) parts.push(segment.text)
   }
-  return text.slice(0, FILES_BODY_EXCERPT_CHARS)
+  return parts.length > 0 ? parts.join("\n") : undefined
+}
+
+function extractedText(asset: ListedSessionAsset): string | undefined {
+  const full = fullExtractedText(asset)
+  return full ? full.slice(0, FILES_BODY_EXCERPT_CHARS) : undefined
 }
 
 function rawUpload(asset: ListedSessionAsset): RawUpload {
@@ -279,6 +284,8 @@ export interface LoadedFilesSources {
   input: FilesAggregateInput
   /** More images exist beyond `imageLimit`. */
   imagesTruncated: boolean
+  /** `entry.key -> contentKey` for segmented full-text search. */
+  entryContentKeys: Map<string, string>
 }
 
 /** Everything the aggregate needs besides the artifact store snapshot. */
@@ -346,6 +353,47 @@ export async function loadFilesSources(options: {
   const liveShareCodes = await loadLiveShareCodes(
     items.flatMap((item) => item.sharedLinkCodes ?? [])
   )
+  const textSources = new Map<string, string>()
+  const entryContentKeys = new Map<string, string>()
+  for (const artifact of artifacts) {
+    if (!artifact.content?.trim()) continue
+    const ck = documentTextContentKey(
+      "artifact",
+      artifact.id,
+      artifact.updatedAt,
+      artifact.content.length
+    )
+    textSources.set(ck, artifact.content)
+    entryContentKeys.set(libraryItemKey("artifact", artifact.id), ck)
+  }
+  for (const canvas of canvases) {
+    if (!canvas.content?.trim()) continue
+    const ck = documentTextContentKey("canvas", canvas.id, canvas.updatedAt, canvas.content.length)
+    textSources.set(ck, canvas.content)
+    entryContentKeys.set(libraryItemKey("canvas", canvas.id), ck)
+  }
+  for (const asset of libraryAssets) {
+    const full = fullExtractedText(asset)
+    if (!full?.trim()) continue
+    const ck = uploadTextContentKey(asset.contentHash)
+    textSources.set(ck, full)
+    entryContentKeys.set(libraryItemKey("upload", asset.assetId), ck)
+  }
+  for (const asset of sessionAssets) {
+    if (isImageMediaType(asset.mediaType) || !asset.sourceAvailable) continue
+    const full = fullExtractedText(asset)
+    if (!full?.trim()) continue
+    const ck = uploadTextContentKey(asset.contentHash)
+    if (!textSources.has(ck)) textSources.set(ck, full)
+    entryContentKeys.set(libraryItemKey("session-upload", asset.contentHash), ck)
+  }
+  for (const item of items) {
+    if (item.kind !== "session-upload" || !item.snapshot?.extractedText?.trim()) continue
+    const ck = uploadTextContentKey(item.sourceId)
+    if (!textSources.has(ck)) textSources.set(ck, item.snapshot.extractedText)
+    if (!entryContentKeys.has(item.key)) entryContentKeys.set(item.key, ck)
+  }
+  void syncFilesTextIndex(textSources).catch(() => undefined)
   return {
     input: {
       artifacts,
@@ -361,5 +409,6 @@ export async function loadFilesSources(options: {
       ...(liveShareCodes.size > 0 ? { liveShareCodes } : {}),
     },
     imagesTruncated: truncated,
+    entryContentKeys,
   }
 }

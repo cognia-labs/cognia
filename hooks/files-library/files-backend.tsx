@@ -10,15 +10,27 @@
  * the preview — so neither layout knows which one it is drawing.
  */
 
-import { createContext, useContext, useMemo, type ReactNode } from "react"
+import {
+  createContext,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react"
 
 import type { MissingMediaLoader } from "@/lib/chat/media/resolve-media"
-import type { LibraryFolder } from "@/lib/db/files-library-types"
+import type { LibraryFolder, LibrarySmartCollection } from "@/lib/db/files-library-types"
+import { documentDraftOf } from "@/lib/files-library/document-draft"
 import { createLocalFilesOps, type FilesOps } from "@/lib/files-library/ops"
+import { searchFilesBodies } from "@/lib/files-library/text-index"
 import type { FilesEntry } from "@/lib/files-library/types"
+import { useArtifactStore } from "@/stores/artifact/artifact-store"
+import { useFilesLibraryStore } from "@/stores/files-library"
 
 import { useFilesEntries } from "./use-files-entries"
-import { useFilesFolders } from "./use-files-folders"
+import { useFilesCollections, useFilesFolders } from "./use-files-folders"
 
 /** The library's contents as the page reads them. */
 export interface FilesSource {
@@ -27,12 +39,15 @@ export interface FilesSource {
   imagesTruncated: boolean
   loadMoreImages: () => void
   folders: LibraryFolder[]
+  collections?: LibrarySmartCollection[]
   /**
    * Items the search matched inside their content, beyond what the entries'
-   * own haystack holds — a paired device's titles-only entries, answered by
-   * the host. Absent where the entries carry their bodies.
+   * own haystack holds — full segmented text past the 20k excerpt, workspace
+   * disk content, or a paired device's titles-only entries.
    */
   contentMatches?: ReadonlySet<string>
+  /** Match snippets (`entry.key -> snippet`) for the active search query. */
+  searchSnippets?: ReadonlyMap<string, string>
   /** True when the host's body search stopped at its hit ceiling (`limit`). */
   searchTruncated?: boolean
   /** The last host body search failed (`files.errors.*` code). */
@@ -95,13 +110,66 @@ export function useFilesMediaLoader(entry: FilesEntry | undefined): MissingMedia
  * page whose provider already supplies the library.
  */
 export function useLocalFilesBackend({ enabled = true }: { enabled?: boolean } = {}): FilesBackend {
-  const { entries, imagesTruncated, loadMoreImages } = useFilesEntries({ enabled })
+  const { entries, imagesTruncated, loadMoreImages, entryContentKeys } = useFilesEntries({
+    enabled,
+  })
   const folders = useFilesFolders({ enabled })
+  const collections = useFilesCollections({ enabled })
+  const search = useFilesLibraryStore((s) => s.search)
+  const searchGenRef = useRef(0)
+  const [bodyState, setBodyState] = useState<{
+    for: string
+    matchedKeys: ReadonlySet<string>
+    snippets: ReadonlyMap<string, string>
+    truncated: boolean
+  } | null>(null)
+
+  useEffect(() => {
+    if (!enabled || !entries) return
+    const query = search.trim()
+    if (!query) {
+      searchGenRef.current += 1
+      return
+    }
+    const run = ++searchGenRef.current
+    const timer = setTimeout(() => {
+      void searchFilesBodies({
+        query,
+        entries,
+        ...(entryContentKeys ? { entryContentKeys } : {}),
+        readDocumentText: (entry) =>
+          documentDraftOf(entry, useArtifactStore.getState())?.content ?? null,
+      })
+        .then((res) => {
+          if (run !== searchGenRef.current) return
+          setBodyState({
+            for: search,
+            matchedKeys: res.matchedKeys,
+            snippets: res.snippets,
+            truncated: res.truncated,
+          })
+        })
+        .catch(() => undefined)
+    }, 120)
+    return () => clearTimeout(timer)
+  }, [enabled, entries, entryContentKeys, search])
+
+  const activeSearch = bodyState && bodyState.for === search ? bodyState : undefined
+
   return useMemo(
     () => ({
-      source: { entries, imagesTruncated, loadMoreImages, folders },
+      source: {
+        entries,
+        imagesTruncated,
+        loadMoreImages,
+        folders,
+        collections,
+        ...(activeSearch ? { contentMatches: activeSearch.matchedKeys } : {}),
+        ...(activeSearch ? { searchSnippets: activeSearch.snippets } : {}),
+        ...(activeSearch?.truncated ? { searchTruncated: true } : {}),
+      },
       ops: LOCAL_OPS,
     }),
-    [entries, imagesTruncated, loadMoreImages, folders]
+    [entries, imagesTruncated, loadMoreImages, folders, collections, activeSearch]
   )
 }

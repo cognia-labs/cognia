@@ -382,4 +382,41 @@ describe("readWorkspaceFile (ADR-0223 §8)", () => {
       createFilesRemoteClient({ call: gone.call as never }).readWorkspaceFile(file, 60)
     ).rejects.toMatchObject({ code: "files_workspace_missing" })
   })
+
+  it("sets tags, pages Smart Collections, and upserts/deletes collections", async () => {
+    const saved = {
+      id: "lbc_1",
+      name: "Specs",
+      query: { tags: ["spec"] },
+      createdAt: 1,
+      updatedAt: 2,
+    }
+    const t = transport({
+      files_library_tags_set: [{ ok: true, count: 1 }],
+      files_library_collection_list: [
+        { ok: true, items: [saved], nextPageToken: "o1" },
+        {
+          ok: true,
+          items: [{ id: "lbc_2", name: "Alpha", query: {}, createdAt: 1, updatedAt: 1 }],
+        },
+      ],
+      files_library_collection_upsert: [{ ok: true, collection: saved }],
+      files_library_collection_delete: [{ ok: true }],
+    })
+    const client = createFilesRemoteClient({ call: t.call as never }, { newKey: () => "k-1" })
+    await client.setTags!(["artifact:a"], ["spec"], 500)
+    const collections = await client.collections!()
+    expect(collections.map((c) => c.id)).toEqual(["lbc_2", "lbc_1"])
+    await expect(
+      client.saveCollection!({ name: "Specs", query: { tags: ["spec"] } })
+    ).resolves.toEqual(saved)
+    await client.deleteCollection!("lbc_1")
+    expect(t.calls.map((c) => c.name)).toEqual([
+      "files_library_tags_set",
+      "files_library_collection_list",
+      "files_library_collection_list",
+      "files_library_collection_upsert",
+      "files_library_collection_delete",
+    ])
+  })
 })

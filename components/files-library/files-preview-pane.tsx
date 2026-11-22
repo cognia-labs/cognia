@@ -20,12 +20,14 @@ import {
   RotateCcwIcon,
   SquareArrowOutUpRightIcon,
   StarIcon,
+  TagIcon,
   Trash2Icon,
   XIcon,
 } from "lucide-react"
 
 import { ArtifactPreview } from "@/components/artifacts/artifact-preview"
 import { FilePartPreview } from "@/components/chat/message-parts/file-part-preview"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { useClientLiveQuery } from "@/hooks/data/use-client-live-query"
 import { useFilesOps } from "@/hooks/files-library/files-backend"
@@ -71,6 +73,7 @@ export function FilesPreviewPane({
   const router = useRouter()
   const title = displayTitle(entry, t)
   const ops = useFilesOps()
+  const openTags = useFilesLibraryStore((s) => s.openTags)
   // Open lands here where the item's own surface is another device's.
   const readOnly = ops.capabilities.open === "preview"
   const sessions = useClientLiveQuery(
@@ -177,6 +180,36 @@ export function FilesPreviewPane({
           <dt className="text-muted-foreground">{t("preview.details.modified")}</dt>
           <dd>{format.dateTime(entry.updatedAt, { dateStyle: "medium", timeStyle: "short" })}</dd>
         </dl>
+
+        {entry.trashedAt === undefined ? (
+          <section className="mx-4 mb-4" data-testid="files-preview-tags-section">
+            <div className="mb-1.5 flex items-center justify-between gap-2">
+              <h3 className="text-xs font-medium text-muted-foreground">{t("preview.tags")}</h3>
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                className="h-6 px-2 text-xs"
+                onClick={() => openTags([entry.key])}
+                data-testid="files-preview-edit-tags"
+              >
+                <TagIcon className="size-3" aria-hidden />
+                {t("actions.editTags")}
+              </Button>
+            </div>
+            {entry.tags && entry.tags.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {entry.tags.map((tag) => (
+                  <Badge key={tag} variant="secondary" className="text-[11px]">
+                    {tag}
+                  </Badge>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">{t("preview.noTags")}</p>
+            )}
+          </section>
+        ) : null}
 
         {sessions && sessions.length > 0 ? (
           <section className="mx-4 mb-4">

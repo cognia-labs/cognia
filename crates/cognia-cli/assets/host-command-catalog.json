@@ -34453,6 +34453,449 @@
       "outputTyped": true
     },
     {
+      "name": "files_library_collection_delete",
+      "category": "sessions",
+      "resource": "files-library",
+      "target": "execution",
+      "operation": "write",
+      "capability": "client.write",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "files_library_collection_delete (client.write)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "collectionId"
+        ],
+        "properties": {
+          "collectionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "ok"
+            ],
+            "properties": {
+              "ok": {
+                "const": true
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A refused `files_library_*` call: a `files.errors.*` code, or `headless_host` from a brain that has no library.",
+            "required": [
+              "ok",
+              "code"
+            ],
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "files_library_collection_list",
+      "category": "sessions",
+      "resource": "files-library",
+      "target": "execution",
+      "operation": "read",
+      "capability": "client.read",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "structural",
+      "summary": "files_library_collection_list (client.read)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "description": "The host's saved Files Smart Collections, in id order.",
+        "properties": {
+          "pageSize": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 500,
+            "description": "How many items to answer. Absent means 200."
+          },
+          "pageToken": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 64,
+            "description": "The nextPageToken of the previous page, handed back unchanged."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "ok",
+              "items"
+            ],
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "items": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "name",
+                    "query",
+                    "createdAt",
+                    "updatedAt"
+                  ],
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "query": {
+                      "type": "object",
+                      "properties": {
+                        "search": {
+                          "type": "string"
+                        },
+                        "lens": {
+                          "type": "string",
+                          "enum": [
+                            "suggested",
+                            "favorites",
+                            "mine",
+                            "ai",
+                            "shared"
+                          ]
+                        },
+                        "formats": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "modified": {
+                          "type": "string",
+                          "enum": [
+                            "any",
+                            "day",
+                            "week",
+                            "month",
+                            "year"
+                          ]
+                        },
+                        "size": {
+                          "type": "string",
+                          "enum": [
+                            "any",
+                            "small",
+                            "medium",
+                            "large",
+                            "huge"
+                          ]
+                        },
+                        "tags": {
+                          "type": "array",
+                          "items": {
+                            "type": "string"
+                          }
+                        },
+                        "projectScope": {
+                          "type": "string",
+                          "enum": [
+                            "current",
+                            "all"
+                          ]
+                        }
+                      },
+                      "additionalProperties": false
+                    },
+                    "createdAt": {
+                      "type": "number"
+                    },
+                    "updatedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "nextPageToken": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A refused `files_library_*` call: a `files.errors.*` code, or `headless_host` from a brain that has no library.",
+            "required": [
+              "ok",
+              "code"
+            ],
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "files_library_collection_upsert",
+      "category": "sessions",
+      "resource": "files-library",
+      "target": "execution",
+      "operation": "write",
+      "capability": "client.write",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "files_library_collection_upsert (client.write)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "required": [
+          "name",
+          "query",
+          "idempotencyKey"
+        ],
+        "properties": {
+          "collectionId": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 300
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 255
+          },
+          "query": {
+            "type": "object",
+            "properties": {
+              "search": {
+                "type": "string",
+                "maxLength": 200
+              },
+              "lens": {
+                "type": "string",
+                "enum": [
+                  "suggested",
+                  "favorites",
+                  "mine",
+                  "ai",
+                  "shared"
+                ]
+              },
+              "formats": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "string"
+                }
+              },
+              "modified": {
+                "type": "string",
+                "enum": [
+                  "any",
+                  "day",
+                  "week",
+                  "month",
+                  "year"
+                ]
+              },
+              "size": {
+                "type": "string",
+                "enum": [
+                  "any",
+                  "small",
+                  "medium",
+                  "large",
+                  "huge"
+                ]
+              },
+              "tags": {
+                "type": "array",
+                "maxItems": 20,
+                "items": {
+                  "type": "string",
+                  "maxLength": 96
+                }
+              },
+              "projectScope": {
+                "type": "string",
+                "enum": [
+                  "current",
+                  "all"
+                ]
+              }
+            },
+            "additionalProperties": false
+          },
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128,
+            "description": "One per user intent. A retry of the same intent reuses it, so the host answers it once."
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "ok",
+              "collection"
+            ],
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "collection": {
+                "type": "object",
+                "required": [
+                  "id",
+                  "name",
+                  "query",
+                  "createdAt",
+                  "updatedAt"
+                ],
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "query": {
+                    "type": "object",
+                    "properties": {
+                      "search": {
+                        "type": "string"
+                      },
+                      "lens": {
+                        "type": "string",
+                        "enum": [
+                          "suggested",
+                          "favorites",
+                          "mine",
+                          "ai",
+                          "shared"
+                        ]
+                      },
+                      "formats": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "modified": {
+                        "type": "string",
+                        "enum": [
+                          "any",
+                          "day",
+                          "week",
+                          "month",
+                          "year"
+                        ]
+                      },
+                      "size": {
+                        "type": "string",
+                        "enum": [
+                          "any",
+                          "small",
+                          "medium",
+                          "large",
+                          "huge"
+                        ]
+                      },
+                      "tags": {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        }
+                      },
+                      "projectScope": {
+                        "type": "string",
+                        "enum": [
+                          "current",
+                          "all"
+                        ]
+                      }
+                    },
+                    "additionalProperties": false
+                  },
+                  "createdAt": {
+                    "type": "number"
+                  },
+                  "updatedAt": {
+                    "type": "number"
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A refused `files_library_*` call: a `files.errors.*` code, or `headless_host` from a brain that has no library.",
+            "required": [
+              "ok",
+              "code"
+            ],
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "outputTyped": true
+    },
+    {
       "name": "files_library_duplicate",
       "category": "sessions",
       "resource": "files-library",
@@ -35332,6 +35775,12 @@
                   "sharedLinks": {
                     "type": "number"
                   },
+                  "tags": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
                   "mediaHash": {
                     "type": "string"
                   },
@@ -35592,6 +36041,12 @@
                     },
                     "sharedLinks": {
                       "type": "number"
+                    },
+                    "tags": {
+                      "type": "array",
+                      "items": {
+                        "type": "string"
+                      }
                     },
                     "mediaHash": {
                       "type": "string"
@@ -36235,6 +36690,9 @@
                       "items": {
                         "type": "string"
                       }
+                    },
+                    "snippet": {
+                      "type": "string"
                     }
                   },
                   "additionalProperties": false
@@ -36243,6 +36701,96 @@
               "truncated": {
                 "type": "boolean",
                 "description": "Present and true when more body matches existed than limit returned."
+              }
+            },
+            "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "description": "A refused `files_library_*` call: a `files.errors.*` code, or `headless_host` from a brain that has no library.",
+            "required": [
+              "ok",
+              "code"
+            ],
+            "properties": {
+              "ok": {
+                "const": false
+              },
+              "code": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        ]
+      },
+      "outputTyped": true
+    },
+    {
+      "name": "files_library_tags_set",
+      "category": "sessions",
+      "resource": "files-library",
+      "target": "execution",
+      "operation": "write",
+      "capability": "client.write",
+      "risk": "low",
+      "approval": "none",
+      "idempotency": "required",
+      "summary": "files_library_tags_set (client.write)",
+      "description": "Loopback service-token command. Target: execution; risk: low.",
+      "inputSchemaSource": "contract",
+      "inputSchema": {
+        "type": "object",
+        "description": "Replace lightweight organizational tags on the selected items.",
+        "required": [
+          "keys",
+          "tags"
+        ],
+        "properties": {
+          "keys": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 300,
+              "description": "A Files item key (`<kind>:<sourceId>`) from `files_library_list`."
+            }
+          },
+          "tags": {
+            "type": "array",
+            "maxItems": 20,
+            "items": {
+              "type": "string",
+              "maxLength": 96
+            }
+          },
+          "imageLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100000
+          }
+        },
+        "additionalProperties": false
+      },
+      "outputSchemaSource": "contract",
+      "outputSchema": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "ok",
+              "count"
+            ],
+            "properties": {
+              "ok": {
+                "const": true
+              },
+              "count": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Items the host acted on; keys it no longer lists, and items already in the requested state, are skipped."
               }
             },
             "additionalProperties": false
@@ -114596,5 +115144,5 @@
       "outputTyped": true
     }
   ],
-  "catalogHash": "b9966de5c313c8d7f78ef4df831e926ab1ff54b147e9541e5c28fdf26da1eb80"
+  "catalogHash": "4579d7838cc935709c8d90405a2f4e72c0d1be4cd00a311a7593e5c62ed65297"
 }

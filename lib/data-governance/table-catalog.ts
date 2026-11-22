@@ -250,8 +250,10 @@ export const CORE_TABLE_NAMES = [
   "larkEntryContexts",
   "larkMessageImports",
   "larkWebSessions",
+  "libraryCollections",
   "libraryFolders",
   "libraryItems",
+  "libraryTextSegments",
   "loopEvents",
   "loops",
   "matrixPendingEncryptedEvents",
@@ -1046,6 +1048,7 @@ const CACHE_TABLES = new Set<CoreTableName>([
   "githubIssueMirror",
   "hostSyncCursors",
   "knowledgeBaseChunks",
+  "libraryTextSegments",
   "modelsDevCatalog",
   "mcpCapabilityCache",
   "openVsxCache",
@@ -1091,6 +1094,7 @@ const PROJECTION_TABLES = new Set<CoreTableName>([
   // without a round trip; it is never where a permission is decided.
   "externalIdentities",
   "hostStateChannels",
+  "libraryTextSegments",
   "mcpServerSummaries",
   "messageMediaRefs",
   "orgMemberships",
@@ -1125,6 +1129,7 @@ const QUICK_CLEANUP_TABLES = new Set<CoreTableName>([
   "collabRuns",
   "githubIssueMirror",
   "knowledgeBaseChunks",
+  "libraryTextSegments",
   "modelsDevCatalog",
   "mcpCapabilityCache",
   "mcpServerSummaries",
@@ -1302,6 +1307,7 @@ const USER_CONTENT_TABLES = new Set<CoreTableName>([
   // its source conversation. Content, not counters.
   "libraryItems",
   "libraryFolders",
+  "libraryCollections",
   // A saved document template is a document body the person wrote (ADR-0223).
   "documentTemplates",
   // A video job keeps the prompt the user (or an agent for them) wrote.
@@ -1486,6 +1492,8 @@ const STORAGE_CATEGORY_OVERRIDES: Partial<Record<CoreTableName, StorageCategory>
   messageMediaRefs: "chat",
   libraryItems: "artifact",
   libraryFolders: "artifact",
+  libraryCollections: "artifact",
+  libraryTextSegments: "artifact",
   documentTemplates: "artifact",
   // Job rows are small; the videos themselves are session assets in `chat`.
   mediaGenerationJobs: "chat",
@@ -1637,6 +1645,13 @@ const RETENTION_OVERRIDES: Partial<Record<CoreTableName, DataRetentionPolicy>> =
     mode: "cap",
     enforcement: "domain",
     reason: "Deleted with their snapshot by `lib/plugin/dexie/data-snapshots.ts`.",
+  },
+  libraryTextSegments: {
+    mode: "cap",
+    maxRows: 25_000,
+    enforcement: "domain",
+    reason:
+      "`lib/files-library/text-index.ts` prunes segments whose contentKey left the library and caps total cached segments.",
   },
   syncLeases: {
     mode: "ttl",
@@ -2104,6 +2119,8 @@ const CONTENT_PROTECTION_OVERRIDES: Partial<Record<CoreTableName, DataContentPro
   // Item names and host errors are the user's words; only the ids, states and
   // timestamps the journal is queried by stay readable (ADR-0224).
   itemMigrations: "encrypted-content",
+  libraryCollections: "encrypted-content",
+  libraryTextSegments: "encrypted-content",
   messageSyncClock: "metadata-only",
   sharedRunJournals: "encrypted-content",
   // Bookkeeping for the encryption migration itself: an id, an account id, a

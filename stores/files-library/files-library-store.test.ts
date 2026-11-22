@@ -47,10 +47,11 @@ describe("files library store", () => {
       formats: ["image"],
       modified: "any",
       size: "large",
+      tags: [],
     })
     s.resetFilters()
     expect(useFilesLibraryStore.getState()).toMatchObject({
-      filters: { formats: [], modified: "any", size: "any" },
+      filters: { formats: [], modified: "any", size: "any", tags: [] },
       search: "",
     })
   })

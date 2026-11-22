@@ -32,6 +32,7 @@ import {
   SquareArrowOutUpRightIcon,
   StarIcon,
   StarOffIcon,
+  TagIcon,
   Trash2Icon,
 } from "lucide-react"
 
@@ -59,6 +60,7 @@ export function useFilesItemMenu(entry: FilesEntry, actions: FilesActions): File
   const openDeleteForever = useFilesLibraryStore((s) => s.openDeleteForever)
   const openSaveTemplate = useFilesLibraryStore((s) => s.openSaveTemplate)
   const openShare = useFilesLibraryStore((s) => s.openShare)
+  const openTags = useFilesLibraryStore((s) => s.openTags)
   const { capabilities } = useFilesOps()
   const shareHeldBack = capabilities.share !== true
   const createHeldBack = capabilities.createDocuments !== true
@@ -122,6 +124,13 @@ export function useFilesItemMenu(entry: FilesEntry, actions: FilesActions): File
       label: favorite ? t("actions.unfavorite") : t("actions.favorite"),
       icon: favorite ? StarOffIcon : StarIcon,
       onSelect: () => void actions.toggleFavorite(entry),
+    },
+    {
+      type: "item",
+      id: "tags",
+      label: t("actions.editTags"),
+      icon: TagIcon,
+      onSelect: () => openTags([entry.key]),
     },
     {
       type: "item",

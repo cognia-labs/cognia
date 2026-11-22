@@ -35,6 +35,8 @@ export interface FilesCardProps {
   /** Some item is selected, so every card shows its checkbox. */
   selecting: boolean
   onSelect: (key: string, event: RangeSelectionMouseEvent) => void
+  /** Matched body snippet while searching. */
+  snippet?: string
 }
 
 export function FilesCard({
@@ -44,6 +46,7 @@ export function FilesCard({
   selected,
   selecting,
   onSelect,
+  snippet,
 }: FilesCardProps) {
   const t = useTranslations("files")
   const format = useFormatter()
@@ -103,6 +106,14 @@ export function FilesCard({
             <p className="line-clamp-2 px-4 pt-4 pr-10 pl-10 text-sm font-medium break-all">
               {title}
             </p>
+            {snippet ? (
+              <p
+                className="line-clamp-2 px-4 pt-1 text-xs text-muted-foreground"
+                data-testid={`files-card-snippet-${entry.key}`}
+              >
+                {snippet}
+              </p>
+            ) : null}
             <div className="flex flex-1 items-center justify-center">
               <FilesEntryIcon entry={entry} />
             </div>
@@ -147,6 +158,16 @@ export function FilesCard({
               {t("card.usedIn", { count: entry.sessionIds.length })}
             </Badge>
           ) : null}
+          {entry.tags?.slice(0, 2).map((tag) => (
+            <Badge
+              key={tag}
+              variant="secondary"
+              className={cn("h-5 px-1.5 text-[10px]", badgeTone)}
+              data-testid={`files-card-tag-${tag}`}
+            >
+              {tag}
+            </Badge>
+          ))}
         </div>
 
         <div

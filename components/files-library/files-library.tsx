@@ -25,6 +25,7 @@
  * `files_library_*` (`useRemoteFilesBackend`). The layouts do not branch on it.
  */
 
+import { useMemo } from "react"
 import { useTranslations } from "next-intl"
 import { FolderOpenIcon, Trash2Icon } from "lucide-react"
 
@@ -38,6 +39,7 @@ import { useFilesPage } from "@/hooks/files-library/use-files-page"
 import { useRemoteFilesBackend } from "@/hooks/files-library/use-remote-files-backend"
 import { useCompactLayout } from "@/hooks/ui/use-compact-layout"
 import { useRuntimeSnapshot } from "@/hooks/use-runtime-snapshot"
+import { normalizeLibraryTags } from "@/lib/db/files-library-types"
 import { isFilesLens } from "@/lib/files-library/deep-link"
 import { FILES_LENSES, type FilesEntry } from "@/lib/files-library/types"
 import {
@@ -107,7 +109,19 @@ function FilesLayout() {
 function FilesLibraryBody() {
   const t = useTranslations("files")
   const files = useFilesPage()
-  const { entries, folders, actions, view, selection, section, lens, trash, page } = files
+  const {
+    entries,
+    folders,
+    collections,
+    actions,
+    view,
+    selection,
+    section,
+    lens,
+    trash,
+    page,
+    searchSnippets,
+  } = files
 
   const viewMode = useFilesLibraryStore((s) => s.viewMode)
   const sort = useFilesLibraryStore((s) => s.sort)
@@ -121,7 +135,11 @@ function FilesLibraryBody() {
   const search = useFilesLibraryStore((s) => s.search)
   const setSearch = useFilesLibraryStore((s) => s.setSearch)
   const setLens = useFilesLibraryStore((s) => s.setLens)
-  const placeTitle = useFilesPlaceTitle(folders)
+  const placeTitle = useFilesPlaceTitle(folders, collections)
+  const availableTags = useMemo(
+    () => normalizeLibraryTags((entries ?? []).flatMap((entry) => entry.tags ?? [])),
+    [entries]
+  )
 
   const onKeyDown = useFilesKeyboard({
     entries,
@@ -175,7 +193,7 @@ function FilesLibraryBody() {
         ariaLabel: t("search.aria"),
         testId: "files-search",
       }}
-      controls={<FilesToolbar />}
+      controls={<FilesToolbar availableTags={availableTags} />}
       secondaryActions={
         trash
           ? [
@@ -219,6 +237,7 @@ function FilesLibraryBody() {
           content: (
             <FilesSidebar
               folders={folders}
+              collections={collections}
               recents={view.recents}
               trashCount={view.trashCount}
               actions={actions}
@@ -338,6 +357,7 @@ function FilesLibraryBody() {
                       selected={selection.selected.has(entry.key)}
                       selecting={selecting}
                       onSelect={onSelect}
+                      snippet={searchSnippets.get(entry.key)}
                     />
                   ))}
                 </div>
@@ -359,6 +379,7 @@ function FilesLibraryBody() {
                 trash={trash}
                 actions={actions}
                 now={view.now}
+                searchSnippets={searchSnippets}
               />
             )}
             {visible && (files.hasMore || files.showImagesMore) ? (

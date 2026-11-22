@@ -150,6 +150,15 @@ describe("sameFilesSection", () => {
     expect(
       sameFilesSection({ kind: "group", group: "images" }, { kind: "group", group: "videos" })
     ).toBe(false)
+    expect(
+      sameFilesSection(
+        { kind: "collection", collectionId: "lbc_1" },
+        { kind: "collection", collectionId: "lbc_1" }
+      )
+    ).toBe(true)
+    expect(
+      parseFilesLocation(new URLSearchParams("section=collection%3Albc_1")).location.section
+    ).toEqual({ kind: "collection", collectionId: "lbc_1" })
     expect(sameFilesSection({ kind: "recent" }, { kind: "trash" })).toBe(false)
   })
 })

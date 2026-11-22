@@ -1,0 +1,8 @@
+{
+  "file": "scripts/gates/modules-baseline.json",
+  "measure": "size:unclaimedTables",
+  "allowGrowth": 1,
+  "owner": "lib/files-library",
+  "repaymentPhase": "1",
+  "reason": "Files gap audit G01 and G06 add libraryCollections and libraryTextSegments alongside libraryItems and libraryFolders. files-library is an ownership-table row without a module.ts manifest yet, so its tables are claimed together when files-library gets its manifest in phase 1."
+}

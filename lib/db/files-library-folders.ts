@@ -15,11 +15,14 @@ import {
   isLibraryFolderColor,
   isLibraryFolderIcon,
   isLibraryItemKept,
+  normalizeLibraryTags,
   ROOT_LIBRARY_FOLDER_ID,
   type LibraryFolder,
   type LibraryFolderColor,
   type LibraryFolderIcon,
   type LibraryFolderPatch,
+  type LibrarySmartCollection,
+  type LibrarySmartCollectionQuery,
 } from "./files-library-types"
 import { libraryPinOwner } from "./files-library-items"
 
@@ -248,4 +251,85 @@ export async function getLibraryFolderDescendantIds(id: string): Promise<Set<str
     depth += 1
   }
   return out
+}
+
+// ── Smart Collections (saved queries synced over `files_library_collection_*`) ──
+
+export const LIBRARY_COLLECTION_NAME_MAX = 120
+
+function newCollectionId(): string {
+  return "lbc_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 8)
+}
+
+export class LibraryCollectionError extends Error {
+  constructor(readonly code: "library_collection_name_required" | "library_collection_not_found") {
+    super(code)
+    this.name = "LibraryCollectionError"
+  }
+}
+
+export function normalizeCollectionQuery(
+  raw: LibrarySmartCollectionQuery
+): LibrarySmartCollectionQuery {
+  const search = raw.search?.trim().slice(0, 200)
+  const formats = raw.formats ? [...new Set(raw.formats.filter(Boolean))] : undefined
+  const tags = raw.tags ? normalizeLibraryTags(raw.tags) : undefined
+  return {
+    ...(search ? { search } : {}),
+    ...(raw.lens && raw.lens !== "suggested" ? { lens: raw.lens } : {}),
+    ...(formats && formats.length > 0 ? { formats } : {}),
+    ...(raw.modified && raw.modified !== "any" ? { modified: raw.modified } : {}),
+    ...(raw.size && raw.size !== "any" ? { size: raw.size } : {}),
+    ...(tags && tags.length > 0 ? { tags } : {}),
+    ...(raw.projectScope ? { projectScope: raw.projectScope } : {}),
+  }
+}
+
+const collectionCollator = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" })
+
+export async function listLibraryCollections(): Promise<LibrarySmartCollection[]> {
+  const rows = await getDb().libraryCollections.toArray()
+  return rows.sort(
+    (a, b) =>
+      collectionCollator.compare(a.name, b.name) ||
+      a.createdAt - b.createdAt ||
+      a.id.localeCompare(b.id)
+  )
+}
+
+export async function saveLibraryCollection(draft: {
+  id?: string
+  name: string
+  query: LibrarySmartCollectionQuery
+}): Promise<LibrarySmartCollection> {
+  const name = draft.name.trim().slice(0, LIBRARY_COLLECTION_NAME_MAX)
+  if (!name) throw new LibraryCollectionError("library_collection_name_required")
+  const query = normalizeCollectionQuery(draft.query)
+  const db = getDb()
+  const now = Date.now()
+  if (draft.id) {
+    const existing = await db.libraryCollections.get(draft.id)
+    if (!existing) throw new LibraryCollectionError("library_collection_not_found")
+    const updated: LibrarySmartCollection = {
+      ...existing,
+      name,
+      query,
+      updatedAt: now,
+    }
+    await db.libraryCollections.put(updated)
+    return updated
+  }
+  const created: LibrarySmartCollection = {
+    id: newCollectionId(),
+    name,
+    query,
+    createdAt: now,
+    updatedAt: now,
+  }
+  await db.libraryCollections.put(created)
+  return created
+}
+
+export async function deleteLibraryCollection(id: string): Promise<void> {
+  await getDb().libraryCollections.delete(id)
 }

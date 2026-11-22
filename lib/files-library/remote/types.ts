@@ -17,9 +17,18 @@ import type {
   LibraryFolder,
   LibraryFolderColor,
   LibraryFolderIcon,
+  LibrarySmartCollection,
+  LibrarySmartCollectionQuery,
 } from "@/lib/db/files-library-types"
-import { LIBRARY_FOLDER_COLORS, LIBRARY_FOLDER_ICONS } from "@/lib/db/files-library-types"
-import type { FilesEntry } from "../types"
+import {
+  LIBRARY_FOLDER_COLORS,
+  LIBRARY_FOLDER_ICONS,
+  LIBRARY_ITEM_MAX_TAGS,
+  LIBRARY_TAG_MAX_LENGTH,
+  normalizeLibraryTags,
+} from "@/lib/db/files-library-types"
+import { FILES_FORMATS } from "../format"
+import { FILES_LENSES, FILES_MODIFIED_WITHIN, FILES_SIZE_BANDS, type FilesEntry } from "../types"
 
 /**
  * One Files entry as the host sends it: the aggregate's entry without its
@@ -93,6 +102,17 @@ export interface FilesRemoteFolders {
   nextPageToken?: string
 }
 
+/** One page of the host's Smart Collections, in id order. */
+export interface FilesRemoteCollections {
+  items: LibrarySmartCollection[]
+  /** Hand back as `pageToken` for the next page; absent on the last. */
+  nextPageToken?: string
+}
+
+export interface FilesRemoteCollectionUpsert {
+  collection: LibrarySmartCollection
+}
+
 export interface FilesRemoteSearchHit {
   key: string
   kind: FilesEntry["kind"]
@@ -100,6 +120,7 @@ export interface FilesRemoteSearchHit {
   mediaType?: string
   updatedAt: number
   projectIds: string[]
+  snippet?: string
 }
 
 export interface FilesRemoteSearch {
@@ -352,6 +373,101 @@ export function parseFavoriteRequest(payload: Record<string, unknown>): {
   return { keys: parseKeys(payload), favorite: payload.favorite }
 }
 
+export function parseTagsSetRequest(payload: Record<string, unknown>): {
+  keys: string[]
+  tags: string[]
+} {
+  const keys = parseKeys(payload)
+  const raw = payload.tags
+  if (!Array.isArray(raw) || raw.length > LIBRARY_ITEM_MAX_TAGS) {
+    throw new FilesRemoteRequestError(`tags must list 0–${LIBRARY_ITEM_MAX_TAGS} strings`)
+  }
+  for (const tag of raw) {
+    if (typeof tag !== "string" || tag.length > LIBRARY_TAG_MAX_LENGTH * 2) {
+      throw new FilesRemoteRequestError("every tag must be a bounded string")
+    }
+  }
+  return { keys, tags: normalizeLibraryTags(raw as string[]) }
+}
+
+export function parseCollectionId(
+  payload: Record<string, unknown>,
+  field = "collectionId"
+): string {
+  return boundedString(payload, field, FILES_REMOTE_KEY_MAX)
+}
+
+export function parseCollectionUpsertRequest(payload: Record<string, unknown>): {
+  id?: string
+  name: string
+  query: LibrarySmartCollectionQuery
+} {
+  const id = optionalBoundedString(payload, "collectionId", FILES_REMOTE_KEY_MAX)
+  const name = parseName(payload)
+  const rawQuery = payload.query
+  if (typeof rawQuery !== "object" || rawQuery === null || Array.isArray(rawQuery)) {
+    throw new FilesRemoteRequestError("query must be an object")
+  }
+  const q = rawQuery as Record<string, unknown>
+  const query: LibrarySmartCollectionQuery = {}
+  if (q.search !== undefined && q.search !== null) {
+    if (typeof q.search !== "string" || q.search.length > FILES_REMOTE_SEARCH_MAX) {
+      throw new FilesRemoteRequestError("query.search must be a bounded string")
+    }
+    if (q.search.trim()) query.search = q.search.trim()
+  }
+  if (q.lens !== undefined && q.lens !== null) {
+    if (typeof q.lens !== "string" || !(FILES_LENSES as readonly string[]).includes(q.lens)) {
+      throw new FilesRemoteRequestError("query.lens is invalid")
+    }
+    query.lens = q.lens as LibrarySmartCollectionQuery["lens"]
+  }
+  if (q.formats !== undefined && q.formats !== null) {
+    if (
+      !Array.isArray(q.formats) ||
+      q.formats.length > FILES_FORMATS.length ||
+      !q.formats.every(
+        (f) => typeof f === "string" && (FILES_FORMATS as readonly string[]).includes(f)
+      )
+    ) {
+      throw new FilesRemoteRequestError("query.formats is invalid")
+    }
+    query.formats = [...new Set(q.formats as string[])]
+  }
+  if (q.modified !== undefined && q.modified !== null) {
+    if (
+      typeof q.modified !== "string" ||
+      !(FILES_MODIFIED_WITHIN as readonly string[]).includes(q.modified)
+    ) {
+      throw new FilesRemoteRequestError("query.modified is invalid")
+    }
+    query.modified = q.modified as LibrarySmartCollectionQuery["modified"]
+  }
+  if (q.size !== undefined && q.size !== null) {
+    if (typeof q.size !== "string" || !(FILES_SIZE_BANDS as readonly string[]).includes(q.size)) {
+      throw new FilesRemoteRequestError("query.size is invalid")
+    }
+    query.size = q.size as LibrarySmartCollectionQuery["size"]
+  }
+  if (q.tags !== undefined && q.tags !== null) {
+    if (
+      !Array.isArray(q.tags) ||
+      q.tags.length > LIBRARY_ITEM_MAX_TAGS ||
+      !q.tags.every((tag) => typeof tag === "string" && tag.length <= LIBRARY_TAG_MAX_LENGTH * 2)
+    ) {
+      throw new FilesRemoteRequestError("query.tags is invalid")
+    }
+    query.tags = normalizeLibraryTags(q.tags as string[])
+  }
+  if (q.projectScope !== undefined && q.projectScope !== null) {
+    if (q.projectScope !== "current" && q.projectScope !== "all") {
+      throw new FilesRemoteRequestError("query.projectScope is invalid")
+    }
+    query.projectScope = q.projectScope
+  }
+  return { ...(id ? { id } : {}), name, query }
+}
+
 /** `folderId: null` takes the items out of Folders. */
 export function parseMoveRequest(payload: Record<string, unknown>): {
   keys: string[]
@@ -523,6 +639,7 @@ export function entryFromRemote(remote: FilesRemoteEntry): FilesEntry {
     remote.title,
     remote.sourceTitle,
     remote.mediaType ?? "",
+    ...(remote.tags ?? []),
     // A workspace file is found by its path too, as it is on the host.
     remote.workspace?.relPath ?? "",
   ]

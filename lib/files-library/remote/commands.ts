@@ -11,10 +11,12 @@
 export const FILES_REMOTE_COMMANDS = {
   list: "files_library_list",
   folderList: "files_library_folder_list",
+  collectionList: "files_library_collection_list",
   search: "files_library_search",
   get: "files_library_get",
   readChunk: "files_library_read_chunk",
   favorite: "files_library_favorite",
+  tagsSet: "files_library_tags_set",
   move: "files_library_move",
   trash: "files_library_trash",
   restore: "files_library_restore",
@@ -28,6 +30,8 @@ export const FILES_REMOTE_COMMANDS = {
   folderMove: "files_library_folder_move",
   folderStyle: "files_library_folder_style",
   folderDelete: "files_library_folder_delete",
+  collectionUpsert: "files_library_collection_upsert",
+  collectionDelete: "files_library_collection_delete",
   uploadInit: "files_library_upload_init",
   uploadChunk: "files_library_upload_chunk",
   uploadCommit: "files_library_upload_commit",
@@ -45,10 +49,11 @@ export function isFilesRemoteCommand(command: string): command is FilesRemoteCom
   return NAME_SET.has(command)
 }
 
-/** The five reads; everything else changes the host's library. */
+/** The reads; everything else changes the host's library. */
 export const FILES_REMOTE_READ_COMMANDS: readonly FilesRemoteCommand[] = [
   FILES_REMOTE_COMMANDS.list,
   FILES_REMOTE_COMMANDS.folderList,
+  FILES_REMOTE_COMMANDS.collectionList,
   FILES_REMOTE_COMMANDS.search,
   FILES_REMOTE_COMMANDS.get,
   FILES_REMOTE_COMMANDS.readChunk,
@@ -72,6 +77,7 @@ export const FILES_REMOTE_KEYED_COMMANDS: readonly FilesRemoteCommand[] = [
   FILES_REMOTE_COMMANDS.duplicate,
   FILES_REMOTE_COMMANDS.attach,
   FILES_REMOTE_COMMANDS.folderCreate,
+  FILES_REMOTE_COMMANDS.collectionUpsert,
   FILES_REMOTE_COMMANDS.uploadCommit,
 ]
 

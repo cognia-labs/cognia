@@ -1438,9 +1438,11 @@
       "children": {
         "library": {
           "children": {
+            "collection": {},
             "favorite": {},
             "folder": {},
             "recent": {},
+            "tags": {},
             "trash": {},
             "upload": {}
           }

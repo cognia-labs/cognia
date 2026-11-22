@@ -20754,6 +20754,7 @@
       "deleteForever": "永久删除",
       "download": "下载",
       "duplicate": "创建副本",
+      "editTags": "编辑标签…",
       "favorite": "加入收藏",
       "moveToFolder": "移到文件夹…",
       "open": "打开",
@@ -20784,6 +20785,23 @@
       "sourceDeleted": "对话已删除",
       "trashed": "删除于 {date}",
       "usedIn": "在 {count} 个对话中"
+    },
+    "collectionDialog": {
+      "cancel": "取消",
+      "create": "保存智能集合",
+      "createTitle": "保存为智能集合",
+      "description": "将当前搜索词、视角、标签和筛选条件保存为动态视图，并与已配对设备同步。",
+      "editTitle": "更新智能集合",
+      "nameLabel": "名称",
+      "placeholder": "集合名称",
+      "save": "更新"
+    },
+    "collections": {
+      "delete": "删除集合",
+      "empty": "暂无智能集合",
+      "menu": "「{name}」的集合操作",
+      "new": "新建智能集合",
+      "saveCurrent": "用当前筛选条件更新…"
     },
     "columns": {
       "actions": "操作",
@@ -20828,6 +20846,10 @@
         "title": "这里还没有内容"
       },
       "clear": "清除筛选",
+      "collection": {
+        "description": "当前没有符合此智能集合条件的内容。",
+        "title": "没有匹配项"
+      },
       "favorites": {
         "description": "收藏后可以随时找到。即使所在对话被删除，收藏的内容也会保留。",
         "title": "还没有收藏"
@@ -20911,6 +20933,8 @@
       "files_workspace_too_large": "这个文件太大，无法在这里读取。",
       "files_workspace_unavailable": "暂时无法访问这个文件所在的工作区。",
       "headless_host": "已配对的主机无法管理其文件库。请在桌面端打开文件。",
+      "library_collection_name_required": "请输入智能集合名称。",
+      "library_collection_not_found": "该智能集合已不存在。",
       "library_folder_cycle": "文件夹不能移到自身之中。",
       "library_folder_name_required": "请输入文件夹名称。",
       "library_folder_not_found": "该文件夹已不存在。",
@@ -20945,6 +20969,7 @@
         "year": "过去一年"
       },
       "reset": "重置",
+      "saveCollection": "存为智能集合…",
       "size": "大小",
       "sizes": {
         "any": "不限",
@@ -20952,7 +20977,8 @@
         "large": "10–100 MB",
         "medium": "1–10 MB",
         "small": "小于 1 MB"
-      }
+      },
+      "tags": "标签"
     },
     "folderDialog": {
       "cancel": "取消",
@@ -21045,6 +21071,7 @@
         "favorite": "收藏",
         "move": "移动",
         "share": "分享",
+        "tags": "标签",
         "trash": "删除",
         "unfavorite": "取消收藏"
       },
@@ -21084,6 +21111,7 @@
     "newChatTitle": "关于 {title}",
     "places": {
       "all": "全部",
+      "collections": "智能集合",
       "folders": "文件夹",
       "groups": {
         "artifacts": "产物",
@@ -21120,8 +21148,10 @@
       },
       "label": "预览",
       "loading": "正在加载预览",
+      "noTags": "暂无标签",
       "openConversation": "打开对话",
       "sourceDeleted": "所在对话已删除。因为它已收藏或在文件夹中，所以仍保留在这里。",
+      "tags": "标签",
       "trashedNotice": "于 {date} 移到回收站，将在 {purge} 永久删除。",
       "unavailable": "内容已不在本设备上。",
       "workspaceAdoption": {
@@ -21186,6 +21216,18 @@
       "label": "排序",
       "labelActive": "按{column}排序（{direction}）"
     },
+    "tagsDialog": {
+      "add": "添加",
+      "cancel": "取消",
+      "empty": "当前未添加标签。",
+      "label": "添加标签",
+      "placeholder": "例如：规格、Q4、待评审",
+      "remove": "移除标签 {tag}",
+      "retentionHint": "标签仅用于跨文件夹分类，不会在对话删除后保留媒体内容；如需保留内容，请使用收藏或移到文件夹。",
+      "save": "保存标签",
+      "suggestions": "已有标签",
+      "title": "编辑标签"
+    },
     "templates": {
       "collapse": "隐藏模板",
       "create": "用「{name}」新建文档",
@@ -21200,6 +21242,9 @@
       "attached": "「{title}」已附加到下一条消息。",
       "bound": "「{title}」太大，无法放入输入框，已作为对话文件添加。Agent 可以用附件工具读取它。",
       "boundOnHost": "“{title}”已添加到桌面端该会话的文件中。智能体可以通过附件工具读取它。",
+      "collectionDeleted": "已删除智能集合「{name}」。",
+      "collectionSaved": "已保存智能集合「{name}」。",
+      "collectionUpdated": "已更新智能集合「{name}」。",
       "deletedForever": "已永久删除 {count} 项。",
       "dropTruncated": "只上传了拖入文件夹中的前 {count} 个文件。",
       "duplicated": "已为「{title}」创建副本。",
@@ -21215,6 +21260,8 @@
       "renamed": "已重命名为「{title}」。",
       "restored": "已恢复 {count} 项。",
       "retiredHint": "{count} 项仍保留在所在对话或画布中。",
+      "tagsSaved": "已更新「{title}」的标签。",
+      "tagsSavedMany": "已更新 {count} 项的标签。",
       "templateDeleted": "已删除模板「{name}」。",
       "trashed": "已将「{title}」移到回收站。",
       "trashedHint": "回收站中的内容保留 30 天。",

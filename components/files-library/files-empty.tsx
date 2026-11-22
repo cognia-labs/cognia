@@ -10,6 +10,7 @@
 import { useTranslations } from "next-intl"
 import {
   AlertCircleIcon,
+  BookmarkIcon,
   BotIcon,
   ClockIcon,
   FolderOpenIcon,
@@ -44,6 +45,7 @@ export type FilesEmptyCopy =
   | "shared"
   | "recent"
   | "folder"
+  | "collection"
   | "group"
   | "workspace"
   | "workspaceHeldBack"
@@ -59,6 +61,7 @@ const ICONS: Record<FilesEmptyCopy, LucideIcon> = {
   shared: Users2Icon,
   recent: ClockIcon,
   folder: FolderOpenIcon,
+  collection: BookmarkIcon,
   group: FolderOpenIcon,
   workspace: HardDriveIcon,
   workspaceHeldBack: HardDriveIcon,

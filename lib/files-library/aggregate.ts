@@ -204,12 +204,16 @@ function withItem(
   const originSessionId = base.originSessionId ?? item?.originSessionId
   const originSession = originSessionId ? sessions.get(originSessionId) : undefined
   const displayName = item?.displayName?.trim()
+  const tags = item?.tags?.length ? item.tags : undefined
+  const extraHaystack = [displayName?.toLowerCase(), tags?.join(" ").toLowerCase()]
+    .filter(Boolean)
+    .join("\n")
   return {
     ...base,
     title: displayName || base.title,
     sourceTitle: base.title,
-    // A renamed item is found by its new name as well as its old one.
-    searchText: displayName ? `${displayName.toLowerCase()}\n${base.searchText}` : base.searchText,
+    // A renamed or tagged item is found by its new name and tags as well as its source.
+    searchText: extraHaystack ? `${extraHaystack}\n${base.searchText}` : base.searchText,
     projectIds,
     originSessionId,
     ...(originSession?.title ? { originSessionTitle: originSession.title } : {}),
@@ -221,6 +225,7 @@ function withItem(
     ...(item?.favoritedAt !== undefined ? { favoritedAt: item.favoritedAt } : {}),
     ...(item?.folderId !== undefined ? { folderId: item.folderId } : {}),
     ...(item?.trashedAt !== undefined ? { trashedAt: item.trashedAt } : {}),
+    ...(tags ? { tags } : {}),
     ...sharedLinksOf(item, liveShareCodes),
     // A removed item comes back once its source changes after the removal.
     hidden: isItemHidden(item, base.updatedAt),

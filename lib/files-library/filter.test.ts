@@ -350,6 +350,25 @@ describe("filterFilesEntries", () => {
       )
     ).toEqual(["fresh", "old", "big", "foreign"])
   })
+
+  it("filters by multi-tags case-insensitively and supports collection section", () => {
+    const tagged = [
+      entry({ key: "both", tags: ["Spec", "Q4"] }),
+      entry({ key: "one", tags: ["Spec"] }),
+      entry({ key: "none" }),
+    ]
+    expect(
+      keys(
+        filterFilesEntries(
+          tagged,
+          query({
+            section: { kind: "collection", collectionId: "lbc_1" },
+            filters: { ...DEFAULT_FILES_FILTERS, tags: ["spec", "q4"] },
+          })
+        )
+      )
+    ).toEqual(["both"])
+  })
 })
 
 describe("sortFilesEntries", () => {
