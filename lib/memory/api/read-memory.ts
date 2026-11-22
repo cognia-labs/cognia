@@ -141,9 +141,14 @@ export async function listMemoriesExternal(
     status: input.status ?? "active",
   })
   const limit = Math.min(200, Math.max(1, input.limit ?? 50))
+  let authorizedRows = rows.filter((row) => authorized.read.isAuthorized(row))
+  if (authorized.caller.pairedReader !== undefined && authorizedRows.length > 0) {
+    const { filterPairedMemories } = await import("@/lib/memory/runtime/build-deps")
+    authorizedRows = await filterPairedMemories(authorizedRows, authorized.caller.pairedReader)
+  }
   return {
     ok: true,
-    memories: rows.filter((row) => authorized.read.isAuthorized(row)).slice(0, limit),
+    memories: authorizedRows.slice(0, limit),
   }
 }
 
@@ -158,7 +163,13 @@ export async function getMemoryExternal(
   const row = await getMemory(id)
   // Revision snapshots are reached through their memory's history, never by id
   // from an external surface — same rule as the default listing.
-  return row && row.revisionOf === undefined && authorized.read.isAuthorized(row) ? row : undefined
+  if (!row || row.revisionOf !== undefined || !authorized.read.isAuthorized(row)) return undefined
+  if (authorized.caller.pairedReader !== undefined) {
+    const { filterPairedMemories } = await import("@/lib/memory/runtime/build-deps")
+    const visible = await filterPairedMemories([row], authorized.caller.pairedReader)
+    if (visible.length === 0) return undefined
+  }
+  return row
 }
 
 /** Active-row count for a scope; a scope outside the caller's reads as 0. */
@@ -180,5 +191,10 @@ export async function countMemoriesExternal(
   }
   const { listMemories } = await import("@/lib/db/memories")
   const rows = await listMemories({ scope, characterId, status: "active" })
-  return rows.filter((row) => authorized.read.isAuthorized(row)).length
+  let authorizedRows = rows.filter((row) => authorized.read.isAuthorized(row))
+  if (caller.pairedReader !== undefined && authorizedRows.length > 0) {
+    const { filterPairedMemories } = await import("@/lib/memory/runtime/build-deps")
+    authorizedRows = await filterPairedMemories(authorizedRows, caller.pairedReader)
+  }
+  return authorizedRows.length
 }

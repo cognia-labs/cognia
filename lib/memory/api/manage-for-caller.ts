@@ -55,11 +55,9 @@ export class MemoryReceiptCommitError extends Error {
   }
 }
 
-/** Commands whose canonical Dexie work accepts the atomic receipt envelope. */
-function hasAtomicReceipt(command: ManageMemoryCommand): boolean {
-  return (
-    command.kind !== "create" && command.kind !== "clear" && command.kind !== "resolve-conflict"
-  )
+/** Every command supports the atomic canonical+receipt Dexie envelope. */
+function hasAtomicReceipt(_command: ManageMemoryCommand): boolean {
+  return true
 }
 
 type NamespaceRow = Pick<Memory, "scope" | "projectId" | "characterId" | "agentId">
@@ -129,6 +127,26 @@ export async function manageMemoryForCaller(
     if (row && !memoryRowWithinNamespaces(row, namespaces)) {
       return { ok: false, reason: "unauthorized_namespace" }
     }
+    if (row && caller.pairedReader !== undefined) {
+      const { filterPairedMemories } = await import("@/lib/memory/runtime/build-deps")
+      scope.assertActive()
+      if ((await filterPairedMemories([row], caller.pairedReader)).length === 0) {
+        return { ok: false, reason: "policy_denied" }
+      }
+    }
+  }
+  if (caller.pairedReader === "member") {
+    if (
+      (command.kind === "create" && command.type === "procedural") ||
+      (command.kind === "review" &&
+        command.status === "verified" &&
+        touched.get(command.id)?.type === "procedural") ||
+      (command.kind === "resolve-conflict" &&
+        (touched.get(command.keepId)?.type === "procedural" ||
+          touched.get(command.dropId)?.type === "procedural"))
+    ) {
+      return { ok: false, reason: "policy_denied" }
+    }
   }
   const destination = createdNamespace(command)
   if (destination && !memoryRowWithinNamespaces(destination, namespaces)) {
@@ -154,6 +172,7 @@ export async function manageMemoryForCaller(
 
   const ledger = await import("@/lib/db/memory-operations")
   scope.assertActive()
+  const operationKey = `${caller.principalId}:${context.operationId}`
   const binding = {
     principalId: caller.principalId,
     operationId: context.operationId,
@@ -166,10 +185,21 @@ export async function manageMemoryForCaller(
   if (reservation.state === "in_flight") {
     const settled = await ledger.awaitMemoryOperation(binding.principalId, binding.operationId)
     scope.assertActive()
-    reservation = settled
-      ? { state: "replay", receipt: settled }
-      : await ledger.reserveMemoryOperation(binding)
-    scope.assertActive()
+    if (settled) {
+      reservation = { state: "replay", receipt: settled }
+    } else {
+      const reconciled = await ledger.reconcilePendingMemoryOperation(binding)
+      scope.assertActive()
+      if (reconciled.state === "conflict") return { ok: false, reason: "idempotency_key_reused" }
+      if (reconciled.state === "recovered") {
+        reservation = { state: "replay", receipt: reconciled.receipt }
+      } else {
+        reservation = await ledger.reserveMemoryOperation(binding, {
+          allowReclaim: reconciled.state === "unapplied",
+        })
+        scope.assertActive()
+      }
+    }
   }
   if (reservation.state === "conflict") return { ok: false, reason: "idempotency_key_reused" }
   if (reservation.state === "replay") {
@@ -181,25 +211,28 @@ export async function manageMemoryForCaller(
     )
   }
   if (reservation.state === "in_flight") {
-    // The first attempt is still applying (or died holding the key). Answering
-    // with a retryable failure lets the queue try again instead of applying a
-    // second copy of the same command.
+    // The first attempt is still applying (or its receipt storage is still down).
+    // Answering with a retryable failure lets the queue try again cleanly.
     throw new Error("memory_mutate: operation still in flight")
   }
 
+  const releaseInFlight = ledger.markMemoryOperationInFlight(operationKey)
   let receiptCommitted = false
+  let commitEntered = false
+  const buildReceipt = (result: Extract<ManageMemoryResult, { ok: true }>) => ({
+    id: operationKey,
+    ...binding,
+    memoryId: result.memoryId ?? "",
+    resultCode: "ok" as const,
+    resultPayload: ledger.memoryOperationResultPayload(result),
+    createdAt: Date.now(),
+  })
   const writeReceipt = async (result: Extract<ManageMemoryResult, { ok: true }>) => {
     scope.assertActive()
-    await ledger.recordMemoryOperation({
-      id: `${binding.principalId}:${binding.operationId}`,
-      ...binding,
-      memoryId: result.memoryId ?? "",
-      resultCode: "ok",
-      resultPayload: ledger.memoryOperationResultPayload(result),
-      createdAt: Date.now(),
-    })
+    await ledger.recordMemoryOperation(buildReceipt(result))
   }
   const commit: ManageMemoryCommitContext["commit"] = async (apply) => {
+    commitEntered = true
     const { getDb } = await import("@/lib/db/schema")
     scope.assertActive()
     const db = getDb()
@@ -228,18 +261,22 @@ export async function manageMemoryForCaller(
   const atomic = hasAtomicReceipt(effective)
   let result: ManageMemoryForCallerResult
   try {
-    result = await runCommand(effective, atomic ? commit : undefined)
+    result = await runCommand(effective, atomic ? commit : undefined, operationKey)
   } catch (error) {
-    // An atomic envelope rolled back, and the store core explicitly identifies
-    // pre-write failures. Other multi-step failures keep their key fenced.
-    // Never release into a different database if the active partition moved.
-    if (scope.isActive() && (atomic || error instanceof MemoryPreWriteError))
+    releaseInFlight()
+    // An atomic envelope that actually ran rolled back its Dexie transaction,
+    // and the store core explicitly identifies pre-write failures. Other throws
+    // (such as an injected/mocked command that never entered `commit`) keep
+    // their pending lease until expiry + reconciliation.
+    if (scope.isActive() && ((atomic && commitEntered) || error instanceof MemoryPreWriteError))
       await ledger.releaseMemoryOperation(
         binding.principalId,
         binding.operationId,
         binding.requestHash
       )
     throw error
+  } finally {
+    releaseInFlight()
   }
   if (!result.ok) {
     // A refused command changed nothing, so its key must free up for a
@@ -253,39 +290,55 @@ export async function manageMemoryForCaller(
     return result
   }
   if (!receiptCommitted) {
-    // Non-atomic command kinds have already applied. Retry only the receipt,
-    // never the command, and never free the key after a successful command.
+    // Fallback for mocked or non-transactional callers: retry only the receipt,
+    // stage the applied result in memory on exhaustion so a later retry after
+    // storage recovers reconciles deterministically without re-executing.
     let receiptError: unknown
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
         await writeReceipt(result)
+        ledger.clearStagedMemoryOperation(operationKey)
         return result
       } catch (error) {
         receiptError = error
         if (!scope.isActive()) break
       }
     }
+    ledger.stageAppliedMemoryOperation(buildReceipt(result))
     throw new MemoryReceiptCommitError(receiptError)
   }
+  ledger.clearStagedMemoryOperation(operationKey)
   return result
 
   async function runCommand(
     next: ManageMemoryCommand,
-    commit?: ManageMemoryCommitContext["commit"]
+    commitEnvelope?: ManageMemoryCommitContext["commit"],
+    opKey?: string
   ): Promise<ManageMemoryForCallerResult> {
-    if (next.kind !== "clear" || !namespaces) {
+    if (next.kind !== "clear" || (!namespaces && caller.pairedReader === undefined)) {
       try {
         scope.assertActive()
-        return await (commit ? manageMemory(next, { commit, scope }) : manageMemory(next))
+        const needsContext =
+          Boolean(commitEnvelope) ||
+          Boolean(opKey) ||
+          caller.pairedReader !== undefined ||
+          next.kind === "create"
+        return await (needsContext
+          ? manageMemory(next, {
+              ...(commitEnvelope ? { commit: commitEnvelope } : {}),
+              ...(opKey ? { operationKey: opKey } : {}),
+              scope,
+              caller,
+            })
+          : manageMemory(next))
       } catch (error) {
         // clear catches every per-row write failure as partial_failure. Its
         // only escaping failure is the initial list, before any delete.
-        if (next.kind === "clear") throw new MemoryPreWriteError(error)
+        if (next.kind === "clear" && !commitEntered) throw new MemoryPreWriteError(error)
         throw error
       }
     }
-    // A restricted device clears only what it may see: one governed delete per
-    // row, never the unscoped table-wide clear.
+    // A restricted or member device clears only what it may see.
     const rows = await memDb
       .listMemories(
         next.query?.status === "invalidated"
@@ -296,13 +349,71 @@ export async function manageMemoryForCaller(
         throw new MemoryPreWriteError(error)
       })
     scope.assertActive()
-    const allowed = rows.filter((row) => memoryRowWithinNamespaces(row, namespaces))
+    let allowed = rows.filter((row) => memoryRowWithinNamespaces(row, namespaces))
+    if (caller.pairedReader !== undefined && allowed.length > 0) {
+      const { filterPairedMemories } = await import("@/lib/memory/runtime/build-deps")
+      scope.assertActive()
+      allowed = await filterPairedMemories(allowed, caller.pairedReader)
+    }
     const allowedIds = new Set(allowed.map((row) => row.id))
+    const targetRows = allowed.filter((row) => !(row.revisionOf && allowedIds.has(row.revisionOf)))
+    if (commitEnvelope) {
+      const targetIds = targetRows.map((row) => row.id)
+      const ownerIds = targetRows.filter((row) => row.revisionOf === undefined).map((row) => row.id)
+      const vectorDocIds = [
+        ...new Set(
+          targetRows
+            .filter((row) => row.revisionOf === undefined)
+            .map((row) => row.vectorDocId ?? row.id)
+        ),
+      ]
+      let clearedCount = 0
+      const outcome = await commitEnvelope(async () => {
+        scope.assertActive()
+        clearedCount = targetIds.length > 0 ? await memDb.hardDeleteMemories(targetIds) : 0
+        if (opKey) {
+          const { appendMemoryAuditEvent } = await import("@/lib/db/memory-governance")
+          await appendMemoryAuditEvent({
+            action: "deleted",
+            reason: "user_clear",
+            metadata: { operationKey: opKey, cleared: true, clearedCount },
+          })
+        }
+        return { ok: true, clearedCount }
+      })
+      if (!outcome.ok) return outcome
+      if (vectorDocIds.length > 0 && scope.isActive()) {
+        try {
+          const { tryBuildMemoryVectorSink } = await import("@/lib/memory/runtime/build-deps")
+          const sink = await tryBuildMemoryVectorSink({
+            ...config,
+            enabled: true,
+            temporary: false,
+          })
+          await sink?.delete(vectorDocIds)
+          if (!sink && targetRows.some((row) => Boolean(row.vectorDocId))) {
+            const { noteMemoryVectorFailure } =
+              await import("@/lib/memory/lifecycle/enqueue-reconcile")
+            noteMemoryVectorFailure()
+          }
+        } catch {
+          if (scope.isActive()) {
+            const { noteMemoryVectorFailure } =
+              await import("@/lib/memory/lifecycle/enqueue-reconcile")
+            noteMemoryVectorFailure()
+          }
+        }
+      }
+      if (ownerIds.length > 0 && scope.isActive()) {
+        const { scrubDeletedMemorySourcesFromMessages } = await import("@/lib/db/messages")
+        await scrubDeletedMemorySourcesFromMessages(ownerIds).catch(() => undefined)
+      }
+      return outcome
+    }
     let clearedCount = 0
     const failedIds: string[] = []
-    for (const row of allowed) {
+    for (const row of targetRows) {
       scope.assertActive()
-      if (row.revisionOf && allowedIds.has(row.revisionOf)) continue
       try {
         scope.assertActive()
         const deleted = await manageMemory({ kind: "delete", id: row.id })

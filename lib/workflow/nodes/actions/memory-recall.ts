@@ -126,19 +126,20 @@ export async function runMemoryRecall(ctx: StepExecutionContext): Promise<StepEx
     deps
   )
 
+  const authorizedHits = hits.filter((h) => read.isAuthorized(h.memory))
+  await visibleDeps.markInjectedMemories?.(authorizedHits.map((h) => h.memory.id))
+
   return {
     output: {
-      entries: hits
-        .filter((h) => read.isAuthorized(h.memory))
-        .map((h) => ({
-          id: h.memory.id,
-          text: h.memory.text,
-          type: h.memory.type,
-          scope: h.memory.scope,
-          importance: h.memory.importance,
-          relevance: h.relevance,
-          score: h.score,
-        })),
+      entries: authorizedHits.map((h) => ({
+        id: h.memory.id,
+        text: h.memory.text,
+        type: h.memory.type,
+        scope: h.memory.scope,
+        importance: h.memory.importance,
+        relevance: h.relevance,
+        score: h.score,
+      })),
       degraded: false,
     },
   }

@@ -110,6 +110,7 @@ async function resolveProjectHistoryToolDeps(): Promise<PersonalProjectHistoryDe
       const { preparePersonalHistory } = await import("@/lib/execution/personal-visibility")
       const history = await preparePersonalHistory(context.sessionId, [row], {
         executionRunId: context.executionRunId,
+        commitMarks: false,
       })
       if (!history.withheldMessageIds.length)
         messageMarks.set(
@@ -126,7 +127,12 @@ async function resolveProjectHistoryToolDeps(): Promise<PersonalProjectHistoryDe
       const history = await preparePersonalDerivedHistory(
         context.sessionId,
         [{ id: session.id, text: session.title }],
-        { sessionId, executionRunId: context.executionRunId, legacyOwnerArtifact: true }
+        {
+          sessionId,
+          executionRunId: context.executionRunId,
+          legacyOwnerArtifact: true,
+          commitMarks: false,
+        }
       )
       if (!history.withheldMessageIds.length)
         titleMarks.set(
@@ -197,6 +203,7 @@ async function resolveProjectHistoryToolDeps(): Promise<PersonalProjectHistoryDe
       const { preparePersonalHistory } = await import("@/lib/execution/personal-visibility")
       const history = await preparePersonalHistory(input.readerSessionId, selected, {
         executionRunId: input.executionRunId,
+        commitMarks: false,
       })
       const withheld = new Set(history.withheldMessageIds)
       windowMarks.set(

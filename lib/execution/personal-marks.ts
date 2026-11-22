@@ -131,6 +131,13 @@ export function bindPersonalMessageRun(
   bindings.set(messageId, [...new Set([...(bindings.get(messageId) ?? []), ...runIds])])
 }
 
+/** Drop per-database message-to-run bindings when a test snapshot restores the same DB object. */
+export function __resetPersonalMarksForDatabase(db: ReturnType<typeof getDb> = getDb()): void {
+  messageRuns.delete(db)
+  messageEgressBlocked.delete(db)
+  messageEgressSources.delete(db)
+}
+
 /** Retain the exact Host producer for effects caused by message rendering. */
 const messageEgressBlocked = new WeakMap<ReturnType<typeof getDb>, Set<string>>()
 const messageEgressSources = new WeakMap<

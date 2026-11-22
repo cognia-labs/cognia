@@ -106,7 +106,16 @@ export function withPersonalRerankerVisibility<
 export async function preparePersonalHistory<T extends PersonalHistoryMessage>(
   sessionId: string | undefined,
   messages: readonly T[],
-  options: { executionRunId?: string; session?: Pick<ChatSession, "platformBinding"> } = {}
+  options: {
+    executionRunId?: string
+    session?: Pick<ChatSession, "platformBinding">
+    /**
+     * False stages source marks for local candidate filtering without tainting
+     * the run ahead of actual selection/consumption. Still withholds when
+     * `executionRunId` is absent, because an unbound caller cannot commit marks later.
+     */
+    commitMarks?: boolean
+  } = {}
 ): Promise<{
   messages: T[]
   visibilityDigest: string
@@ -145,7 +154,11 @@ export function preparePairedHistory<T extends PersonalHistoryMessage>(
 async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
   sessionId: string | undefined,
   messages: readonly T[],
-  options: { executionRunId?: string; session?: Pick<ChatSession, "platformBinding"> },
+  options: {
+    executionRunId?: string
+    session?: Pick<ChatSession, "platformBinding">
+    commitMarks?: boolean
+  },
   ownerReaders?: PrincipalRefV1[],
   contextMarks?: ReadonlyMap<string, readonly PersonalMarkV1[]>
 ): ReturnType<typeof preparePersonalHistory<T>> {
@@ -293,13 +306,15 @@ async function prepareHistoryForReaders<T extends PersonalHistoryMessage>(
       (message) => !withheld.has(message.id) && explicitMarks(message).length > 0
     )
     if (consumed.length && options.executionRunId) {
-      // The commit is awaited before releasing any context. A failed transaction
-      // rejects this preparation, just as a failed memory-recall mark does.
-      await addPersonalMarksToRun(
-        { sessionId, executionRunId: options.executionRunId },
-        mergePersonalMarks(...consumed.map(explicitMarks))
-      )
-      assertCurrent()
+      if (options.commitMarks !== false) {
+        // The commit is awaited before releasing any context. A failed transaction
+        // rejects this preparation, just as a failed memory-recall mark does.
+        await addPersonalMarksToRun(
+          { sessionId, executionRunId: options.executionRunId },
+          mergePersonalMarks(...consumed.map(explicitMarks))
+        )
+        assertCurrent()
+      }
     } else if (consumed.length) {
       // No exact Host-held consuming run: never pick an ambient active run to
       // carry the taint. Withhold the explicitly marked context instead.
@@ -330,6 +345,7 @@ export async function preparePersonalDerivedHistory<T extends PersonalHistoryMes
     executionRunId?: string
     /** Host-owned legacy title/seed/skill; known source marks still take precedence. */
     legacyOwnerArtifact?: true
+    commitMarks?: boolean
   } = {}
 ): ReturnType<typeof preparePersonalHistory<T>> {
   return prepareDerivedHistory(sessionId, messages, source)
@@ -351,6 +367,7 @@ async function prepareDerivedHistory<T extends PersonalHistoryMessage>(
     sessionId?: string
     executionRunId?: string
     legacyOwnerArtifact?: true
+    commitMarks?: boolean
   },
   ownerRead = false
 ): ReturnType<typeof preparePersonalHistory<T>> {
@@ -458,7 +475,7 @@ async function prepareDerivedHistory<T extends PersonalHistoryMessage>(
   return prepareHistoryForReaders(
     sessionId,
     marked,
-    { executionRunId: source.executionRunId },
+    { executionRunId: source.executionRunId, commitMarks: source.commitMarks },
     undefined,
     new Map(
       messages.map((message) => [

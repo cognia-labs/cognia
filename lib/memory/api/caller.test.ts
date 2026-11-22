@@ -1,7 +1,5 @@
 import {
-  cliCaller,
   companionCaller,
-  internalJobCaller,
   localUserCaller,
   mcpCaller,
   pluginCaller,
@@ -12,7 +10,6 @@ import {
 describe("memory caller constructors", () => {
   it("bind the account-owner principals for in-process transports", () => {
     expect(localUserCaller()).toEqual({ principalId: "local-user", transport: "local-ui" })
-    expect(cliCaller()).toEqual({ principalId: "cli:tui", transport: "cli" })
     expect(mcpCaller()).toEqual({ principalId: "mcp:bridge", transport: "mcp" })
   })
 
@@ -23,10 +20,20 @@ describe("memory caller constructors", () => {
     })
   })
 
-  it("binds a companion principal to the injected device id", () => {
+  it("binds a companion principal to the injected device id and paired reader", () => {
     expect(companionCaller("dev-1")).toEqual({
       principalId: "companion:dev-1",
       transport: "companion",
+    })
+    expect(companionCaller("dev-1", "member")).toEqual({
+      principalId: "companion:dev-1",
+      transport: "companion",
+      pairedReader: "member",
+    })
+    expect(companionCaller("dev-1", "owner")).toEqual({
+      principalId: "companion:dev-1",
+      transport: "companion",
+      pairedReader: "owner",
     })
   })
 
@@ -46,22 +53,13 @@ describe("memory caller constructors", () => {
     expect(workflowCaller()).toEqual({ principalId: "workflow", transport: "workflow" })
   })
 
-  it("binds an internal job principal by worker id", () => {
-    expect(internalJobCaller("w-3")).toEqual({
-      principalId: "job:w-3",
-      transport: "internal-job",
-    })
-  })
-
   it("constructs identities without caching mutable grants", () => {
     for (const caller of [
       localUserCaller(),
-      cliCaller(),
       mcpCaller(),
       pluginCaller("p"),
-      companionCaller("d"),
+      companionCaller("d", "member"),
       workflowCaller("r"),
-      internalJobCaller("w"),
     ]) {
       expect(caller.namespaces).toBeUndefined()
     }

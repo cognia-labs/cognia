@@ -80,24 +80,33 @@ export async function searchMemoriesExternal(
   )
   if (!reader) return { ok: false, reason: "unauthorized_namespace" }
 
-  const { tryBuildMemoryDeps } = await import("@/lib/memory/runtime/build-deps")
+  const { tryBuildMemoryDeps, filterPairedMemories } =
+    await import("@/lib/memory/runtime/build-deps")
   let deps = await tryBuildMemoryDeps(config)
   if (!deps) return { ok: false, reason: "backend_unavailable" }
   const baseDeps = deps
+  const filterVisible = async (rows: import("@/types/memory/memory").Memory[]) => {
+    const authorizedRows = rows.filter((memory) => read.isAuthorized(memory))
+    return caller.pairedReader !== undefined && authorizedRows.length > 0
+      ? filterPairedMemories(authorizedRows, caller.pairedReader)
+      : authorizedRows
+  }
   deps = {
     ...baseDeps,
     // Procedural lines are not part of recall — the retriever only reads
     // `loadCandidates` (plus `vectorSearch`/`touch`/`embed`).
     loadCandidates: async (candidateReader) =>
-      (await baseDeps.loadCandidates(candidateReader)).filter((memory) =>
-        read.isAuthorized(memory)
-      ),
+      filterVisible(await baseDeps.loadCandidates(candidateReader)),
+    ...(baseDeps.loadProcedural
+      ? {
+          loadProcedural: async (candidateReader) =>
+            filterVisible(await baseDeps.loadProcedural(candidateReader)),
+        }
+      : {}),
     ...(baseDeps.loadHistoricalCandidates
       ? {
           loadHistoricalCandidates: async (candidateReader) =>
-            (await baseDeps.loadHistoricalCandidates!(candidateReader)).filter((memory) =>
-              read.isAuthorized(memory)
-            ),
+            filterVisible(await baseDeps.loadHistoricalCandidates!(candidateReader)),
         }
       : {}),
   }
@@ -120,8 +129,23 @@ export async function searchMemoriesExternal(
   // Defense in depth: the retriever's own visibility pass can surface a row
   // whose namespace set the caller is not bound to (a scope the Agent may read
   // but the principal may not). Re-check before anything leaves the process.
+  const authorizedHits = hits.filter((hit) => read.isAuthorized(hit.memory))
+  if (caller.pairedReader !== undefined && authorizedHits.length > 0) {
+    const allowedIds = new Set(
+      (
+        await filterPairedMemories(
+          authorizedHits.map((hit) => hit.memory),
+          caller.pairedReader
+        )
+      ).map((memory) => memory.id)
+    )
+    return {
+      ok: true,
+      hits: authorizedHits.filter((hit) => allowedIds.has(hit.memory.id)),
+    }
+  }
   return {
     ok: true,
-    hits: hits.filter((hit) => read.isAuthorized(hit.memory)),
+    hits: authorizedHits,
   }
 }

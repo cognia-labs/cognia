@@ -16,7 +16,7 @@ const mockBuildUtilityLlmClient = jest.fn()
 const mockCreateMemoryLlmReranker = jest.fn()
 
 jest.mock("@/lib/twin/runtime/build-deps", () => ({
-  tryBuildTwinDeps: () => mockTryBuildTwinDeps(),
+  tryBuildTwinDeps: (...args: unknown[]) => mockTryBuildTwinDeps(...args),
 }))
 jest.mock("@cognia/memory/runtime/provider-embedding-adapter", () => ({
   createProviderEmbeddingAdapter: (...args: unknown[]) =>
@@ -232,6 +232,41 @@ describe("personal memory provenance", () => {
     expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
   })
 
+  it("taints the execution run before sending personal candidates to an outbound LLM reranker", async () => {
+    const run = await startToolExecutionRun("reader", { localAuthorization: LOCAL_PERSON_RUN })
+    await getDb().messages.put({
+      id: "public-rerank-2",
+      sessionId: "source",
+      createdAt: 1,
+      metadata: { personalMarkVersion: 1 },
+    } as never)
+    const sourceMark = mark({ kind: "local-person" })
+    const fact = memory("candidate", { personalMarks: [sourceMark] })
+    const second = memory("candidate-2", { sourceMessageId: "public-rerank-2" })
+    const rerankSpy = jest.fn(async () => [0, 1])
+    const deps = withPersonalMemoryVisibility(
+      {
+        loadCandidates: async () => [fact, second],
+        loadProcedural: async () => [],
+        rerank: rerankSpy,
+      },
+      "reader",
+      run.id
+    )
+    expect(await deps.loadCandidates()).toEqual([fact, second])
+    expect((await getDb().executionRuns.get(run.id))?.personalMarks).toBeUndefined()
+    await deps.rerank?.(
+      "query",
+      [
+        { memory: fact, relevance: 0.9, score: 0.8 },
+        { memory: second, relevance: 0.7, score: 0.6 },
+      ] as never,
+      2
+    )
+    expect(rerankSpy).toHaveBeenCalledTimes(1)
+    expect((await getDb().executionRuns.get(run.id))?.personalMarks).toEqual([sourceMark])
+  })
+
   it("keeps unproven legacy memories with the owner and withholds them from another requester", async () => {
     const run = await startToolExecutionRun("reader", { localAuthorization: LOCAL_PERSON_RUN })
     const legacy = memory("legacy")
@@ -313,7 +348,7 @@ describe("personal memory provenance", () => {
     expect(await deps.loadCandidates()).toEqual([publicMemory])
     expect(await deps.loadProcedural()).toEqual([publicMemory])
     expect(await deps.loadHistoricalCandidates!()).toEqual([publicMemory])
-    expect(deps.rerank).toBe(rerank)
+    expect(typeof deps.rerank).toBe("function")
   })
 })
 
@@ -1014,6 +1049,7 @@ describe("describeMemoryRetrievalMode", () => {
       kind: "hybrid",
       provider: "transformersjs",
     })
+    expect(mockTryBuildTwinDeps).toHaveBeenCalledWith({ requireEnabled: false })
   })
 
   it("never throws — a backend explosion reads as no_backend", async () => {

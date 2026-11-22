@@ -3019,7 +3019,7 @@ describe("dispatchCommand: memory_* (ADR-0069)", () => {
 })
 
 describe("dispatchCommand: retrieval profile DEK pairing", () => {
-  it("exports key material only through content protocol v1 and clears the temporary bytes", async () => {
+  it("exports key material only through content protocol v1 for an owner reader and clears the temporary bytes", async () => {
     const rawKey = Uint8Array.from({ length: 32 }, (_, index) => index)
     mockExportForPairing.mockResolvedValue({
       profileId: "memory-shared",
@@ -3030,6 +3030,7 @@ describe("dispatchCommand: retrieval profile DEK pairing", () => {
     const result = (await dispatchCommand("retrieval_profile_dek_export", {
       profileId: "memory-shared",
       contentProtocolVersion: 1,
+      pairedReader: "owner",
     })) as Record<string, unknown>
 
     expect(mockExportForPairing).toHaveBeenCalledWith("memory-shared", {
@@ -3045,7 +3046,7 @@ describe("dispatchCommand: retrieval profile DEK pairing", () => {
     expect(rawKey.every((byte) => byte === 0)).toBe(true)
   })
 
-  it("rejects missing profile ids and old clients before reading key material", async () => {
+  it("rejects missing/unknown profile ids, member readers and old clients before reading key material", async () => {
     await expect(
       dispatchCommand("retrieval_profile_dek_export", { contentProtocolVersion: 1 })
     ).rejects.toThrow("profileId is required")
@@ -3053,8 +3054,29 @@ describe("dispatchCommand: retrieval profile DEK pairing", () => {
       dispatchCommand("retrieval_profile_dek_export", {
         profileId: "memory-shared",
         contentProtocolVersion: 0,
+        pairedReader: "owner",
       })
     ).rejects.toThrow("upgrade_required")
+    await expect(
+      dispatchCommand("retrieval_profile_dek_export", {
+        profileId: "other-profile",
+        contentProtocolVersion: 1,
+        pairedReader: "owner",
+      })
+    ).rejects.toThrow("unsupported profileId")
+    await expect(
+      dispatchCommand("retrieval_profile_dek_export", {
+        profileId: "memory-shared",
+        contentProtocolVersion: 1,
+        pairedReader: "member",
+      })
+    ).rejects.toThrow("paired_reader_not_owner")
+    await expect(
+      dispatchCommand("retrieval_profile_dek_export", {
+        profileId: "memory-shared",
+        contentProtocolVersion: 1,
+      })
+    ).rejects.toThrow("paired_reader_not_owner")
     expect(mockExportForPairing).not.toHaveBeenCalled()
   })
 })

@@ -199,7 +199,7 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/db/chat-search-text.ts": "stored-message-read:1",
   "lib/db/connector-inbound-jobs.ts": "stored-message-read:1",
   "lib/db/memory-governance.ts": "stored-message-read:1",
-  "lib/db/messages.ts": "stored-message-read:15",
+  "lib/db/messages.ts": "stored-message-read:17",
   "lib/db/mobile-outbound-queue.ts": "stored-message-read:1",
   "lib/db/plugin-bridge.ts": "stored-message-read:6",
   "lib/db/resource-workbench-sessions.ts": "resume:forkedFromSdkSessionId:1;resume:sdkSessionId:3",
@@ -238,7 +238,8 @@ const REVIEWED_SITES: Record<string, string> = {
   "lib/memory/backfill/backfill-service.ts": "listMessages:1;preparePersonalHistory:1",
   "lib/memory/lifecycle/job-worker.ts": "listMessages:1;preparePersonalHistory:1",
   "lib/memory/lifecycle/revalidate-claim.ts": "stored-message-read:3",
-  "lib/memory/runtime/build-deps.ts": "preparePersonalHistory:1;stored-message-read:2",
+  "lib/memory/runtime/build-deps.ts":
+    "preparePairedHistory:1;preparePersonalHistory:1;stored-message-read:2",
   "lib/memory/write/run-episodic-distill.ts": "complete:1",
   "lib/memory/write/run-memory-extraction.ts": "withPersonalMemoryVisibility:1",
   "lib/memory/write/run-project-mining.ts": "withPersonalMemoryVisibility:1",
@@ -888,8 +889,8 @@ it("binds every native paired data arm to a fail-closed Host reader and preserve
     "utf8"
   )
   expect(dispatch.match(/for_paired_reader\(paired_reader\)/g)).toHaveLength(8)
-  expect(dispatch).toContain("PairedReaderTransport::bind(transport, paired_reader)")
-  expect(dispatch).toContain('name == "host_state_submit"')
+  expect(dispatch).toContain("PairedReaderTransport::bind_device(")
+  expect(dispatch).toContain('"host_state_submit"')
   const plane = readFileSync(join(ROOT, "crates/cognia-companion/src/data_plane.rs"), "utf8")
   // Only the exact service scope reads as the Host owner; every other caller needs device proof.
   expect(dispatch).toContain("PairedReader::for_caller(tenant_id, device_id, scope)")

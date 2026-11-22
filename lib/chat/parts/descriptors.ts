@@ -520,6 +520,7 @@ const SOURCES: PartDescriptor = {
     if (purpose !== "search") return ""
     const buf: string[] = []
     for (const source of sourceItems(part)) {
+      if (!PUBLIC_SOURCE_ORIGINS.has(source.origin)) continue
       if (source.title) buf.push(source.title)
       if (source.url) buf.push(source.url)
     }

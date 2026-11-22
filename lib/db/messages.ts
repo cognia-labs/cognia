@@ -243,6 +243,12 @@ export function invalidatePersistSnapshot(sessionId: string): void {
   snapshotsFor(getDb()).delete(sessionId)
 }
 
+/** Drop all per-database persist snapshots when a test fixture restores the same DB object. */
+export function __resetMessageSnapshotsForDatabase(db: ReturnType<typeof getDb> = getDb()): void {
+  snapshotsByDatabase.delete(db)
+  pendingWrites.delete(db.name)
+}
+
 /**
  * Metadata keys that `listMessages` synthesizes from top-level columns. They
  * exist on the in-memory `UIMessage` purely so the UI can read them without
@@ -1519,6 +1525,96 @@ async function truncateAfterNow(
     await collectUnreferencedMessageMedia(orphanCandidates)
   }
   if (revision !== null) await publishTranscriptRevision(sessionId, revision)
+}
+
+function scrubSourcesPartForDeletedMemories(
+  parts: unknown[] | undefined,
+  deletedIds: ReadonlySet<string>
+): { parts: unknown[]; changed: boolean } | null {
+  if (!Array.isArray(parts) || deletedIds.size === 0) return null
+  let changed = false
+  const nextParts = parts.map((part) => {
+    if (!part || typeof part !== "object" || (part as { type?: unknown }).type !== "sources") {
+      return part
+    }
+    const sources = (part as { sources?: unknown }).sources
+    if (!Array.isArray(sources)) return part
+    let partChanged = false
+    const nextSources = sources.map((entry) => {
+      if (!entry || typeof entry !== "object") return entry
+      const item = entry as Record<string, unknown>
+      const memoryRef = typeof item.memoryRef === "string" ? item.memoryRef : undefined
+      const fallbackId =
+        (item.origin === "memory" || item.origin === "project-claim") && typeof item.id === "string"
+          ? item.id.replace(/^(?:memory|claim)-/, "")
+          : undefined
+      const targetId = memoryRef ?? fallbackId
+      if (!targetId || !deletedIds.has(targetId)) return entry
+      if (item.title === "" && !("snippet" in item)) return entry
+      partChanged = true
+      const { snippet: _snippet, ...rest } = item
+      return { ...rest, title: "" }
+    })
+    if (!partChanged) return part
+    changed = true
+    return { ...(part as Record<string, unknown>), sources: nextSources }
+  })
+  return changed ? { parts: nextParts, changed: true } : null
+}
+
+/**
+ * Scrub persisted literal memory excerpts (`title` / `snippet`) from earlier
+ * reply `SourcesPart` items after canonical hard deletion (`ADR-0115 §9`).
+ * Keeps the content-free citation slot (`id`, `memoryRef`, `origin`, `score`)
+ * so the UI can show a deleted placeholder without retaining erased text.
+ */
+export async function scrubDeletedMemorySourcesFromMessages(
+  memoryIds: readonly string[]
+): Promise<number> {
+  const deletedSet = new Set(memoryIds.filter(Boolean))
+  if (deletedSet.size === 0) return 0
+  const db = getDb()
+  const rows = await db.messages.toArray()
+  const affectedBySession = new Map<string, string[]>()
+  for (const row of rows) {
+    if (scrubSourcesPartForDeletedMemories(row.parts, deletedSet)) {
+      const list = affectedBySession.get(row.sessionId) ?? []
+      list.push(row.id)
+      affectedBySession.set(row.sessionId, list)
+    }
+  }
+  let scrubbed = 0
+  for (const [sessionId, messageIds] of affectedBySession) {
+    await enqueueTranscriptWrite(sessionId, async () => {
+      let revision: number | null = null
+      let turnKeys: string[] | undefined
+      let sessionChanged = false
+      await db.transaction("rw", db.messages, db.sessions, async () => {
+        const currentRows = await db.messages.bulkGet(messageIds)
+        const updatedRows: StoredMessage[] = []
+        for (const current of currentRows) {
+          if (!current || current.sessionId !== sessionId) continue
+          const result = scrubSourcesPartForDeletedMemories(current.parts, deletedSet)
+          if (!result) continue
+          updatedRows.push({ ...current, parts: result.parts as StoredMessage["parts"] })
+        }
+        if (updatedRows.length === 0) return
+        await db.messages.bulkPut(updatedRows)
+        sessionChanged = true
+        scrubbed += updatedRows.length
+        revision = await bumpTranscriptRevision(db, sessionId)
+        turnKeys = transcriptTurnKeysOf(updatedRows)
+      })
+      if (sessionChanged) {
+        invalidatePersistSnapshot(sessionId)
+        markSessionDirty(sessionId)
+        if (revision !== null) {
+          await publishTranscriptRevision(sessionId, revision, undefined, turnKeys)
+        }
+      }
+    })
+  }
+  return scrubbed
 }
 
 /**

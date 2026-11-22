@@ -97,6 +97,13 @@ export async function updateExternalMemory(
   if (caller?.namespaces && !memoryRowWithinNamespaces(existing, caller.namespaces)) {
     return { ok: false, reason: "unauthorized_namespace" }
   }
+  if (caller?.pairedReader !== undefined) {
+    const { filterPairedMemories } = await import("@/lib/memory/runtime/build-deps")
+    scope.assertActive()
+    if ((await filterPairedMemories([existing], caller.pairedReader)).length === 0) {
+      return { ok: false, reason: "policy_denied" }
+    }
+  }
 
   const { resolvePersistedAgentMemoryPolicy, scopeAllowedByAgentMemoryPolicy } =
     await import("@/lib/memory/agent-policy")
@@ -247,6 +254,13 @@ export async function forgetExternalMemory(
   const caller = resolveMemoryCaller(context.caller ?? localUserCaller(), config)
   if (caller?.namespaces && !memoryRowWithinNamespaces(existing, caller.namespaces)) {
     return { ok: false, reason: "unauthorized_namespace" }
+  }
+  if (caller?.pairedReader !== undefined) {
+    const { filterPairedMemories } = await import("@/lib/memory/runtime/build-deps")
+    scope.assertActive()
+    if ((await filterPairedMemories([existing], caller.pairedReader)).length === 0) {
+      return { ok: false, reason: "policy_denied" }
+    }
   }
 
   const { resolvePersistedAgentMemoryPolicy, scopeAllowedByAgentMemoryPolicy } =

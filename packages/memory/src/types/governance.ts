@@ -206,6 +206,8 @@ export interface MemoryJob {
    * a key is for deduping, not for carrying arguments.
    */
   memoryId?: string
+  /** Explicit backfill run attribution (`ProjectMiningRun.id`), when queued by backfill. */
+  runId?: string
   queuedAt: number
   startedAt?: number
   completedAt?: number
@@ -279,6 +281,8 @@ export interface ProjectMiningRun {
   sessionsScanned: number
   jobsEnqueued: number
   claimsProduced: number
+  /** True once history paging reached the oldest session and only queued jobs remain. */
+  scanCompleted?: boolean
   /** Same protocol as `claimMemoryJob`: owner, expiry, heartbeat. */
   leaseOwner?: string
   leaseExpiresAt?: number
@@ -374,7 +378,11 @@ export interface MemoryOperationRow {
    * come back `true` on a retry.
    */
   resultConsolidated?: boolean
+  /** Whether a `store` operation persisted a new/updated row (`false` for `NOOP`). */
+  resultStored?: boolean
   /** The consolidator ops the first call reported (`["ADD"]`, `["NOOP"]`, …). */
   resultApplied?: string[]
+  /** Bounded lease expiry while `resultCode === "pending"`. */
+  leaseExpiresAt?: number
   createdAt: number
 }

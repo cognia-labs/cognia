@@ -162,10 +162,12 @@ export async function buildTwinRuntimeAdapters(
  * resolver short-circuits) on any incomplete state — callers don't need
  * to know which field is missing.
  */
-export async function tryBuildTwinDeps(): Promise<TwinDepsForBuild | undefined> {
+export async function tryBuildTwinDeps(
+  options: { requireEnabled?: boolean } = {}
+): Promise<TwinDepsForBuild | undefined> {
   try {
     const settings = await getTwinRuntimeSettings()
-    const result = await buildTwinRuntimeAdapters(settings)
+    const result = await buildTwinRuntimeAdapters(settings, options)
     return result.ready ? result.adapters : undefined
   } catch {
     return undefined

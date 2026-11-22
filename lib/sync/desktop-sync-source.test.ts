@@ -228,6 +228,149 @@ describe("readDexieDelta", () => {
     ])
   })
 
+  it("enforces device principalGrants and pairedReader personal filtering on memory cold-start and incremental sync", async () => {
+    const key = await crypto.subtle.generateKey({ name: "AES-GCM", length: 256 }, false, [
+      "encrypt",
+      "decrypt",
+    ])
+    const { saveSettings } = await import("@/lib/db/settings")
+    await saveSettings(
+      {
+        memory: {
+          enabled: true,
+          principalGrants: {
+            "companion:dev-restricted": { scopes: ["workspace"], projects: ["p-allowed"] },
+          },
+        },
+      } as never,
+      { mirrorToHost: false }
+    )
+    await getDb().messages.bulkPut([
+      {
+        id: "msg-public",
+        sessionId: "sess-1",
+        role: "user",
+        createdAt: 1,
+        parts: [{ type: "text", text: "public" }],
+        metadata: { personalMarkVersion: 1 },
+      },
+      {
+        id: "msg-personal",
+        sessionId: "sess-1",
+        role: "user",
+        createdAt: 2,
+        parts: [{ type: "text", text: "owner secret" }],
+        metadata: {
+          personalMarkVersion: 1,
+          personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 2 }],
+        },
+      },
+    ] as never)
+    await getDb().memories.bulkPut([
+      {
+        id: "mem-allowed-public",
+        scope: "workspace",
+        projectId: "p-allowed",
+        type: "semantic",
+        text: "allowed workspace fact",
+        tags: [],
+        importance: 5,
+        createdAt: 1,
+        updatedAt: 10,
+        lastAccessedAt: 10,
+        accessCount: 0,
+        version: 1,
+        status: "active",
+        pinned: false,
+        provenance: "external",
+        sourceMessageId: "msg-public",
+      },
+      {
+        id: "mem-allowed-personal",
+        scope: "workspace",
+        projectId: "p-allowed",
+        type: "semantic",
+        text: "owner personal workspace fact",
+        tags: [],
+        importance: 5,
+        createdAt: 1,
+        updatedAt: 11,
+        lastAccessedAt: 11,
+        accessCount: 0,
+        version: 1,
+        status: "active",
+        pinned: false,
+        provenance: "user",
+        sourceMessageId: "msg-personal",
+      },
+      {
+        id: "mem-forbidden-project",
+        scope: "workspace",
+        projectId: "p-secret",
+        type: "semantic",
+        text: "other workspace fact",
+        tags: [],
+        importance: 5,
+        createdAt: 1,
+        updatedAt: 12,
+        lastAccessedAt: 12,
+        accessCount: 0,
+        version: 1,
+        status: "active",
+        pinned: false,
+        provenance: "external",
+        sourceMessageId: "msg-public",
+      },
+    ])
+
+    const deps = {
+      getMemoryDek: async () => ({ profileId: "memory-shared", keyId: "dek-1", key }),
+    }
+
+    const coldMember = await readDexieDelta(
+      "memories",
+      0,
+      1,
+      deps,
+      undefined,
+      "member",
+      "dev-restricted"
+    )
+    expect(coldMember.rows.map((r) => (r as { id: string }).id)).toEqual(["mem-allowed-public"])
+
+    const coldOwner = await readDexieDelta(
+      "memories",
+      0,
+      1,
+      deps,
+      undefined,
+      "owner",
+      "dev-restricted"
+    )
+    expect(coldOwner.rows.map((r) => (r as { id: string }).id).sort()).toEqual([
+      "mem-allowed-personal",
+      "mem-allowed-public",
+    ])
+
+    // Incremental pull: if a previously synced row changes into an unauthorized project,
+    // incremental sync emits it in deleted_ids rather than leaking its envelope.
+    await getDb().memories.update("mem-allowed-public", {
+      projectId: "p-secret",
+      updatedAt: 20,
+    })
+    const incremental = await readDexieDelta(
+      "memories",
+      15,
+      1,
+      deps,
+      undefined,
+      "member",
+      "dev-restricted"
+    )
+    expect(incremental.rows).toEqual([])
+    expect(incremental.deleted_ids).toContain("mem-allowed-public")
+  })
+
   it("returns characters whose updatedAt > since", async () => {
     const db = getDb()
     await db.characters.bulkPut([

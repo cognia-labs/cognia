@@ -116,9 +116,22 @@ export function createDbTestFixture(options: DbTestFixtureOptions = {}): DbTestF
     if (errors.length > 1) throw new AggregateError(errors, "Database test fixture cleanup failed")
   }
 
+  const resetDatabaseCaches = async (db: CogniaDB) => {
+    const [messages, egress, marks] = await Promise.all([
+      import("./messages"),
+      import("@/lib/execution/personal-egress"),
+      import("@/lib/execution/personal-marks"),
+    ])
+    marks.__resetPersonalMarksForDatabase(db)
+    egress.__resetPersonalEgressForDatabase(db)
+    messages.__resetMessageSnapshotsForDatabase(db)
+  }
+
   const deleteCurrentDatabase = async () => {
     try {
-      await getDb().delete()
+      const db = getDb()
+      await resetDatabaseCaches(db)
+      await db.delete()
     } finally {
       __resetDbForTesting()
     }
@@ -159,6 +172,7 @@ export function createDbTestFixture(options: DbTestFixtureOptions = {}): DbTestF
       try {
         await runCleanups()
         const db = getDb()
+        await resetDatabaseCaches(db)
         db.close()
         await db.open()
         await restoreDatabase(db, snapshots)

@@ -1,7 +1,18 @@
 /** @jest-environment jsdom */
 jest.mock("@/lib/db/schema", () => {
   const actual = jest.requireActual<typeof import("@/lib/db/schema")>("@/lib/db/schema")
-  return { ...actual, getDb: jest.fn(actual.getDb) }
+  return Object.defineProperties(
+    {},
+    {
+      ...Object.getOwnPropertyDescriptors(actual),
+      getDb: {
+        value: jest.fn((...args: Parameters<typeof actual.getDb>) => actual.getDb(...args)),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      },
+    }
+  )
 })
 jest.mock("./personal-sink", () => {
   const actual = jest.requireActual<typeof import("./personal-sink")>("./personal-sink")

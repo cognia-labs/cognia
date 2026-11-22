@@ -26,6 +26,11 @@ jest.mock("@/lib/memory/agent-policy", () => ({
   resolvePersistedAgentMemoryPolicy: (...args: unknown[]) => mockResolvePolicy(...args),
 }))
 
+const mockFilterPairedMemories = jest.fn()
+jest.mock("@/lib/memory/runtime/build-deps", () => ({
+  filterPairedMemories: (...args: unknown[]) => mockFilterPairedMemories(...args),
+}))
+
 function row(overrides: Partial<Memory> = {}): Memory {
   return {
     id: "m1",
@@ -59,6 +64,9 @@ beforeEach(() => {
   })
   mockListMemories.mockResolvedValue([])
   mockGetMemory.mockResolvedValue(undefined)
+  mockFilterPairedMemories.mockImplementation(async (rows: Memory[], reader: unknown) =>
+    reader === "owner" ? rows : rows.filter((item) => item.provenance !== "user")
+  )
 })
 
 describe("authorizeMemoryRead", () => {
@@ -261,5 +269,36 @@ describe("countMemoriesExternal", () => {
     }
     expect(await countMemoriesExternal("global", caller, "c9")).toBe(0)
     expect(mockListMemories).not.toHaveBeenCalled()
+  })
+
+  it("withholds owner-personal memories from paired member callers across list, get, and count", async () => {
+    const personal = row({ id: "owner-personal", provenance: "user", text: "owner secret" })
+    const shared = row({ id: "shared-fact", provenance: "external", text: "shared fact" })
+    mockListMemories.mockResolvedValue([personal, shared])
+    mockGetMemory.mockImplementation(async (id: string) =>
+      id === "owner-personal" ? personal : id === "shared-fact" ? shared : undefined
+    )
+
+    const memberCaller: TrustedMemoryCaller = {
+      principalId: "companion:dev-member",
+      transport: "companion",
+      pairedReader: "member",
+    }
+    const ownerCaller: TrustedMemoryCaller = {
+      principalId: "companion:dev-owner",
+      transport: "companion",
+      pairedReader: "owner",
+    }
+
+    const memberList = await listMemoriesExternal({}, memberCaller)
+    expect(memberList).toEqual({ ok: true, memories: [shared] })
+    await expect(getMemoryExternal("owner-personal", memberCaller)).resolves.toBeUndefined()
+    await expect(getMemoryExternal("shared-fact", memberCaller)).resolves.toEqual(shared)
+    await expect(countMemoriesExternal("global", memberCaller)).resolves.toBe(1)
+
+    const ownerList = await listMemoriesExternal({}, ownerCaller)
+    expect(ownerList).toEqual({ ok: true, memories: [personal, shared] })
+    await expect(getMemoryExternal("owner-personal", ownerCaller)).resolves.toEqual(personal)
+    await expect(countMemoriesExternal("global", ownerCaller)).resolves.toBe(2)
   })
 })

@@ -113,6 +113,10 @@ export type SyncPull = (transport: Transport, cursor: SyncCursor) => Promise<Syn
 export interface SyncServeContext {
   /** The content protocol the client speaks, for tables whose rows are encrypted. */
   contentProtocolVersion?: number
+  /** Host-stamped paired audience (`"owner" | "member"`). */
+  pairedReader?: unknown
+  /** Host-authenticated calling device id, when bound by the RPC bridge. */
+  callerDeviceId?: string
   /**
    * Injected dependencies the table's owner reads by name (tests pass the
    * memory DEK through here); empty in production.

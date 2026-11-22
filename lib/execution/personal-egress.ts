@@ -82,6 +82,14 @@ const caches = new WeakMap<object, TaintCache>()
 const unavailableDatabase = {}
 let currentDatabase: object | undefined
 let currentDatabaseName: string | undefined
+
+/** Clear cached run taint when a test fixture restores rows into the same DB object. */
+export function __resetPersonalEgressForDatabase(db?: object): void {
+  if (db) caches.delete(db)
+  sessions.clear()
+  activeOperations.clear()
+  unprovenProcessSources.clear()
+}
 function databaseCache(): { scope: object; cache: TaintCache } {
   let db: ReturnType<typeof getDb> | undefined
   try {

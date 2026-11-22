@@ -143,17 +143,41 @@ impl PairedReader {
 pub struct PairedReaderTransport {
     inner: Arc<dyn BridgeTransport>,
     reader: PairedReader,
+    caller_device_id: Option<String>,
 }
 
 impl PairedReaderTransport {
     pub fn bind(inner: Arc<dyn BridgeTransport>, reader: PairedReader) -> Arc<dyn BridgeTransport> {
-        Arc::new(Self { inner, reader })
+        Arc::new(Self {
+            inner,
+            reader,
+            caller_device_id: None,
+        })
+    }
+
+    pub fn bind_device(
+        inner: Arc<dyn BridgeTransport>,
+        reader: PairedReader,
+        device_id: &str,
+    ) -> Arc<dyn BridgeTransport> {
+        Arc::new(Self {
+            inner,
+            reader,
+            caller_device_id: (!device_id.is_empty()).then(|| device_id.to_string()),
+        })
     }
 }
 
 impl BridgeTransport for PairedReaderTransport {
     fn emit(&self, channel: &str, payload: Value) -> Result<(), String> {
-        self.inner.emit(channel, self.reader.stamp(payload))
+        let mut stamped = self.reader.stamp(payload);
+        if let Some(map) = stamped.as_object_mut() {
+            map.remove("caller_device_id");
+            if let Some(device_id) = &self.caller_device_id {
+                map.insert("callerDeviceId".into(), Value::String(device_id.clone()));
+            }
+        }
+        self.inner.emit(channel, stamped)
     }
     fn reserve_request(&self) -> Result<crate::bridge_transport::BridgeRequestGuard, String> {
         self.inner.reserve_request()
@@ -1477,5 +1501,36 @@ mod tests {
                 .unwrap_err(),
             "TRANSCRIPT_STALE"
         );
+    }
+
+    #[test]
+    fn paired_reader_transport_bind_device_stamps_verified_device_id() {
+        struct RecordingTransport(parking_lot::Mutex<Vec<Value>>);
+        impl BridgeTransport for RecordingTransport {
+            fn emit(&self, _channel: &str, payload: Value) -> Result<(), String> {
+                self.0.lock().push(payload);
+                Ok(())
+            }
+        }
+        let inner = Arc::new(RecordingTransport(parking_lot::Mutex::new(Vec::new())));
+        let bound =
+            PairedReaderTransport::bind_device(inner.clone(), PairedReader::Member, "dev-verified");
+        bound
+            .emit(
+                "companion://sync-pull-request",
+                serde_json::json!({
+                    "request_id": "req-1",
+                    "table": "memories",
+                    "pairedReader": "owner",
+                    "callerDeviceId": "spoofed",
+                    "caller_device_id": "spoofed-snake",
+                }),
+            )
+            .unwrap();
+        let emitted = inner.0.lock();
+        assert_eq!(emitted.len(), 1);
+        assert_eq!(emitted[0]["pairedReader"], "member");
+        assert_eq!(emitted[0]["callerDeviceId"], "dev-verified");
+        assert!(emitted[0].get("caller_device_id").is_none());
     }
 }

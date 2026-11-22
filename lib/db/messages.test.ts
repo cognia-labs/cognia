@@ -27,6 +27,7 @@ import {
   updateMessageMetadata,
   ImageEditAppendError,
   invalidatePersistSnapshot,
+  scrubDeletedMemorySourcesFromMessages,
 } from "./messages"
 import { getDb } from "./schema"
 import { createDbTestFixture } from "./test-fixture"
@@ -91,8 +92,19 @@ jest.mock("./session-assets", () => {
 })
 
 jest.mock("./schema", () => {
-  const actual = jest.requireActual("./schema")
-  return { ...actual, getDb: jest.fn(actual.getDb) }
+  const actual = jest.requireActual<typeof import("./schema")>("./schema")
+  return Object.defineProperties(
+    {},
+    {
+      ...Object.getOwnPropertyDescriptors(actual),
+      getDb: {
+        value: jest.fn((...args: Parameters<typeof actual.getDb>) => actual.getDb(...args)),
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      },
+    }
+  )
 })
 
 jest.setTimeout(30_000)
@@ -2370,4 +2382,62 @@ it.each([
   })
   await persist("new-bound", [msg("new-bound-row", "assistant", "new")])
   expect((await db.messages.get("new-bound-row"))?.metadata?.personalMarkVersion).toBe(1)
+})
+
+it("scrubs deleted memory citation titles and excerpts from stored assistant sources while keeping web sources", async () => {
+  const db = getDb()
+  await db.sessions.put({
+    id: "scrub-sess",
+    title: "Scrub",
+    createdAt: 1,
+    updatedAt: 1,
+  })
+  await db.messages.put({
+    id: "reply-with-sources",
+    sessionId: "scrub-sess",
+    role: "assistant",
+    createdAt: 2,
+    parts: [
+      { type: "text", text: "Answer" },
+      {
+        type: "sources",
+        sources: [
+          {
+            id: "memory-mem-del",
+            title: "Secret memory title",
+            snippet: "Secret memory excerpt",
+            origin: "memory",
+            memoryRef: "mem-del",
+          },
+          {
+            id: "s-web",
+            title: "Public web page",
+            url: "https://example.com",
+            origin: "cognia-web",
+          },
+        ],
+      },
+    ],
+  } as never)
+
+  await expect(scrubDeletedMemorySourcesFromMessages(["mem-del"])).resolves.toBe(1)
+  const scrubbed = await db.messages.get("reply-with-sources")
+  expect(JSON.stringify(scrubbed?.parts)).not.toContain("Secret memory")
+  expect(scrubbed?.parts[1]).toEqual({
+    type: "sources",
+    sources: [
+      {
+        id: "memory-mem-del",
+        title: "",
+        origin: "memory",
+        memoryRef: "mem-del",
+      },
+      {
+        id: "s-web",
+        title: "Public web page",
+        url: "https://example.com",
+        origin: "cognia-web",
+      },
+    ],
+  })
 })

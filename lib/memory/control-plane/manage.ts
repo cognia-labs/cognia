@@ -127,18 +127,16 @@ export interface ManageMemoryCommitContext {
   commit?: (apply: () => Promise<ManageMemoryResult>) => Promise<ManageMemoryResult>
   /** Originating database partition/epoch scope, captured at command entry. */
   scope?: DatabaseScopeSnapshot
+  /** Host-bound caller identity, when invoked from `manageMemoryForCaller`. */
+  caller?: import("@cognia/memory/types/caller").TrustedMemoryCaller
+  /** Composite `${principalId}:${operationId}` stamped on audit rows for crash recovery. */
+  operationKey?: string
 }
 
 /**
- * Receipt paths by command kind:
- * - update, pin, review, retrieval-feedback, delete, restore-revision, invalidate,
- *   restore, relocate: `commit` encloses canonical Dexie work and the receipt.
- *   Vector I/O remains outside; its failure cannot undo an applied command.
- * - create: consolidation spans judge/vector calls and multiple writes.
- * - clear: multiple per-row deletes with partial-failure reporting.
- * - resolve-conflict: multiple canonical writes interleaved with vector and
- *   governance projection I/O. These three use bounded receipt retries in
- *   manageMemoryForCaller and retain pending keys on uncertain completion.
+ * Every command commits its canonical Dexie mutations inside `commit` when
+ * supplied by `manageMemoryForCaller`, while vector sync, reply-citation
+ * scrubbing, and conflict governance projection run post-commit.
  */
 export async function manageMemory(
   command: ManageMemoryCommand,
@@ -149,6 +147,12 @@ export async function manageMemory(
   const noteVectorDrift = () => {
     if (scope.isActive()) noteMemoryVectorFailure()
   }
+  const opMeta = (extra?: Record<string, string | number | boolean>) =>
+    context.operationKey
+      ? { metadata: { ...extra, operationKey: context.operationKey } }
+      : extra
+        ? { metadata: extra }
+        : {}
   const baseCommit = context.commit ?? ((apply: () => Promise<ManageMemoryResult>) => apply())
   const commit = async (apply: () => Promise<ManageMemoryResult>): Promise<ManageMemoryResult> => {
     scope.assertActive()
@@ -167,6 +171,7 @@ export async function manageMemory(
     }
   }
   if (command.kind === "create") {
+    let committedOutcome: ManageMemoryResult | undefined
     const result = await storeMemoryCore({
       text: command.text,
       type: command.type,
@@ -181,16 +186,41 @@ export async function manageMemory(
       provenance: "explicit",
       piiGate: "redact",
       databaseScope: scope,
+      ...(context.caller ? { caller: context.caller } : {}),
+      ...(context.operationKey ? { operationKey: context.operationKey } : {}),
+      ...(context.commit
+        ? {
+            withCanonicalCommit: async <T>(apply: () => Promise<T>) => {
+              let innerValue!: T
+              await commit(async () => {
+                innerValue = await apply()
+                return committedOutcome ?? { ok: true }
+              })
+              return innerValue
+            },
+            onCanonicalApplied: async (applied) => {
+              committedOutcome = {
+                ok: true,
+                ...(applied.memoryId ? { memoryId: applied.memoryId } : {}),
+                ...(applied.piiRedacted ? { piiRedacted: true } : {}),
+              }
+            },
+          }
+        : {}),
     })
     return result.ok
-      ? { ok: true, memoryId: result.memoryId, piiRedacted: result.piiRedacted }
+      ? (committedOutcome ?? {
+          ok: true,
+          memoryId: result.memoryId,
+          piiRedacted: result.piiRedacted,
+        })
       : result
   }
 
   if (command.kind === "clear") {
     // Clearing forgotten memories also drops revision snapshots (earlier
-    // wordings kept for undo) — the same rule as `clearMemories`. Any other
-    // clear reaches snapshots through their owner's delete.
+    // wordings kept for undo). Any other clear reaches snapshots through
+    // their owner's delete.
     const rows = await listMemories(
       command.query?.status === "invalidated"
         ? { ...command.query, includeRevisions: true }
@@ -198,24 +228,102 @@ export async function manageMemory(
     )
     scope.assertActive()
     const selectedIds = new Set(rows.map((row) => row.id))
+    const targetRows = rows.filter((row) => !(row.revisionOf && selectedIds.has(row.revisionOf)))
+    const targetIds = targetRows.map((row) => row.id)
+    const ownerIds = targetRows.filter((row) => row.revisionOf === undefined).map((row) => row.id)
+    const vectorDocIds = [
+      ...new Set(
+        targetRows
+          .filter((row) => row.revisionOf === undefined)
+          .map((row) => row.vectorDocId ?? row.id)
+      ),
+    ]
+    const settings = await getSettings().catch(() => undefined)
+    scope.assertActive()
+    const config = resolveMemoryConfig(settings?.memory)
+
+    if (targetIds.length === 0) {
+      return commit(async () => ({ ok: true, clearedCount: 0 }))
+    }
+
+    if (context.commit) {
+      let clearedCount = 0
+      const outcome = await commit(async () => {
+        scope.assertActive()
+        for (const row of targetRows) {
+          await hardDeleteMemory(row.id)
+          if (row.revisionOf === undefined) clearedCount += 1
+        }
+        if (context.operationKey) {
+          await appendMemoryAuditEvent({
+            action: "deleted",
+            reason: "user_clear",
+            metadata: { operationKey: context.operationKey, cleared: true, clearedCount },
+          })
+        }
+        return { ok: true, clearedCount }
+      })
+      if (!outcome.ok) return outcome
+      if (vectorDocIds.length > 0) {
+        try {
+          const sink = await tryBuildMemoryVectorSink({
+            ...config,
+            enabled: true,
+            temporary: false,
+          })
+          await sink?.delete(vectorDocIds)
+          if (!sink && targetRows.some((row) => Boolean(row.vectorDocId))) noteVectorDrift()
+        } catch {
+          noteVectorDrift()
+        }
+      }
+      if (ownerIds.length > 0 && scope.isActive()) {
+        const { scrubDeletedMemorySourcesFromMessages } = await import("@/lib/db/messages")
+        await scrubDeletedMemorySourcesFromMessages(ownerIds).catch(() => undefined)
+      }
+      return outcome
+    }
+
+    let sink: Awaited<ReturnType<typeof tryBuildMemoryVectorSink>>
+    try {
+      sink = await tryBuildMemoryVectorSink({ ...config, enabled: true, temporary: false })
+    } catch {
+      noteVectorDrift()
+    }
     let clearedCount = 0
     const failedIds: string[] = []
-    for (const row of rows) {
-      scope.assertActive()
-      // The owner's delete also deletes its revision snapshots.
-      if (row.revisionOf && selectedIds.has(row.revisionOf)) continue
+    const deletedOwnerIds: string[] = []
+    for (const row of targetRows) {
       try {
-        const result = await manageMemory({ kind: "delete", id: row.id }, { scope })
-        if (result.ok) clearedCount += 1
-        else if (result.reason !== "not_found") failedIds.push(row.id)
-      } catch (error) {
-        if (!scope.isActive()) throw error
+        scope.assertActive()
+        await hardDeleteMemory(row.id)
+        if (row.revisionOf === undefined) {
+          clearedCount += 1
+          deletedOwnerIds.push(row.id)
+        }
+      } catch {
         failedIds.push(row.id)
+        continue
+      }
+      if (row.revisionOf === undefined) {
+        const docId = row.vectorDocId ?? row.id
+        if (sink) {
+          await sink.delete([docId]).catch(() => {
+            noteVectorDrift()
+          })
+        } else if (row.vectorDocId) {
+          noteVectorDrift()
+        }
       }
     }
-    return failedIds.length
-      ? { ok: false, reason: "partial_failure", clearedCount, failedIds }
-      : { ok: true, clearedCount }
+    if (deletedOwnerIds.length > 0 && scope.isActive()) {
+      const { scrubDeletedMemorySourcesFromMessages } = await import("@/lib/db/messages")
+      await scrubDeletedMemorySourcesFromMessages(deletedOwnerIds).catch(() => undefined)
+    }
+    if (failedIds.length > 0) {
+      return { ok: false, reason: "partial_failure", clearedCount, failedIds }
+    }
+    return { ok: true, clearedCount }
   }
 
   if (command.kind === "resolve-conflict") {
@@ -225,38 +333,120 @@ export async function manageMemory(
     if (!keep || !drop || keep.revisionOf !== undefined || drop.revisionOf !== undefined) {
       return { ok: false, reason: "not_found" }
     }
+    if (
+      context.caller?.pairedReader === "member" &&
+      (keep.type === "procedural" || drop.type === "procedural")
+    ) {
+      return { ok: false, reason: "policy_denied" }
+    }
     const settings = await getSettings().catch(() => undefined)
     scope.assertActive()
     const config = resolveMemoryConfig(settings?.memory)
 
     let piiRedacted = false
-    let resolutionEvidence: { id: string; sourceId: string; createdAt: number } | undefined
-    let result = keep
+    let redactedMergeText: string | undefined
     if (command.mode === "merge") {
       const raw = command.mergedText?.trim()
       if (!raw) throw new Error("resolve-conflict merge requires non-empty mergedText")
-      const redacted = redactText(raw).redacted
-      if (!hasNoLeakingPii(redacted)) return { ok: false, reason: "pii_blocked" }
-      piiRedacted = redacted !== raw
+      redactedMergeText = redactText(raw).redacted
+      if (!hasNoLeakingPii(redactedMergeText)) return { ok: false, reason: "pii_blocked" }
+      piiRedacted = redactedMergeText !== raw
+    }
+
+    let resolutionEvidence: { id: string; sourceId: string; createdAt: number } | undefined
+    let result = keep
+    const outcome = await commit(async () => {
+      const [liveKeep, liveDrop] = await Promise.all([
+        getMemory(command.keepId),
+        getMemory(command.dropId),
+      ])
+      if (
+        !liveKeep ||
+        !liveDrop ||
+        liveKeep.revisionOf !== undefined ||
+        liveDrop.revisionOf !== undefined
+      ) {
+        return { ok: false, reason: "not_found" }
+      }
+      if (command.mode === "merge" && redactedMergeText !== undefined) {
+        await updateMemory(command.keepId, {
+          text: redactedMergeText,
+          bumpVersion: true,
+          revisionReason: "conflict-merge",
+          reviewStatus: "verified",
+          conflictWithIds: (liveKeep.conflictWithIds ?? []).filter((id) => id !== command.dropId),
+          evidenceState: "supported",
+          contaminationState: "clean",
+        })
+        scope.assertActive()
+        resolutionEvidence = await createMemoryEvidence({
+          memoryId: command.keepId,
+          kind: "manual",
+          sourceId: `conflict-merge:${command.keepId}:${command.dropId}`,
+          contaminationState: "clean",
+          reviewed: true,
+        })
+        scope.assertActive()
+        await appendMemoryAuditEvent({
+          action: "revised",
+          memoryId: command.keepId,
+          reason: "conflict_merge",
+          ...opMeta(piiRedacted ? { piiRedacted: true } : undefined),
+        })
+        scope.assertActive()
+        const updated = await getMemory(command.keepId)
+        if (!updated) throw new Error(`Resolved memory disappeared: ${command.keepId}`)
+        result = updated
+      } else {
+        result = liveKeep
+        await updateMemory(command.keepId, {
+          reviewStatus: "verified",
+          conflictWithIds: (liveKeep.conflictWithIds ?? []).filter((id) => id !== command.dropId),
+        })
+        scope.assertActive()
+        await appendMemoryAuditEvent({
+          action: "promoted",
+          memoryId: command.keepId,
+          reason: "conflict_resolved",
+          ...opMeta(),
+        })
+      }
+
       scope.assertActive()
-      await updateMemory(command.keepId, {
-        text: redacted,
-        bumpVersion: true,
-        revisionReason: "conflict-merge",
-        reviewStatus: "verified",
-        conflictWithIds: (keep.conflictWithIds ?? []).filter((id) => id !== command.dropId),
-        evidenceState: "supported",
-        contaminationState: "clean",
-      })
+      if (command.mode === "keep-both") {
+        await updateMemory(command.dropId, {
+          reviewStatus: "verified",
+          conflictWithIds: (liveDrop.conflictWithIds ?? []).filter((id) => id !== command.keepId),
+        })
+        scope.assertActive()
+        await appendMemoryAuditEvent({
+          action: "promoted",
+          memoryId: command.dropId,
+          reason: "conflict_resolved",
+        })
+      } else {
+        await invalidateMemory(command.dropId, command.keepId)
+        scope.assertActive()
+        await appendMemoryAuditEvent({
+          action: "invalidated",
+          memoryId: command.dropId,
+          reason: "conflict_resolved",
+        })
+      }
+      return { ok: true, memoryId: command.keepId, ...(piiRedacted ? { piiRedacted } : {}) }
+    })
+    if (!outcome.ok) return outcome
+
+    if (command.mode === "merge" && redactedMergeText !== undefined) {
       try {
         const sink = await tryBuildMemoryVectorSink(config)
         if (sink) {
           const docId = keep.vectorDocId ?? keep.id
-          await sink.upsert(docId, redacted)
+          await sink.upsert(docId, redactedMergeText)
           if (scope.isActive()) {
             await updateMemory(keep.id, {
               vectorDocId: docId,
-              vectorTextHash: hashContent(redacted),
+              vectorTextHash: hashContent(redactedMergeText),
             })
           }
         }
@@ -264,72 +454,17 @@ export async function manageMemory(
         // Canonical update remains BM25-searchable.
         noteVectorDrift()
       }
-      scope.assertActive()
-      resolutionEvidence = await createMemoryEvidence({
-        memoryId: command.keepId,
-        kind: "manual",
-        sourceId: `conflict-merge:${command.keepId}:${command.dropId}`,
-        contaminationState: "clean",
-        reviewed: true,
-      })
-      scope.assertActive()
-      await appendMemoryAuditEvent({
-        action: "revised",
-        memoryId: command.keepId,
-        reason: "conflict_merge",
-      })
-      scope.assertActive()
-      const updated = await getMemory(command.keepId)
-      if (!updated) throw new Error(`Resolved memory disappeared: ${command.keepId}`)
-      result = updated
-    } else {
-      scope.assertActive()
-      await updateMemory(command.keepId, {
-        reviewStatus: "verified",
-        conflictWithIds: (keep.conflictWithIds ?? []).filter((id) => id !== command.dropId),
-      })
-      scope.assertActive()
-      await appendMemoryAuditEvent({
-        action: "promoted",
-        memoryId: command.keepId,
-        reason: "conflict_resolved",
-      })
     }
-
-    scope.assertActive()
-    if (command.mode === "keep-both") {
-      await updateMemory(command.dropId, {
-        reviewStatus: "verified",
-        conflictWithIds: (drop.conflictWithIds ?? []).filter((id) => id !== command.keepId),
-      })
-      scope.assertActive()
-      await appendMemoryAuditEvent({
-        action: "promoted",
-        memoryId: command.dropId,
-        reason: "conflict_resolved",
-      })
-    } else {
-      await invalidateMemory(command.dropId, command.keepId)
-      if (drop.vectorDocId) {
-        try {
-          const sink = await tryBuildMemoryVectorSink(config)
-          await sink?.delete([drop.vectorDocId])
-        } catch {
-          // Canonical invalidation is authoritative; vector cleanup is best-effort.
-          noteVectorDrift()
-        }
-      }
-      if (scope.isActive()) {
-        await appendMemoryAuditEvent({
-          action: "invalidated",
-          memoryId: command.dropId,
-          reason: "conflict_resolved",
-        })
+    if (command.mode !== "keep-both" && drop.vectorDocId) {
+      try {
+        const sink = await tryBuildMemoryVectorSink(config)
+        await sink?.delete([drop.vectorDocId])
+      } catch {
+        // Canonical invalidation is authoritative; vector cleanup is best-effort.
+        noteVectorDrift()
       }
     }
-    if (!scope.isActive()) {
-      return { ok: true, memoryId: command.keepId, ...(piiRedacted ? { piiRedacted } : {}) }
-    }
+    if (!scope.isActive()) return outcome
     const resolvedAt = Date.now()
     const governanceInput = {
       commandId:
@@ -364,7 +499,7 @@ export async function manageMemory(
         )
       }
     }
-    return { ok: true, memoryId: command.keepId, ...(piiRedacted ? { piiRedacted } : {}) }
+    return outcome
   }
 
   const existing = await getMemory(command.id)
@@ -390,6 +525,13 @@ export async function manageMemory(
   }
 
   if (command.kind === "review") {
+    if (
+      context.caller?.pairedReader === "member" &&
+      existing.type === "procedural" &&
+      command.status === "verified"
+    ) {
+      return { ok: false, reason: "policy_denied" }
+    }
     return commit(async () => {
       await updateMemory(command.id, { reviewStatus: command.status })
       scope.assertActive()
@@ -397,6 +539,7 @@ export async function manageMemory(
         action: command.status === "verified" ? "promoted" : "conflict",
         memoryId: command.id,
         reason: "user_review",
+        ...opMeta(),
       })
       return { ok: true, memoryId: command.id }
     })
@@ -454,12 +597,17 @@ export async function manageMemory(
       noteVectorDrift()
     }
     scope.assertActive()
-    return commit(async () => {
+    const outcome = await commit(async () => {
       scope.assertActive()
       await hardDeleteMemory(command.id)
       // The canonical transaction owns evidence/history/tombstones and audit.
       return { ok: true, memoryId: command.id }
     })
+    if (outcome.ok && scope.isActive()) {
+      const { scrubDeletedMemorySourcesFromMessages } = await import("@/lib/db/messages")
+      await scrubDeletedMemorySourcesFromMessages([command.id]).catch(() => undefined)
+    }
+    return outcome
   }
 
   if (command.kind === "restore-revision") {
@@ -608,12 +756,17 @@ export async function manageMemory(
   const redactedText = rawText ? redactText(rawText).redacted : undefined
   if (redactedText && !hasNoLeakingPii(redactedText)) return { ok: false, reason: "pii_blocked" }
 
+  const nonOwnerProceduralEdit =
+    context.caller?.pairedReader === "member" &&
+    existing.type === "procedural" &&
+    ((redactedText !== undefined && redactedText !== existing.text) ||
+      (command.patch.key !== undefined && command.patch.key !== existing.key))
   const outcome = await commit(async () => {
     await updateMemory(command.id, {
       ...command.patch,
       ...(redactedText !== undefined ? { text: redactedText, bumpVersion: true } : {}),
       evidenceState: "supported",
-      reviewStatus: "verified",
+      reviewStatus: nonOwnerProceduralEdit ? "pending_instruction" : "verified",
       contaminationState: "clean",
     })
     scope.assertActive()
@@ -622,10 +775,17 @@ export async function manageMemory(
       kind: "manual",
       sourceId: `manual:${command.id}:v${existing.version + 1}`,
       contaminationState: "clean",
-      reviewed: true,
+      reviewed: !nonOwnerProceduralEdit,
     })
     scope.assertActive()
-    await appendMemoryAuditEvent({ action: "revised", memoryId: command.id, reason: "user" })
+    await appendMemoryAuditEvent({
+      action: "revised",
+      memoryId: command.id,
+      reason: nonOwnerProceduralEdit ? "external_procedural_edit_requires_review" : "user",
+      ...opMeta(
+        rawText !== undefined && rawText !== redactedText ? { piiRedacted: true } : undefined
+      ),
+    })
     return {
       ok: true,
       memoryId: command.id,

@@ -256,6 +256,139 @@ export async function recordMemoryOperation(row: MemoryOperationRow): Promise<vo
 
 /** `resultCode` marker for an operation that has been claimed but not applied. */
 export const MEMORY_OPERATION_PENDING = "pending"
+export const MEMORY_OPERATION_LEASE_TTL_MS = 60_000
+
+const inFlightOperationHashes = new Map<string, string>()
+const stagedAppliedReceipts = new Map<string, MemoryOperationRow>()
+
+export function markMemoryOperationInFlight(key: string, requestHash = ""): () => void {
+  inFlightOperationHashes.set(key, requestHash)
+  return () => {
+    inFlightOperationHashes.delete(key)
+  }
+}
+
+export function isMemoryOperationInFlight(key: string): boolean {
+  return inFlightOperationHashes.has(key)
+}
+
+export async function withMemoryStoreTransaction<T>(apply: () => Promise<T>): Promise<T> {
+  const db = getDb()
+  return db.transaction(
+    "rw",
+    [db.memories, db.memoryEvidence, db.memoryAuditEvents, db.memoryOperations],
+    () => apply()
+  )
+}
+
+/**
+ * Remember an applied operation's receipt in memory when `db.memoryOperations`
+ * rejected the post-commit receipt write, so a retry after storage recovers can
+ * persist and return the exact outcome without re-running the command.
+ */
+export function stageAppliedMemoryOperation(receipt: MemoryOperationRow): void {
+  stagedAppliedReceipts.set(receipt.id, receipt)
+}
+
+export function clearStagedMemoryOperation(key: string): void {
+  stagedAppliedReceipts.delete(key)
+}
+
+/**
+ * Deterministically reconcile a non-in-flight `"pending"` reservation against
+ * staged or durable `memoryAuditEvents` (`metadata.operationKey === key`).
+ *
+ * Returns `{ state: "recovered", receipt }` when canonical evidence proves the
+ * mutation already committed (persisting the receipt into `memoryOperations`),
+ * `{ state: "unapplied" }` when the caller exited/crashed before any canonical
+ * write committed, or `{ state: "in_flight" }` while the original call is still
+ * actively executing.
+ */
+export async function reconcilePendingMemoryOperation(
+  binding: MemoryOperationBinding,
+  options: { now?: number; leaseTtlMs?: number } = {}
+): Promise<
+  | { state: "recovered"; receipt: MemoryOperationRow }
+  | { state: "unapplied" }
+  | { state: "in_flight" }
+  | { state: "conflict" }
+> {
+  const db = getDb()
+  const key = `${binding.principalId}:${binding.operationId}`
+  if (inFlightOperationHashes.has(key)) {
+    const activeHash = inFlightOperationHashes.get(key)
+    if (activeHash && activeHash !== binding.requestHash) return { state: "conflict" }
+    return { state: "in_flight" }
+  }
+  const prior = await db.memoryOperations.get(key)
+  if (!prior) return { state: "unapplied" }
+  if (prior.requestHash !== binding.requestHash) return { state: "conflict" }
+  if (prior.resultCode !== MEMORY_OPERATION_PENDING) {
+    clearStagedMemoryOperation(key)
+    return { state: "recovered", receipt: prior }
+  }
+
+  const staged = stagedAppliedReceipts.get(key)
+  if (staged && staged.requestHash === binding.requestHash) {
+    await db.memoryOperations.put(staged)
+    stagedAppliedReceipts.delete(key)
+    return { state: "recovered", receipt: staged }
+  }
+
+  const audits = (await db.memoryAuditEvents.toArray()).filter(
+    (event) => event.metadata?.operationKey === key
+  )
+  if (audits.length > 0) {
+    const deleteAudits = audits.filter((event) => event.action === "deleted")
+    const primary = audits[0]!
+    const memoryId = deleteAudits.length > 1 ? "" : (primary.memoryId ?? "")
+    const reviewRequired = audits.some(
+      (event) => event.reason === "external_procedural_edit_requires_review"
+    )
+    const piiRedacted = audits.some((event) => event.metadata?.piiRedacted === true)
+    const payload: MemoryOperationResultPayload = {
+      ok: true,
+      ...(memoryId ? { memoryId } : {}),
+      ...(deleteAudits.length > 0 && binding.kind === "manage" && primary.metadata?.cleared === true
+        ? { clearedCount: deleteAudits.length }
+        : {}),
+      ...(reviewRequired ? { reviewRequired: true } : {}),
+      ...(piiRedacted ? { piiRedacted: true } : {}),
+    }
+    const recovered: MemoryOperationRow = {
+      id: key,
+      principalId: binding.principalId,
+      operationId: binding.operationId,
+      kind: binding.kind,
+      requestHash: binding.requestHash,
+      memoryId,
+      resultCode: "ok",
+      resultPayload: binding.kind === "manage" ? payload : undefined,
+      ...(binding.kind === "store"
+        ? {
+            resultStored: true,
+            resultConsolidated: primary.metadata?.consolidated !== false,
+            resultApplied: [
+              primary.action === "conflict"
+                ? "CONFLICT"
+                : primary.action === "revised"
+                  ? "UPDATE"
+                  : "ADD",
+            ],
+          }
+        : {}),
+      createdAt: primary.createdAt,
+    }
+    await db.memoryOperations.put(recovered)
+    return { state: "recovered", receipt: recovered }
+  }
+
+  const now = options.now ?? Date.now()
+  const leaseTtlMs = options.leaseTtlMs ?? MEMORY_OPERATION_LEASE_TTL_MS
+  const expiresAt = prior.leaseExpiresAt ?? prior.createdAt + leaseTtlMs
+  if (expiresAt > now) return { state: "in_flight" }
+  return { state: "unapplied" }
+}
 
 export type MemoryOperationReservation =
   /** We hold the key — caller proceeds to execute, then records the receipt. */
@@ -268,24 +401,36 @@ export type MemoryOperationReservation =
   | { state: "in_flight" }
 
 /**
- * Atomically claim `(principalId, operationId)` for a mutation whose apply
- * step cannot share a Dexie transaction (the `store` path runs the async
- * consolidator). The check-and-mark is one transaction, so two concurrent
- * identical stores cannot both pass the receipt lookup: the second observes
- * `in_flight` and waits on {@link awaitMemoryOperation} instead of
- * consolidating a duplicate.
+ * Atomically claim `(principalId, operationId)` for a mutation. When a prior
+ * `"pending"` marker has outlived its lease AND is not in flight in this
+ * process (and has already been verified unapplied by the caller), `allowReclaim`
+ * re-acquires the key atomically instead of stranding retries for 30 days.
  */
 export async function reserveMemoryOperation(
-  binding: MemoryOperationBinding
+  binding: MemoryOperationBinding,
+  options: { now?: number; leaseTtlMs?: number; allowReclaim?: boolean } = {}
 ): Promise<MemoryOperationReservation> {
   const db = getDb()
   const key = `${binding.principalId}:${binding.operationId}`
+  if (inFlightOperationHashes.has(key)) {
+    const activeHash = inFlightOperationHashes.get(key)
+    if (activeHash && activeHash !== binding.requestHash) return { state: "conflict" }
+    return { state: "in_flight" }
+  }
+  const now = options.now ?? Date.now()
+  const leaseTtlMs = options.leaseTtlMs ?? MEMORY_OPERATION_LEASE_TTL_MS
   return db.transaction("rw", db.memoryOperations, async () => {
     const prior = await db.memoryOperations.get(key)
     if (prior) {
       if (prior.requestHash !== binding.requestHash) return { state: "conflict" }
-      if (prior.resultCode === MEMORY_OPERATION_PENDING) return { state: "in_flight" }
-      return { state: "replay", receipt: prior }
+      if (prior.resultCode === MEMORY_OPERATION_PENDING) {
+        const expired = (prior.leaseExpiresAt ?? prior.createdAt + leaseTtlMs) <= now
+        if (!options.allowReclaim || !expired || inFlightOperationHashes.has(key)) {
+          return { state: "in_flight" }
+        }
+      } else {
+        return { state: "replay", receipt: prior }
+      }
     }
     await db.memoryOperations.put({
       id: key,
@@ -295,7 +440,8 @@ export async function reserveMemoryOperation(
       requestHash: binding.requestHash,
       memoryId: "",
       resultCode: MEMORY_OPERATION_PENDING,
-      createdAt: Date.now(),
+      leaseExpiresAt: now + leaseTtlMs,
+      createdAt: now,
     })
     return { state: "reserved" }
   })
@@ -339,6 +485,8 @@ export async function awaitMemoryOperation(
   options: { timeoutMs?: number; intervalMs?: number } = {}
 ): Promise<MemoryOperationRow | undefined> {
   const timeoutMs = options.timeoutMs ?? 5_000
+  const key = `${principalId}:${operationId}`
+  if (timeoutMs <= 0 && inFlightOperationHashes.has(key)) return undefined
   const intervalMs = options.intervalMs ?? 100
   const deadline = Date.now() + timeoutMs
   for (;;) {

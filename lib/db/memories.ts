@@ -5,7 +5,7 @@
  *
  * The consolidation path NEVER hard-deletes on contradiction: it calls
  * `invalidateMemory` (status → `invalidated`, history preserved). Only the
- * user-facing panel calls `hardDeleteMemory` / `clearMemories`.
+ * user-facing panel calls `hardDeleteMemory` / `hardDeleteMemories`.
  *
  * This module is mechanical (no LLM, no gating). The settings gate
  * (`memory.enabled`) is enforced by callers (read/write orchestrators), matching
@@ -32,7 +32,7 @@ import { memoryScopeSpecificity } from "@cognia/memory/retrieve/retriever"
 import { getDb } from "./schema"
 import { recordTombstones } from "./tombstones"
 
-export function newMemoryId(): string {
+function newMemoryId(): string {
   return `mem_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
 }
 
@@ -101,7 +101,10 @@ export type MemoryCreateInput = Omit<
   writeOrigin?: import("@/lib/memory/memory-event-bus").MemoryWriteOrigin
 }
 
-export async function createMemory(input: MemoryCreateInput): Promise<Memory> {
+export async function createMemory(
+  input: MemoryCreateInput,
+  afterInsert?: (row: Memory) => Promise<void>
+): Promise<Memory> {
   const now = input.createdAt ?? Date.now()
   const { writeOrigin: _writeOrigin, ...persistable } = input
   const row: Memory = {
@@ -116,10 +119,7 @@ export async function createMemory(input: MemoryCreateInput): Promise<Memory> {
     version: 1,
     status: input.status ?? "active",
   }
-  await getDb().memories.add(row)
-  // Published after the write commits, so a subscriber never sees a memory
-  // that is not in the table. Ids and classification only: the row's `text` is
-  // a durable fact about the user, and the bus is not the place to carry one.
+  const db = getDb()
   const publish = () => {
     void import("@/lib/memory/memory-event-bus")
       .then(({ emitMemoryWritten }) =>
@@ -142,6 +142,27 @@ export async function createMemory(input: MemoryCreateInput): Promise<Memory> {
         // A bus nobody loaded is not a reason to fail a memory write.
       })
   }
+  if (afterInsert) {
+    await db.transaction(
+      "rw",
+      [db.memories, db.memoryEvidence, db.memoryAuditEvents, db.memoryOperations],
+      async () => {
+        await db.memories.add(row)
+        const tx = Dexie.currentTransaction
+        if (tx) {
+          tx.on("complete", () => {
+            Dexie.ignoreTransaction(publish)
+          })
+        }
+        await afterInsert(row)
+      }
+    )
+    return row
+  }
+  await db.memories.add(row)
+  // Published after the write commits, so a subscriber never sees a memory
+  // that is not in the table. Ids and classification only: the row's `text` is
+  // a durable fact about the user, and the bus is not the place to carry one.
   const transaction = Dexie.currentTransaction
   if (transaction) {
     // Durable workers bind evidence in an enclosing transaction. A failed
@@ -157,11 +178,6 @@ export async function createMemory(input: MemoryCreateInput): Promise<Memory> {
 
 export async function getMemory(id: string): Promise<Memory | undefined> {
   return getDb().memories.get(id)
-}
-
-export async function getMemoriesByVectorDocIds(ids: string[]): Promise<Memory[]> {
-  if (ids.length === 0) return []
-  return getDb().memories.where("vectorDocId").anyOf(ids).toArray()
 }
 
 /**
@@ -782,7 +798,9 @@ export async function hardDeleteMemories(ids: string[]): Promise<number> {
   if (ids.length === 0) return 0
   const db = getDb()
   const uniqueIds = [...new Set(ids)]
-  return db.transaction(
+  const enclosingTransaction = Dexie.currentTransaction
+  let deletedOwnerIds: string[] = []
+  const deletedCount = await db.transaction(
     "rw",
     [
       db.memories,
@@ -798,7 +816,8 @@ export async function hardDeleteMemories(ids: string[]): Promise<number> {
       )
       // Deleting a memory deletes its history: a revision snapshot holds the
       // same user fact in an earlier wording, and "delete" must mean gone.
-      const ownerIds = new Set(owners.map((row) => row.id))
+      deletedOwnerIds = owners.map((row) => row.id)
+      const ownerIds = new Set(deletedOwnerIds)
       const revisions = await db.memories
         .where("status")
         .equals("invalidated")
@@ -849,32 +868,9 @@ export async function hardDeleteMemories(ids: string[]): Promise<number> {
       return owners.length
     }
   )
-}
-
-/** Pin / unpin a specific set of memories in one transaction (bulk panel action). */
-export async function setMemoriesPinned(ids: string[], pinned: boolean): Promise<void> {
-  if (ids.length === 0) return
-  const db = getDb()
-  const now = Date.now()
-  await db.transaction("rw", db.memories, async () => {
-    for (const id of ids) {
-      await db.memories.update(id, { pinned, updatedAt: now })
-    }
-  })
-}
-
-/**
- * Hard-delete every memory, or just those in a scope/character. User-initiated
- * "clear all" from the panel.
- */
-export async function clearMemories(query: ListMemoriesQuery = {}): Promise<number> {
-  // Clearing forgotten memories clears history too: a revision snapshot is an
-  // earlier wording kept for undo, which is exactly what "clear archived"
-  // asks to drop. Every other clear reaches snapshots through their owner.
-  const rows = await listMemories(
-    query.status === "invalidated" ? { ...query, includeRevisions: true } : query
-  )
-  const ids = rows.map((m) => m.id)
-  if (ids.length === 0) return 0
-  return hardDeleteMemories(ids)
+  if (!enclosingTransaction && deletedOwnerIds.length > 0) {
+    const { scrubDeletedMemorySourcesFromMessages } = await import("./messages")
+    await scrubDeletedMemorySourcesFromMessages(deletedOwnerIds)
+  }
+  return deletedCount
 }

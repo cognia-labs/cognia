@@ -39,6 +39,34 @@ describe("plain text by purpose", () => {
     expect(partPlainText(tool, "search")).toBe("Bash ls -la")
     expect(partPlainText(tool, "search")).not.toContain("huge listing")
     expect(partPlainText(sources, "search")).toBe("Guide https://example.com")
+    expect(
+      partPlainText(
+        {
+          type: "sources",
+          sources: [
+            {
+              id: "mem-src",
+              title: "Private memory excerpt",
+              snippet: "secret preference",
+              origin: "memory",
+            },
+            {
+              id: "claim-src",
+              title: "Private project claim",
+              snippet: "secret claim",
+              origin: "project-claim",
+            },
+            {
+              id: "pub-src",
+              title: "Public doc",
+              url: "https://example.org",
+              origin: "cognia-web",
+            },
+          ],
+        },
+        "search"
+      )
+    ).toBe("Public doc https://example.org")
   })
 
   it("names a file for a model and finds it by name, never reading its payload", () => {

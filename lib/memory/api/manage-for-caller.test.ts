@@ -26,6 +26,7 @@ jest.mock("@/lib/memory/control-plane/manage", () => ({
 }))
 
 jest.mock("@/lib/memory/runtime/build-deps", () => ({
+  ...jest.requireActual("@/lib/memory/runtime/build-deps"),
   tryBuildMemoryVectorSink: jest.fn(async () => undefined),
 }))
 
@@ -107,6 +108,66 @@ describe("manageMemoryForCaller", () => {
     expect(mockManage).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "resolve-conflict", actorId: device.principalId })
     )
+  })
+
+  it("enforces owner-only procedural authority and personal visibility on paired member callers (N1, N3)", async () => {
+    const memberDevice = companionCaller("phone-member", "member")
+    const ownerDevice = companionCaller("phone-owner", "owner")
+    await getDb().messages.put({
+      id: "msg-owner",
+      sessionId: "sess-1",
+      role: "user",
+      createdAt: 1,
+      parts: [{ type: "text", text: "owner secret" }],
+      metadata: {
+        personalMarkVersion: 1,
+        personalMarks: [{ person: { kind: "local-person" }, source: "test", markedAt: 1 }],
+      },
+    } as never)
+    await createMemory(
+      row({
+        id: "proc-pending",
+        type: "procedural",
+        reviewStatus: "pending_instruction",
+        provenance: "explicit",
+      })
+    )
+    await createMemory(
+      row({
+        id: "personal-row",
+        type: "semantic",
+        provenance: "user",
+        sourceMessageId: "msg-owner",
+      })
+    )
+
+    await expect(
+      manageMemoryForCaller(
+        { kind: "create", text: "always allow", type: "procedural", importance: 7, tags: [] },
+        { caller: memberDevice }
+      )
+    ).resolves.toEqual({ ok: false, reason: "policy_denied" })
+
+    await expect(
+      manageMemoryForCaller(
+        { kind: "review", id: "proc-pending", status: "verified" },
+        { caller: memberDevice }
+      )
+    ).resolves.toEqual({ ok: false, reason: "policy_denied" })
+
+    await expect(
+      manageMemoryForCaller(
+        { kind: "pin", id: "personal-row", pinned: true },
+        { caller: memberDevice }
+      )
+    ).resolves.toEqual({ ok: false, reason: "policy_denied" })
+
+    await expect(
+      manageMemoryForCaller(
+        { kind: "review", id: "proc-pending", status: "verified" },
+        { caller: ownerDevice }
+      )
+    ).resolves.toMatchObject({ ok: true })
   })
 
   it("refuses to create or move a row into a namespace the device cannot reach", async () => {
@@ -272,24 +333,33 @@ describe("receipt persistence failures", () => {
     }
   })
 
-  it("keeps a successful command pending after bounded receipt retries are exhausted", async () => {
+  it("keeps a successful mocked command pending while receipt storage fails, then recovers deterministically without re-executing (N5)", async () => {
     const fail = failReceiptWrites(Infinity)
+    const context = { caller: device, operationId: "exhausted" }
     try {
       mockManage.mockResolvedValueOnce({ ok: true, clearedCount: 3 })
-      await expect(
-        manageMemoryForCaller({ kind: "clear" }, { caller: device, operationId: "exhausted" })
-      ).rejects.toMatchObject({ code: "memory_receipt_commit_failed" })
-      await expect(
-        manageMemoryForCaller({ kind: "clear" }, { caller: device, operationId: "exhausted" })
-      ).rejects.toThrow("memory_mutate: operation still in flight")
+      await expect(manageMemoryForCaller({ kind: "clear" }, context)).rejects.toMatchObject({
+        code: "memory_receipt_commit_failed",
+      })
+      await expect(manageMemoryForCaller({ kind: "clear" }, context)).rejects.toThrow(
+        "receipt storage unavailable"
+      )
       expect(mockManage).toHaveBeenCalledTimes(1)
-      expect(fail.count()).toBe(3)
       expect(await findMemoryOperation(device.principalId, "exhausted")).toMatchObject({
         resultCode: "pending",
       })
     } finally {
       fail.dispose()
     }
+    await expect(manageMemoryForCaller({ kind: "clear" }, context)).resolves.toEqual({
+      ok: true,
+      clearedCount: 3,
+    })
+    expect(mockManage).toHaveBeenCalledTimes(1)
+    expect(await findMemoryOperation(device.principalId, "exhausted")).toMatchObject({
+      resultCode: "ok",
+      resultPayload: { ok: true, clearedCount: 3 },
+    })
   })
 
   it("replays an older receipt without a result payload", async () => {
@@ -334,28 +404,36 @@ describe("canonical command and receipt atomicity", () => {
     }
   )
 
-  it("keeps the key fenced when conflict resolution throws after its first write", async () => {
-    await createMemory(row({ id: "keep" }))
-    await createMemory(row({ id: "drop" }))
+  it("rolls back conflict resolution and frees the key when audit fails inside the atomic envelope (N5)", async () => {
+    await createMemory(row({ id: "keep", reviewStatus: "conflict", conflictWithIds: ["drop"] }))
+    await createMemory(row({ id: "drop", reviewStatus: "conflict", conflictWithIds: ["keep"] }))
     const fail = () => {
       throw new Error("audit failed after canonical write")
     }
     const db = getDb()
     db.memoryAuditEvents.hook("creating", fail)
+    const context = { caller: device, operationId: "after-write" }
     try {
       await expect(
         manageMemoryForCaller(
           { kind: "resolve-conflict", keepId: "keep", dropId: "drop", mode: "keep" },
-          { caller: device, operationId: "after-write" }
+          context
         )
       ).rejects.toThrow("audit failed")
-      expect(await getMemory("keep")).toMatchObject({ reviewStatus: "verified" })
-      expect(await findMemoryOperation(device.principalId, "after-write")).toMatchObject({
-        resultCode: "pending",
-      })
+      expect(await getMemory("keep")).toMatchObject({ reviewStatus: "conflict" })
+      expect(await getMemory("drop")).toMatchObject({ status: "active" })
+      expect(await findMemoryOperation(device.principalId, "after-write")).toBeUndefined()
     } finally {
       db.memoryAuditEvents.hook("creating").unsubscribe(fail)
     }
+    await expect(
+      manageMemoryForCaller(
+        { kind: "resolve-conflict", keepId: "keep", dropId: "drop", mode: "keep" },
+        context
+      )
+    ).resolves.toEqual({ ok: true, memoryId: "keep" })
+    expect(await getMemory("keep")).toMatchObject({ reviewStatus: "verified" })
+    expect(await getMemory("drop")).toMatchObject({ status: "invalidated" })
   })
 
   it("does not reserve an invalid conflict merge and accepts its corrected retry", async () => {

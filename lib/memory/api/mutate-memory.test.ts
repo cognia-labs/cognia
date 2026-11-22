@@ -15,8 +15,10 @@ jest.mock("@/lib/db/memories", () => ({
 }))
 
 const mockVectorSink = jest.fn()
+const mockFilterPairedMemories = jest.fn()
 jest.mock("@/lib/memory/runtime/build-deps", () => ({
   tryBuildMemoryVectorSink: (...args: unknown[]) => mockVectorSink(...(args as [])),
+  filterPairedMemories: (...args: unknown[]) => mockFilterPairedMemories(...args),
 }))
 
 const mockRunMutation = jest.fn()
@@ -78,6 +80,7 @@ beforeEach(() => {
   mockGetSettings.mockResolvedValue({ memory: { enabled: true } })
   mockGetMemory.mockResolvedValue({ ...ROW })
   mockVectorSink.mockResolvedValue(undefined)
+  mockFilterPairedMemories.mockImplementation(async (rows: unknown[]) => rows)
   mockResolvePolicy.mockResolvedValue({
     canUpdate: true,
     canForget: true,
@@ -406,6 +409,26 @@ describe("forgetExternalMemory", () => {
   it("treats a revision snapshot id as not_found instead of a settled no-op", async () => {
     mockGetMemory.mockResolvedValue({ ...SNAPSHOT })
     expect(await forgetExternalMemory("snap1")).toEqual({ ok: false, reason: "not_found" })
+    expect(mockRunMutation).not.toHaveBeenCalled()
+  })
+
+  it("denies paired member callers from updating or forgetting owner-personal memories", async () => {
+    mockFilterPairedMemories.mockResolvedValue([])
+    const memberContext = {
+      caller: {
+        principalId: "companion:dev-member",
+        transport: "companion" as const,
+        pairedReader: "member" as const,
+      },
+    }
+    await expect(updateExternalMemory("m1", { text: "tamper" }, memberContext)).resolves.toEqual({
+      ok: false,
+      reason: "policy_denied",
+    })
+    await expect(forgetExternalMemory("m1", memberContext)).resolves.toEqual({
+      ok: false,
+      reason: "policy_denied",
+    })
     expect(mockRunMutation).not.toHaveBeenCalled()
   })
 })

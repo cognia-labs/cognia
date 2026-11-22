@@ -100,6 +100,18 @@ export interface StoreMemoryCoreInput {
   caller?: TrustedMemoryCaller
   /** Originating database partition/epoch scope, captured at command entry. */
   databaseScope?: DatabaseScopeSnapshot
+  /** Composite `${principalId}:${operationId}` stamped on audit rows for crash recovery. */
+  operationKey?: string
+  /** Optional transactional envelope committing canonical Dexie writes and receipt together. */
+  withCanonicalCommit?: <T>(apply: () => Promise<T>) => Promise<T>
+  /** Invoked inside the canonical Dexie transaction once the outcome is known. */
+  onCanonicalApplied?: (outcome: {
+    stored: boolean
+    consolidated: boolean
+    memoryId?: string
+    applied: ConsolidationOp["op"][]
+    piiRedacted?: boolean
+  }) => Promise<void>
 }
 
 export function clampImportance(value: number | undefined): number {
@@ -163,6 +175,9 @@ async function applyStoreMemory(
   dbScope.assertActive()
   const config = resolveMemoryConfig(settings?.memory)
   const caller = resolveMemoryCaller(input.caller ?? localUserCaller(), config)
+  if (type === "procedural" && caller.pairedReader === "member") {
+    return { ok: false, reason: "policy_denied" }
+  }
   // A bound caller constrains the write's namespace — request fields narrow
   // the caller's authorization set, they can never widen it.
   if (
@@ -263,8 +278,78 @@ async function applyStoreMemory(
 
   // Preferred path: the shared consolidator (dedupe / ADD / UPDATE / DELETE).
   const { buildAutoExtractionDeps } = await import("@/lib/memory/write/run-memory-extraction")
-  const deps = await buildAutoExtractionDeps({ session: null, appSettings: settings }, config)
+  const runCommit = input.withCanonicalCommit ?? (<T>(apply: () => Promise<T>) => apply())
+  const auditMetadata = {
+    ...(input.operationKey ? { operationKey: input.operationKey, consolidated: true } : {}),
+    ...(piiRedacted ? { piiRedacted: true } : {}),
+  }
+  let canonicalReceiptWritten = false
+  const deps = await buildAutoExtractionDeps(
+    {
+      session: null,
+      appSettings: settings,
+      ...(input.withCanonicalCommit
+        ? {
+            withCanonicalWrite: (write) => runCommit(write),
+            recordCanonicalOperation: async (op) => {
+              const id = consolidationOpMemoryId(op)
+              if (!id) return
+              const governance = await import("@/lib/db/memory-governance")
+              if (Object.keys(postAddPatch).length > 0 && op.op === "ADD") {
+                await memDb.updateMemory(id, postAddPatch)
+              }
+              await memDb.updateMemory(id, {
+                evidenceState: "supported",
+                reviewStatus:
+                  op.op === "CONFLICT"
+                    ? "conflict"
+                    : input.provenance === "explicit"
+                      ? "verified"
+                      : "unreviewed",
+                contaminationState: input.provenance === "external" ? "external-context" : "clean",
+                sensitivity: "normal",
+              })
+              await governance.createMemoryEvidence({
+                memoryId: id,
+                kind: input.provenance === "external" ? "external" : "manual",
+                sourceId:
+                  input.source?.messageId ??
+                  input.source?.sessionId ??
+                  input.attribution?.pluginId ??
+                  input.attribution?.channel ??
+                  `manual:${id}`,
+                sessionId: input.source?.sessionId,
+                messageId: input.source?.messageId,
+                contaminationState: input.provenance === "external" ? "external-context" : "clean",
+                reviewed: input.provenance === "explicit",
+              })
+              await governance.appendMemoryAuditEvent({
+                action:
+                  op.op === "CONFLICT" ? "conflict" : op.op === "UPDATE" ? "revised" : "created",
+                memoryId: id,
+                sessionId: input.source?.sessionId,
+                reason: op.op === "CONFLICT" ? (op.reason ?? input.provenance) : input.provenance,
+                ...(Object.keys(auditMetadata).length > 0 ? { metadata: auditMetadata } : {}),
+              })
+              await input.onCanonicalApplied?.({
+                stored: true,
+                consolidated: true,
+                memoryId: op.op === "ADD" || op.op === "CONFLICT" ? id : undefined,
+                applied: [op.op],
+                ...(piiRedacted ? { piiRedacted: true } : {}),
+              })
+              canonicalReceiptWritten = true
+            },
+          }
+        : {}),
+    },
+    config
+  )
   const memDb = await import("@/lib/db/memories")
+  const postAddPatch = {
+    ...(tags.length > 0 ? { tags } : {}),
+    ...(input.scopeRationale ? { scopeRationale: input.scopeRationale } : {}),
+  }
   dbScope.assertActive()
   if (deps) {
     beforeWrite()
@@ -286,14 +371,7 @@ async function applyStoreMemory(
       source: input.source,
       attribution: input.attribution,
     })
-    // Tags and the scope rationale ride as a post-ADD patch, because the
-    // consolidator's candidate shape is shared with LLM extraction and carries
-    // neither.
-    const postAddPatch = {
-      ...(tags.length > 0 ? { tags } : {}),
-      ...(input.scopeRationale ? { scopeRationale: input.scopeRationale } : {}),
-    }
-    if (Object.keys(postAddPatch).length > 0) {
+    if (!canonicalReceiptWritten && Object.keys(postAddPatch).length > 0) {
       for (const op of applied) {
         if (op.op === "ADD" && op.memory?.id) {
           try {
@@ -318,7 +396,7 @@ async function applyStoreMemory(
       const id = consolidationOpMemoryId(op)
       return id ? [id] : []
     })
-    if (governedIds.length > 0 && dbScope.isActive()) {
+    if (!canonicalReceiptWritten && governedIds.length > 0 && dbScope.isActive()) {
       try {
         const governance = await import("@/lib/db/memory-governance")
         for (const id of governedIds) {
@@ -378,6 +456,7 @@ async function applyStoreMemory(
                     (op): op is Extract<ConsolidationOp, { op: "CONFLICT" }> =>
                       op.op === "CONFLICT" && op.memory.id === id
                   )?.reason ?? input.provenance,
+                ...(Object.keys(auditMetadata).length > 0 ? { metadata: auditMetadata } : {}),
               })
             }
           )
@@ -393,24 +472,26 @@ async function applyStoreMemory(
       return id ? [id] : []
     })
     if (corroboratedIds.length > 0 && dbScope.isActive()) {
-      const { recordMemoryCorroboration } =
-        await import("@/lib/memory/lifecycle/record-memory-outcome")
-      for (const id of corroboratedIds) {
-        await recordMemoryCorroboration({
-          memoryId: id,
-          sessionId: input.source?.sessionId,
-          contaminationState: input.provenance === "external" ? "external-context" : "clean",
-          evidence: {
-            kind: input.provenance === "external" ? "external" : "manual",
-            sourceId:
-              input.source?.messageId ??
-              input.source?.sessionId ??
-              input.attribution?.pluginId ??
-              input.attribution?.channel ??
-              `manual:${id}`,
-          },
-        })
-      }
+      await runCommit(async () => {
+        const { recordMemoryCorroboration } =
+          await import("@/lib/memory/lifecycle/record-memory-outcome")
+        for (const id of corroboratedIds) {
+          await recordMemoryCorroboration({
+            memoryId: id,
+            sessionId: input.source?.sessionId,
+            contaminationState: input.provenance === "external" ? "external-context" : "clean",
+            evidence: {
+              kind: input.provenance === "external" ? "external" : "manual",
+              sourceId:
+                input.source?.messageId ??
+                input.source?.sessionId ??
+                input.attribution?.pluginId ??
+                input.attribution?.channel ??
+                `manual:${id}`,
+            },
+          })
+        }
+      })
     }
     return {
       ok: true,
@@ -425,9 +506,45 @@ async function applyStoreMemory(
   // Degraded path: no utility LLM client → direct insert (BM25-findable) +
   // best-effort vector upsert. The fact still lands; only dedupe is skipped.
   const { tryBuildMemoryVectorSink } = await import("@/lib/memory/runtime/build-deps")
+  const governance = await import("@/lib/db/memory-governance")
   dbScope.assertActive()
-  beforeWrite()
-  const row = await memDb.createMemory({
+  let degradedCommitted = false
+  const applyDegradedGovernance = async (created: { id: string }) => {
+    await input.onCanonicalApplied?.({
+      stored: true,
+      consolidated: false,
+      memoryId: created.id,
+      applied: ["ADD"],
+      ...(piiRedacted ? { piiRedacted: true } : {}),
+    })
+    await governance.createMemoryEvidence({
+      memoryId: created.id,
+      kind: input.provenance === "external" ? "external" : "manual",
+      sourceId:
+        input.source?.messageId ??
+        input.source?.sessionId ??
+        input.attribution?.pluginId ??
+        input.attribution?.channel ??
+        `manual:${created.id}`,
+      sessionId: input.source?.sessionId,
+      messageId: input.source?.messageId,
+      contaminationState: input.provenance === "external" ? "external-context" : "clean",
+      reviewed: input.provenance === "explicit",
+    })
+    const degradedAuditMeta = {
+      ...(input.operationKey ? { operationKey: input.operationKey, consolidated: false } : {}),
+      ...(piiRedacted ? { piiRedacted: true } : {}),
+    }
+    await governance.appendMemoryAuditEvent({
+      action: "created",
+      memoryId: created.id,
+      sessionId: input.source?.sessionId,
+      reason: input.provenance,
+      ...(Object.keys(degradedAuditMeta).length > 0 ? { metadata: degradedAuditMeta } : {}),
+    })
+    degradedCommitted = true
+  }
+  const createDraft = {
     scope,
     characterId,
     projectId,
@@ -444,36 +561,21 @@ async function applyStoreMemory(
     sourceMessageId: input.source?.messageId,
     sourceChannel: input.attribution?.channel,
     sourcePluginId: input.attribution?.pluginId,
-    evidenceState: "supported",
-    reviewStatus: input.provenance === "explicit" ? "verified" : "unreviewed",
-    contaminationState: input.provenance === "external" ? "external-context" : "clean",
-    sensitivity: "normal",
+    evidenceState: "supported" as const,
+    reviewStatus: input.provenance === "explicit" ? ("verified" as const) : ("unreviewed" as const),
+    contaminationState:
+      input.provenance === "external" ? ("external-context" as const) : ("clean" as const),
+    sensitivity: "normal" as const,
     ...(input.scopeRationale ? { scopeRationale: input.scopeRationale } : {}),
-  })
-  try {
-    const governance = await import("@/lib/db/memory-governance")
-    await governance.createMemoryEvidence({
-      memoryId: row.id,
-      kind: input.provenance === "external" ? "external" : "manual",
-      sourceId:
-        input.source?.messageId ??
-        input.source?.sessionId ??
-        input.attribution?.pluginId ??
-        input.attribution?.channel ??
-        `manual:${row.id}`,
-      sessionId: input.source?.sessionId,
-      messageId: input.source?.messageId,
-      contaminationState: input.provenance === "external" ? "external-context" : "clean",
-      reviewed: input.provenance === "explicit",
-    })
-    await governance.appendMemoryAuditEvent({
-      action: "created",
-      memoryId: row.id,
-      sessionId: input.source?.sessionId,
-      reason: input.provenance,
-    })
-  } catch {
-    // The canonical memory already landed; governance persistence retries separately.
+  }
+  beforeWrite()
+  const row = input.withCanonicalCommit
+    ? await memDb.createMemory(createDraft, async (created) => {
+        await runCommit(() => applyDegradedGovernance(created))
+      })
+    : await memDb.createMemory(createDraft)
+  if (!degradedCommitted) {
+    await runCommit(() => applyDegradedGovernance(row))
   }
   const sink = await tryBuildMemoryVectorSink(config)
   if (sink) {
@@ -550,15 +652,15 @@ export async function storeExternalMemory(
   // refuses.
   const principalId = caller?.principalId ?? "local-user"
   const operationId = input.operationId
+  const operationKey = operationId ? `${principalId}:${operationId}` : undefined
   let requestHash: string | undefined
   if (operationId) {
-    const { reserveMemoryOperation, awaitMemoryOperation, memoryOperationRequestHash } =
-      await import("@/lib/db/memory-operations")
+    const ledger = await import("@/lib/db/memory-operations")
     const { operationId: _operationId, ...request } = input
     // Hash the EFFECTIVE request, not the raw payload — the core trims text
     // and tags and clamps importance before apply, so requests differing only
     // in those normalizations are the same operation, not a conflict.
-    requestHash = await memoryOperationRequestHash("store", {
+    requestHash = await ledger.memoryOperationRequestHash("store", {
       ...request,
       text: request.text.trim(),
       importance: clampImportance(request.importance),
@@ -570,10 +672,11 @@ export async function storeExternalMemory(
     const replay = (receipt: {
       memoryId: string
       resultConsolidated?: boolean
+      resultStored?: boolean
       resultApplied?: string[]
     }) => ({
       ok: true as const,
-      stored: true,
+      stored: receipt.resultStored ?? true,
       consolidated: receipt.resultConsolidated ?? true,
       ...(receipt.memoryId ? { memoryId: receipt.memoryId } : {}),
       applied: (receipt.resultApplied ?? []) as ConsolidationOp["op"][],
@@ -584,14 +687,23 @@ export async function storeExternalMemory(
       requestHash,
       kind: "store" as const,
     }
-    let reservation = await reserveMemoryOperation(binding)
+    let reservation = await ledger.reserveMemoryOperation(binding)
     if (reservation.state === "in_flight") {
-      const settled = await awaitMemoryOperation(principalId, operationId)
-      // The owner may have released after a pre-write failure. Only an atomic
-      // reserve can admit this caller; elapsed time never transfers ownership.
-      reservation = settled
-        ? { state: "replay", receipt: settled }
-        : await reserveMemoryOperation(binding)
+      const settled = await ledger.awaitMemoryOperation(principalId, operationId)
+      if (settled) {
+        reservation = { state: "replay", receipt: settled }
+      } else {
+        const reconciled = await ledger.reconcilePendingMemoryOperation(binding)
+        if (reconciled.state === "conflict") {
+          return { ok: false, reason: "idempotency_key_reused" }
+        }
+        if (reconciled.state === "recovered") {
+          return replay(reconciled.receipt)
+        }
+        reservation = await ledger.reserveMemoryOperation(binding, {
+          allowReclaim: reconciled.state === "unapplied",
+        })
+      }
     }
     if (reservation.state === "conflict") {
       return { ok: false, reason: "idempotency_key_reused" }
@@ -602,6 +714,13 @@ export async function storeExternalMemory(
     }
   }
 
+  const ledger = operationId ? await import("@/lib/db/memory-operations") : undefined
+  const releaseInFlight =
+    operationKey && ledger
+      ? ledger.markMemoryOperationInFlight(operationKey, requestHash)
+      : undefined
+  let receiptCommitted = false
+  let atomicEnvelopeUsed = false
   let result: StoreMemoryCoreResult
   try {
     result = await storeMemoryCore({
@@ -624,32 +743,65 @@ export async function storeExternalMemory(
       // `source.sessionId` provenance can never substitute for it.
       caller,
       attribution,
+      ...(operationKey && operationId && requestHash && ledger
+        ? {
+            operationKey,
+            withCanonicalCommit: async <T>(apply: () => Promise<T>) => {
+              atomicEnvelopeUsed = true
+              return ledger.withMemoryStoreTransaction(apply)
+            },
+            onCanonicalApplied: async (appliedOutcome) => {
+              await ledger.recordMemoryOperation({
+                id: operationKey,
+                principalId,
+                operationId,
+                kind: "store",
+                requestHash: requestHash!,
+                memoryId: appliedOutcome.memoryId ?? "",
+                resultCode: "ok",
+                resultStored: appliedOutcome.stored,
+                resultConsolidated: appliedOutcome.consolidated,
+                resultApplied: appliedOutcome.applied,
+                createdAt: Date.now(),
+              })
+              receiptCommitted = true
+            },
+          }
+        : {}),
     })
   } catch (error) {
-    // Only failures before consolidation/persistence are safe to retry.
-    if (error instanceof MemoryPreWriteError && operationId && requestHash) {
-      const { releaseMemoryOperation } = await import("@/lib/db/memory-operations")
-      await releaseMemoryOperation(principalId, operationId, requestHash).catch(() => undefined)
+    releaseInFlight?.()
+    // Atomic canonical+receipt rollback or pre-write validation left zero side effects.
+    if (
+      (atomicEnvelopeUsed || error instanceof MemoryPreWriteError) &&
+      operationId &&
+      requestHash &&
+      ledger
+    ) {
+      await ledger
+        .releaseMemoryOperation(principalId, operationId, requestHash)
+        .catch(() => undefined)
     }
     throw error
+  } finally {
+    releaseInFlight?.()
   }
 
-  // Record only an APPLIED operation — a denied or failed store leaves no
-  // side effect, so its id stays free for the caller's corrected retry. The
-  // reservation is released on that path so the pending marker never pins
-  // the key.
-  if (operationId && requestHash) {
-    const { recordMemoryOperation, releaseMemoryOperation } =
-      await import("@/lib/db/memory-operations")
+  if (operationId && requestHash && ledger) {
     if (result.ok && result.stored) {
+      if (receiptCommitted) {
+        ledger.clearStagedMemoryOperation(operationKey!)
+        return result
+      }
       const receipt = {
-        id: `${principalId}:${operationId}`,
+        id: operationKey!,
         principalId,
         operationId,
         kind: "store" as const,
         requestHash,
         memoryId: result.memoryId ?? "",
         resultCode: "ok" as const,
+        resultStored: result.stored,
         resultConsolidated: result.consolidated,
         resultApplied: result.applied,
         createdAt: Date.now(),
@@ -657,16 +809,20 @@ export async function storeExternalMemory(
       let receiptError: unknown
       for (let attempt = 0; attempt < 3; attempt += 1) {
         try {
-          await recordMemoryOperation(receipt)
+          await ledger.recordMemoryOperation(receipt)
+          ledger.clearStagedMemoryOperation(operationKey!)
           return result
         } catch (error) {
           receiptError = error
         }
       }
+      ledger.stageAppliedMemoryOperation(receipt)
       const { MemoryReceiptCommitError } = await import("./manage-for-caller")
       throw new MemoryReceiptCommitError(receiptError, "memory_store")
     } else {
-      await releaseMemoryOperation(principalId, operationId, requestHash).catch(() => undefined)
+      await ledger
+        .releaseMemoryOperation(principalId, operationId, requestHash)
+        .catch(() => undefined)
     }
   }
   return result

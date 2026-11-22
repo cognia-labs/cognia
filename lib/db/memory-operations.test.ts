@@ -5,6 +5,7 @@ import {
   memoryOperationRequestHash,
   memoryOperationResultPayload,
   MEMORY_OPERATION_PENDING,
+  reconcilePendingMemoryOperation,
   recordMemoryOperation,
   releaseMemoryOperation,
   reserveMemoryOperation,
@@ -460,4 +461,56 @@ it("projects the complete content-free success result and rejects non-JSON numbe
   expect(() => memoryOperationResultPayload({ ok: true, clearedCount: NaN })).toThrow(
     "Invalid memory receipt field"
   )
+})
+
+describe("reconcilePendingMemoryOperation", () => {
+  it("recovers a stranded pending marker when durable audit events prove the command committed", async () => {
+    const op = binding({ kind: "manage", operationId: "clear-op" })
+    await reserveMemoryOperation(op, { now: 100, leaseTtlMs: 50 })
+    await getDb().memoryAuditEvents.bulkAdd([
+      {
+        id: "mau_1",
+        action: "deleted",
+        memoryId: "m1",
+        reason: "user_cleared_scope",
+        metadata: { operationKey: "plugin:demo:clear-op", cleared: true },
+        createdAt: 110,
+      },
+      {
+        id: "mau_2",
+        action: "deleted",
+        memoryId: "m2",
+        reason: "user_cleared_scope",
+        metadata: { operationKey: "plugin:demo:clear-op", cleared: true },
+        createdAt: 110,
+      },
+    ])
+
+    const reconciled = await reconcilePendingMemoryOperation(op, { now: 200 })
+    expect(reconciled).toMatchObject({
+      state: "recovered",
+      receipt: {
+        resultCode: "ok",
+        resultPayload: { ok: true, clearedCount: 2 },
+      },
+    })
+    expect(await findMemoryOperation("plugin:demo", "clear-op")).toMatchObject({
+      resultCode: "ok",
+      resultPayload: { ok: true, clearedCount: 2 },
+    })
+  })
+
+  it("keeps an unexpired unapplied marker in_flight, then allows reclaim after lease expiry", async () => {
+    const op = binding({ kind: "manage", operationId: "stale-op" })
+    await reserveMemoryOperation(op, { now: 1_000, leaseTtlMs: 500 })
+    await expect(reconcilePendingMemoryOperation(op, { now: 1_200 })).resolves.toEqual({
+      state: "in_flight",
+    })
+    await expect(reconcilePendingMemoryOperation(op, { now: 1_600 })).resolves.toEqual({
+      state: "unapplied",
+    })
+    await expect(
+      reserveMemoryOperation(op, { now: 1_600, leaseTtlMs: 500, allowReclaim: true })
+    ).resolves.toEqual({ state: "reserved" })
+  })
 })

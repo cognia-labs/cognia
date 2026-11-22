@@ -68,6 +68,7 @@ import type { GoalEvent } from "@/types/goal"
 const MESSAGES_PAGE_SIZE = 500
 interface SyncPullRequestEvent {
   pairedReader?: unknown
+  callerDeviceId?: string
   request_id: string
   table: SyncableTable | string
   since: number
@@ -134,7 +135,8 @@ async function respondToSyncRequest(
       request.content_protocol_version,
       undefined,
       request.cursor,
-      request.pairedReader
+      request.pairedReader,
+      typeof request.callerDeviceId === "string" ? request.callerDeviceId : undefined
     )
     // The account, or the database under it, may have switched while the
     // delta was read: a delta that may hold another account's rows is never
@@ -174,7 +176,8 @@ export async function readDexieDelta(
   /** Dependencies a module's reader takes by name (`SyncServeContext.deps`); tests inject them. */
   serveDeps: Readonly<Record<string, unknown>> = {},
   cursor?: string,
-  pairedReader?: unknown
+  pairedReader?: unknown,
+  callerDeviceId?: string
 ): Promise<SyncDelta<unknown>> {
   if (table === "memories" && contentProtocolVersion !== 1) {
     throw new Error("upgrade_required: retrieval content protocol v1 is required")
@@ -189,6 +192,8 @@ export async function readDexieDelta(
   // own projection (ADR-0250 §14 `syncHandlers`).
   const contributed = await serveModuleSyncTable(table as SyncableTable, since, {
     contentProtocolVersion,
+    pairedReader,
+    callerDeviceId,
     deps: serveDeps,
   })
   if (contributed) return contributed

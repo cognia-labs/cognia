@@ -874,21 +874,21 @@ export async function dispatchCommand(
     // `external` provenance, never procedural. Writes are CONTROL-gated on
     // the Rust side; policy blocks come back as structured `{ ok: false }`.
     case "memory_search":
-      return memorySearchRpc(payload)
+      return memorySearchRpc(payload, partition)
     case "memory_list":
-      return memoryListRpc(payload)
+      return memoryListRpc(payload, partition)
     case "memory_store":
-      return memoryStoreRpc(payload)
+      return memoryStoreRpc(payload, partition)
     case "memory_update":
-      return memoryUpdateRpc(payload)
+      return memoryUpdateRpc(payload, partition)
     case "memory_forget":
-      return memoryForgetRpc(payload)
+      return memoryForgetRpc(payload, partition)
     // The `/memory` console on a paired device: one `manageMemory` command,
     // run here as the verified device (namespace grants, operation ledger).
     case "memory_mutate":
-      return memoryMutateRpc(payload)
+      return memoryMutateRpc(payload, partition)
     case "retrieval_profile_dek_export":
-      return retrievalProfileDekExport(payload)
+      return retrievalProfileDekExport(payload, partition)
     // External agents (ADR-0056, Wave 4). The desktop's external-agent config
     // lives in the `cognia-external-agents` Zustand/localStorage store (NOT a
     // Dexie table, so no sync mirror) — these arms project + mutate it for the
@@ -1780,7 +1780,17 @@ async function goalStatus(
 
 // ── Long-term memory (ADR-0069) ─────────────────────────────────────────────
 
-async function memorySearchRpc(payload: Record<string, unknown>): Promise<unknown> {
+function resolvePairedMemoryReader(
+  payload: Record<string, unknown>,
+  partition: boolean
+): "owner" | "member" {
+  return partition || payload.pairedReader === "owner" ? "owner" : "member"
+}
+
+async function memorySearchRpc(
+  payload: Record<string, unknown>,
+  partition = false
+): Promise<unknown> {
   const query = payload.query as string | undefined
   if (typeof query !== "string" || query.trim().length === 0) {
     throw new Error("memory_search.query is required")
@@ -1801,7 +1811,10 @@ async function memorySearchRpc(payload: Record<string, unknown>): Promise<unknow
       path: payload.path as string | undefined,
       ...(asOf !== undefined ? { asOf } : {}),
     },
-    companionCaller(payload.callerDeviceId as string | undefined)
+    companionCaller(
+      payload.callerDeviceId as string | undefined,
+      resolvePairedMemoryReader(payload, partition)
+    )
   )
   if (!result.ok) return result
   const { toMemoryWireRow } = await import("@/lib/memory/api/wire")
@@ -1815,7 +1828,10 @@ async function memorySearchRpc(payload: Record<string, unknown>): Promise<unknow
   }
 }
 
-async function memoryListRpc(payload: Record<string, unknown>): Promise<unknown> {
+async function memoryListRpc(
+  payload: Record<string, unknown>,
+  partition = false
+): Promise<unknown> {
   const { listMemoriesExternal } = await import("@/lib/memory/api/read-memory")
   const { companionCaller } = await import("@/lib/memory/api/caller")
   const result = await listMemoriesExternal(
@@ -1836,14 +1852,20 @@ async function memoryListRpc(payload: Record<string, unknown>): Promise<unknown>
             ? payload.pageSize
             : undefined,
     },
-    companionCaller(payload.callerDeviceId as string | undefined)
+    companionCaller(
+      payload.callerDeviceId as string | undefined,
+      resolvePairedMemoryReader(payload, partition)
+    )
   )
   if (!result.ok) return result
   const { toMemoryWireRow } = await import("@/lib/memory/api/wire")
   return { ok: true, memories: result.memories.map(toMemoryWireRow) }
 }
 
-async function memoryStoreRpc(payload: Record<string, unknown>): Promise<unknown> {
+async function memoryStoreRpc(
+  payload: Record<string, unknown>,
+  partition = false
+): Promise<unknown> {
   const text = payload.text as string | undefined
   if (typeof text !== "string" || text.trim().length === 0) {
     throw new Error("memory_store.text is required")
@@ -1866,11 +1888,17 @@ async function memoryStoreRpc(payload: Record<string, unknown>): Promise<unknown
       operationId: payload.operationId as string | undefined,
     },
     { channel: "rpc" },
-    companionCaller(payload.callerDeviceId as string | undefined)
+    companionCaller(
+      payload.callerDeviceId as string | undefined,
+      resolvePairedMemoryReader(payload, partition)
+    )
   )
 }
 
-async function memoryUpdateRpc(payload: Record<string, unknown>): Promise<unknown> {
+async function memoryUpdateRpc(
+  payload: Record<string, unknown>,
+  partition = false
+): Promise<unknown> {
   const id = payload.id as string | undefined
   if (typeof id !== "string" || id.trim().length === 0) {
     throw new Error("memory_update.id is required")
@@ -1887,7 +1915,10 @@ async function memoryUpdateRpc(payload: Record<string, unknown>): Promise<unknow
       pinned: typeof payload.pinned === "boolean" ? payload.pinned : undefined,
     },
     {
-      caller: companionCaller(payload.callerDeviceId as string | undefined),
+      caller: companionCaller(
+        payload.callerDeviceId as string | undefined,
+        resolvePairedMemoryReader(payload, partition)
+      ),
       expectedVersion:
         typeof payload.expectedVersion === "number" ? payload.expectedVersion : undefined,
       operationId: payload.operationId as string | undefined,
@@ -1895,7 +1926,10 @@ async function memoryUpdateRpc(payload: Record<string, unknown>): Promise<unknow
   )
 }
 
-async function memoryForgetRpc(payload: Record<string, unknown>): Promise<unknown> {
+async function memoryForgetRpc(
+  payload: Record<string, unknown>,
+  partition = false
+): Promise<unknown> {
   const id = payload.id as string | undefined
   if (typeof id !== "string" || id.trim().length === 0) {
     throw new Error("memory_forget.id is required")
@@ -1903,14 +1937,20 @@ async function memoryForgetRpc(payload: Record<string, unknown>): Promise<unknow
   const { forgetExternalMemory } = await import("@/lib/memory/api/mutate-memory")
   const { companionCaller } = await import("@/lib/memory/api/caller")
   return forgetExternalMemory(id, {
-    caller: companionCaller(payload.callerDeviceId as string | undefined),
+    caller: companionCaller(
+      payload.callerDeviceId as string | undefined,
+      resolvePairedMemoryReader(payload, partition)
+    ),
     expectedVersion:
       typeof payload.expectedVersion === "number" ? payload.expectedVersion : undefined,
     operationId: payload.operationId as string | undefined,
   })
 }
 
-async function memoryMutateRpc(payload: Record<string, unknown>): Promise<unknown> {
+async function memoryMutateRpc(
+  payload: Record<string, unknown>,
+  partition = false
+): Promise<unknown> {
   const { parseManageMemoryCommand } = await import("@/lib/memory/control-plane/command-wire")
   const command = parseManageMemoryCommand(payload.command)
   if (!command) throw new Error("memory_mutate.command is malformed")
@@ -1921,7 +1961,10 @@ async function memoryMutateRpc(payload: Record<string, unknown>): Promise<unknow
   const { manageMemoryForCaller } = await import("@/lib/memory/api/manage-for-caller")
   const { companionCaller } = await import("@/lib/memory/api/caller")
   return manageMemoryForCaller(command, {
-    caller: companionCaller(payload.callerDeviceId as string | undefined),
+    caller: companionCaller(
+      payload.callerDeviceId as string | undefined,
+      resolvePairedMemoryReader(payload, partition)
+    ),
     ...(operationId ? { operationId } : {}),
   })
 }
@@ -3293,7 +3336,7 @@ function encodeBase64(value: Uint8Array): string {
   return btoa(binary)
 }
 
-async function retrievalProfileDekExport(payload: Record<string, unknown>) {
+async function retrievalProfileDekExport(payload: Record<string, unknown>, partition = false) {
   const profileId = payload.profileId
   const protocolVersion = payload.contentProtocolVersion
   if (typeof profileId !== "string" || !profileId.trim()) {
@@ -3301,6 +3344,15 @@ async function retrievalProfileDekExport(payload: Record<string, unknown>) {
   }
   if (protocolVersion !== 1) {
     throw new Error("upgrade_required: retrieval content protocol v1 is required")
+  }
+  const { MEMORY_SYNC_PROFILE_ID } = await import("@/lib/sync/memory-content-protocol")
+  if (profileId !== MEMORY_SYNC_PROFILE_ID) {
+    throw new Error("retrieval_profile_dek_export: unsupported profileId")
+  }
+  if (resolvePairedMemoryReader(payload, partition) !== "owner") {
+    throw new Error(
+      "paired_reader_not_owner: retrieval profile DEK export requires owner authority"
+    )
   }
   const exported = await createProfileDekStore().exportForPairing(profileId, {
     authenticated: true,

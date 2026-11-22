@@ -312,6 +312,12 @@ describe("personal workflow reader", () => {
       const result = await runMemoryRecall(ctx)
       expect((result.output as { entries: unknown[] }).entries).toHaveLength(owner ? 1 : 0)
       expect(mockResolveIdentity).toHaveBeenCalledWith(undefined, "execution:workflow:run1")
+      const runRow = await getDb().executionRuns.get("execution:workflow:run1")
+      if (owner) {
+        expect(runRow?.personalMarks).toEqual(marks)
+      } else {
+        expect(runRow?.personalMarks).toBeUndefined()
+      }
     }
   )
 })

@@ -147,8 +147,14 @@ export interface MemorySyncServeDeps {
 /**
  * The memories a paired client pulls, encrypted under the shared memory DEK
  * (retrieval content protocol v1, which the host checks before it gets here).
- * A first pull carries the newest `MEMORY_COLD_START_LIMIT`; later pulls carry
- * everything past the cursor.
+ *
+ * Enforces both the device's `principalGrants` (`companion:<deviceId>`) and the
+ * Host-stamped `pairedReader` audience (`ADR-0243` phase 2B-2). When `pairedReader`
+ * is omitted on direct test calls, defaults to `"owner"` only if omitted at the
+ * TS helper boundary; `desktop-sync-source` and Rust `PairedReaderTransport`
+ * always stamp `"owner"` or `"member"` explicitly (unknown roles fail closed as
+ * `"member"`). Rows withheld or revoked after an earlier pull are emitted in
+ * `deleted_ids` so incremental sync purges stale local mirrors.
  */
 export async function readMemoriesDelta(
   since: number,
@@ -159,14 +165,84 @@ export async function readMemoriesDelta(
   if (!Number.isInteger(coldStartLimit) || coldStartLimit < 1) {
     throw new Error("Memory cold-start limit must be positive")
   }
-  const rows =
-    since === 0
-      ? await getDb().memories.orderBy("updatedAt").reverse().limit(coldStartLimit).toArray()
-      : await getDb().memories.where("updatedAt").above(since).toArray()
-  if (rows.length === 0) return finalizeDelta("memories", [], since)
-  const dek = await (
-    deps.getMemoryDek ?? (() => createProfileDekStore().getOrCreate(MEMORY_SYNC_PROFILE_ID))
-  )()
-  const encryptedRows = await Promise.all(rows.map((row) => createMemorySyncRowV1(row, dek)))
-  return finalizeDelta("memories", encryptedRows, since)
+
+  const pairedReader: "owner" | "member" =
+    context.pairedReader === undefined
+      ? "owner"
+      : context.pairedReader === "owner"
+        ? "owner"
+        : "member"
+  const [{ companionCaller }, { authorizeMemoryRead }, { filterPairedMemories }] =
+    await Promise.all([
+      import("@/lib/memory/api/caller"),
+      import("@/lib/memory/api/read-memory"),
+      import("@/lib/memory/runtime/build-deps"),
+    ])
+  const caller = companionCaller(context.callerDeviceId, pairedReader)
+  const authorized = await authorizeMemoryRead(caller)
+
+  if (!authorized.ok) {
+    const base = await finalizeDelta("memories", [], since)
+    if (since === 0) return base
+    const existingIds = (await getDb().memories.toCollection().primaryKeys()) as string[]
+    return {
+      ...base,
+      deleted_ids: [...new Set([...base.deleted_ids, ...existingIds])],
+    }
+  }
+
+  if (since === 0) {
+    const allNewestFirst = await getDb().memories.orderBy("updatedAt").reverse().toArray()
+    const namespaceAllowed = allNewestFirst.filter((row) => authorized.read.isAuthorized(row))
+    const visible = (await filterPairedMemories(namespaceAllowed, pairedReader)).slice(
+      0,
+      coldStartLimit
+    )
+    if (visible.length === 0) return finalizeDelta("memories", [], 0)
+    const dek = await (
+      deps.getMemoryDek ?? (() => createProfileDekStore().getOrCreate(MEMORY_SYNC_PROFILE_ID))
+    )()
+    const encryptedRows = await Promise.all(visible.map((row) => createMemorySyncRowV1(row, dek)))
+    return finalizeDelta("memories", encryptedRows, 0)
+  }
+
+  const changed = await getDb().memories.where("updatedAt").above(since).toArray()
+  let highestChangedAt = since
+  for (const row of changed) {
+    if (row.updatedAt > highestChangedAt) highestChangedAt = row.updatedAt
+  }
+  const namespaceAllowed = changed.filter((row) => authorized.read.isAuthorized(row))
+  const visible =
+    namespaceAllowed.length > 0 ? await filterPairedMemories(namespaceAllowed, pairedReader) : []
+  const visibleIds = new Set(visible.map((row) => row.id))
+  const withheldIds = new Set<string>()
+  for (const row of changed) {
+    if (!visibleIds.has(row.id)) withheldIds.add(row.id)
+  }
+  // If `principalGrants` narrows this device's namespaces, also purge any older
+  // row whose namespace was revoked without bumping `row.updatedAt`.
+  if (authorized.caller.namespaces !== undefined) {
+    const allRows = await getDb().memories.toArray()
+    for (const row of allRows) {
+      if (!authorized.read.isAuthorized(row) && !visibleIds.has(row.id)) {
+        withheldIds.add(row.id)
+      }
+    }
+  }
+
+  let encryptedRows: EncryptedMemorySyncRowV1[] = []
+  if (visible.length > 0) {
+    const dek = await (
+      deps.getMemoryDek ?? (() => createProfileDekStore().getOrCreate(MEMORY_SYNC_PROFILE_ID))
+    )()
+    encryptedRows = await Promise.all(visible.map((row) => createMemorySyncRowV1(row, dek)))
+  }
+  const base = await finalizeDelta("memories", encryptedRows, since)
+  return {
+    ...base,
+    deleted_ids: [...new Set([...base.deleted_ids, ...withheldIds])].filter(
+      (id) => !visibleIds.has(id)
+    ),
+    next_since: Math.max(base.next_since, highestChangedAt),
+  }
 }

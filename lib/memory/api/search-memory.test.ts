@@ -8,8 +8,10 @@ jest.mock("@/lib/db/settings", () => ({
 }))
 
 const mockTryBuildMemoryDeps = jest.fn()
+const mockFilterPairedMemories = jest.fn()
 jest.mock("@/lib/memory/runtime/build-deps", () => ({
   tryBuildMemoryDeps: (...args: unknown[]) => mockTryBuildMemoryDeps(...(args as [])),
+  filterPairedMemories: (...args: unknown[]) => mockFilterPairedMemories(...args),
 }))
 
 const mockRetrieveMemories = jest.fn()
@@ -28,6 +30,7 @@ beforeEach(() => {
   jest.clearAllMocks()
   mockGetSettings.mockResolvedValue({ memory: { enabled: true } })
   mockTryBuildMemoryDeps.mockResolvedValue({ loadCandidates: jest.fn(), touch: jest.fn() })
+  mockFilterPairedMemories.mockImplementation(async (rows: unknown[]) => rows)
   mockRetrieveMemories.mockResolvedValue([HIT])
   mockResolvePolicy.mockResolvedValue({
     canRecall: true,
@@ -232,5 +235,39 @@ describe("searchMemoriesExternal", () => {
     await searchMemoriesExternal({ query: "q", asOf: 1 }, localUserCaller())
     const deps = mockRetrieveMemories.mock.calls[0][1]
     expect(deps).not.toHaveProperty("loadHistoricalCandidates")
+  })
+
+  it("filters personal memories for paired member callers on candidates and final hits", async () => {
+    mockFilterPairedMemories.mockImplementation(
+      async (rows: Array<{ id: string; personal?: boolean }>, reader: unknown) =>
+        reader === "owner" ? rows : rows.filter((item) => !item.personal)
+    )
+    mockTryBuildMemoryDeps.mockResolvedValue({
+      loadCandidates: jest.fn(async () => [
+        { id: "secret", scope: "global", personal: true },
+        { id: "shared", scope: "global", personal: false },
+      ]),
+      loadProcedural: jest.fn(async () => [{ id: "proc-secret", scope: "global", personal: true }]),
+    })
+    mockRetrieveMemories.mockResolvedValue([
+      { memory: { id: "secret", scope: "global", personal: true }, relevance: 0.95, score: 0.9 },
+      { memory: { id: "shared", scope: "global", personal: false }, relevance: 0.8, score: 0.7 },
+    ])
+
+    const memberCaller: TrustedMemoryCaller = {
+      principalId: "companion:dev-member",
+      transport: "companion",
+      pairedReader: "member",
+    }
+    const res = await searchMemoriesExternal({ query: "q" }, memberCaller)
+    expect(res).toEqual({
+      ok: true,
+      hits: [expect.objectContaining({ memory: expect.objectContaining({ id: "shared" }) })],
+    })
+    const scopedDeps = mockRetrieveMemories.mock.calls[0][1]
+    await expect(scopedDeps.loadCandidates()).resolves.toEqual([
+      { id: "shared", scope: "global", personal: false },
+    ])
+    await expect(scopedDeps.loadProcedural()).resolves.toEqual([])
   })
 })

@@ -34,7 +34,7 @@ import { hasNoLeakingPii } from "@cognia/redact"
 import { resolvePromptAsync } from "@/lib/prompts/resolve"
 import { MEMORY_RERANK_PROMPT } from "./rerank-prompt"
 import { getDb } from "@/lib/db/schema"
-import { preparePersonalHistory } from "@/lib/execution/personal-visibility"
+import { preparePairedHistory, preparePersonalHistory } from "@/lib/execution/personal-visibility"
 import {
   mergePersonalMarks,
   type PersonalMarkV1,
@@ -54,14 +54,33 @@ export async function filterPersonalMemories(
   return (await readPersonalMemories(memories, sessionId, executionRunId)).memories
 }
 
-async function readPersonalMemories(
+/**
+ * Filter memories for a Host-stamped paired audience (`ADR-0243` phase 2B-2).
+ *
+ * `"owner"` keeps owner-attributed rows while withholding foreign-person marks;
+ * `"member"` (and any unknown role) has no personal reader, so personal-marked
+ * and unproven owner-legacy memories are withheld while unmarked shared/project
+ * rows remain visible when their source messages are unmarked.
+ */
+export async function filterPairedMemories(
   memories: readonly Memory[],
-  sessionId?: string,
-  executionRunId?: string
-): Promise<{ memories: Memory[]; marks: Map<string, PersonalMarkV1[]> }> {
-  if (!memories.length) return { memories: [], marks: new Map() }
+  pairedReader: unknown
+): Promise<Memory[]> {
+  if (!memories.length) return []
   const db = getDb()
-  const sources = await Promise.all(
+  const sources = await collectMemorySourceMessages(db, memories)
+  if (getDb() !== db) throw new Error("Personal memory database changed")
+  const history = await preparePairedHistory(sources.flat(), pairedReader)
+  if (getDb() !== db) throw new Error("Personal memory database changed")
+  const withheld = new Set(history.withheldMessageIds)
+  return memories.filter((memory) => !withheld.has(memory.id))
+}
+
+async function collectMemorySourceMessages(
+  db: ReturnType<typeof getDb>,
+  memories: readonly Memory[]
+): Promise<PersonalHistoryMessage[][]> {
+  return Promise.all(
     memories.map(async (memory): Promise<PersonalHistoryMessage[]> => {
       const stored = memory as Memory & {
         personalMarks?: PersonalMarkV1[]
@@ -106,8 +125,21 @@ async function readPersonalMemories(
       ]
     })
   )
+}
+
+async function readPersonalMemories(
+  memories: readonly Memory[],
+  sessionId?: string,
+  executionRunId?: string
+): Promise<{ memories: Memory[]; marks: Map<string, PersonalMarkV1[]> }> {
+  if (!memories.length) return { memories: [], marks: new Map() }
+  const db = getDb()
+  const sources = await collectMemorySourceMessages(db, memories)
   if (getDb() !== db) throw new Error("Personal memory database changed")
-  const history = await preparePersonalHistory(sessionId, sources.flat(), { executionRunId })
+  const history = await preparePersonalHistory(sessionId, sources.flat(), {
+    executionRunId,
+    commitMarks: false,
+  })
   if (getDb() !== db) throw new Error("Personal memory database changed")
   const withheld = new Set(history.withheldMessageIds)
   const marks = new Map<string, PersonalMarkV1[]>()
@@ -139,20 +171,42 @@ export function withPersonalMemoryVisibility(
       sourceMarks.set(id, mergePersonalMarks(sourceMarks.get(id), marks))
     return result.memories
   }
+  const markInjectedMemories = async (ids: readonly string[]) => {
+    if (!ids.length) return
+    if (getDb() !== db) throw new Error("Personal memory database changed")
+    const missingIds = [...new Set(ids.filter((id) => !sourceMarks.has(id)))]
+    if (missingIds.length > 0) {
+      const rows = (await db.memories.bulkGet(missingIds)).filter(
+        (row): row is Memory => row !== undefined
+      )
+      if (rows.length > 0) await visible(rows)
+    }
+    const marks = ids.flatMap((id) => sourceMarks.get(id) ?? [])
+    if (!marks.length) return
+    const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
+    await addPersonalMarksToRun({ sessionId, executionRunId }, mergePersonalMarks(marks))
+  }
   return {
     ...deps,
-    markInjectedMemories: async (ids) => {
-      if (getDb() !== db) throw new Error("Personal memory database changed")
-      const marks = ids.flatMap((id) => {
-        const known = sourceMarks.get(id)
-        if (!known) throw new Error("Personal memory source unavailable")
-        return known
-      })
-      const { addPersonalMarksToRun } = await import("@/lib/execution/personal-marks")
-      await addPersonalMarksToRun({ sessionId, executionRunId }, mergePersonalMarks(marks))
-    },
+    markInjectedMemories,
     loadCandidates: async (reader) => visible(await deps.loadCandidates(reader)),
     loadProcedural: async (reader) => visible(await deps.loadProcedural(reader)),
+    ...(deps.rerank
+      ? {
+          rerank: async (query, candidates, topK) => {
+            if (candidates.length < 2) return null
+            if (!candidates.every((candidate) => hasNoLeakingPii(candidate.memory.text))) {
+              return null
+            }
+            try {
+              await markInjectedMemories(candidates.map((candidate) => candidate.memory.id))
+            } catch {
+              return null
+            }
+            return deps.rerank!(query, candidates, topK)
+          },
+        }
+      : {}),
     ...(deps.loadHistoricalCandidates
       ? {
           loadHistoricalCandidates: async (
@@ -207,7 +261,7 @@ async function resolveMemoryBackendOutcome(
   prebuiltTwinDeps?: PrebuiltTwinDeps
 ): Promise<{ backend?: MemoryBackend; mode: MemoryRetrievalMode }> {
   if (!config.hybridEnabled) return { mode: { kind: "bm25", reason: "hybrid_disabled" } }
-  const twinDeps = prebuiltTwinDeps ?? (await tryBuildTwinDeps())
+  const twinDeps = prebuiltTwinDeps ?? (await tryBuildTwinDeps({ requireEnabled: false }))
   const store = twinDeps?.store
   const embedding = twinDeps?.embedding
   if (!store || !embedding) return { mode: { kind: "bm25", reason: "no_backend" } }

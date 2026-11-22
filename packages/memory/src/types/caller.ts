@@ -61,6 +61,13 @@ export interface TrustedMemoryCaller {
    * to this caller entirely.
    */
   namespaces?: MemoryCallerNamespaces
+  /**
+   * Host-stamped paired audience (`ADR-0243` phase 2B-2). Present on Companion
+   * requests: `"owner"` retains local-person memories while withholding
+   * foreign-person marks; `"member"` has no personal reader and cannot verify
+   * procedural instructions.
+   */
+  pairedReader?: "owner" | "member"
 }
 
 /**

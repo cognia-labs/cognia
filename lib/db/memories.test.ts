@@ -10,10 +10,8 @@ import {
 } from "@cognia/memory/retrieve/retriever"
 import {
   ACCESS_BUMP_COOLDOWN_MS,
-  clearMemories,
   countActive,
   createMemory,
-  getMemoriesByVectorDocIds,
   getMemory,
   hardDeleteMemories,
   hardDeleteMemory,
@@ -29,13 +27,14 @@ import {
   recordRetrievalFeedback,
   restoreArchivedMemory,
   restoreMemoryRevision,
-  setMemoriesPinned,
   setMemoryPinned,
   touchMemories,
   updateMemory,
   type MemoryCreateInput,
   type ListMemoriesQuery,
 } from "./memories"
+import { listMessages, persistMessages } from "./messages"
+import { mergeMemorySourcesIntoLastAssistant } from "@/lib/chat/sdk-message-adapter"
 
 function buildInput(overrides: Partial<MemoryCreateInput> = {}): MemoryCreateInput {
   return {
@@ -552,14 +551,6 @@ describe("listing & scope-union", () => {
     expect(await countActive("character", "charA")).toBe(1)
     expect(await countActive("character")).toBe(2) // both chars
   })
-
-  it("getMemoriesByVectorDocIds maps doc ids to rows", async () => {
-    await createMemory(buildInput({ id: "m1", vectorDocId: "v1" }))
-    await createMemory(buildInput({ id: "m2", vectorDocId: "v2" }))
-    const rows = await getMemoriesByVectorDocIds(["v1", "v2", "vX"])
-    expect(rows.map((m) => m.id).sort()).toEqual(["m1", "m2"])
-    expect(await getMemoriesByVectorDocIds([])).toEqual([])
-  })
 })
 
 describe("delete & clear", () => {
@@ -587,24 +578,44 @@ describe("delete & clear", () => {
     })
   })
 
-  it("clearMemories deletes matching rows and returns the count", async () => {
-    await createMemory(buildInput({ id: "g1", scope: "global" }))
-    await createMemory(buildInput({ id: "cA", scope: "character", characterId: "charA" }))
-    const cleared = await clearMemories({ scope: "global" })
-    expect(cleared).toBe(1)
-    expect(await getMemory("g1")).toBeUndefined()
-    expect(await getMemory("cA")).toBeDefined()
-  })
+  it("hardDeleteMemory scrubs persisted literal excerpts from reply SourcesPart citations (N4)", async () => {
+    const sampleText = "The synthetic project uses a lilac release marker."
+    await createMemory(buildInput({ id: "m1", text: sampleText }))
+    await createMemory(buildInput({ id: "m2", text: "Keep this unrelated memory." }))
+    await getDb().sessions.put({
+      id: "chat-n4",
+      title: "Synthetic reply",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    const reply = mergeMemorySourcesIntoLastAssistant(
+      [{ id: "reply-1", role: "assistant", parts: [{ type: "text", text: "Generic response." }] }],
+      {
+        retrievedMemories: [
+          { id: "m1", type: "semantic", text: sampleText, score: 0.8 },
+          { id: "m2", type: "semantic", text: "Keep this unrelated memory.", score: 0.6 },
+        ],
+      }
+    )
+    await persistMessages("chat-n4", reply)
 
-  it("clearMemories returns 0 when nothing matches", async () => {
-    expect(await clearMemories({ scope: "global" })).toBe(0)
-  })
+    await hardDeleteMemory("m1")
 
-  it("clearMemories with no query clears everything", async () => {
-    await createMemory(buildInput({ id: "g1" }))
-    await createMemory(buildInput({ id: "g2" }))
-    expect(await clearMemories()).toBe(2)
-    expect((await listMemories()).length).toBe(0)
+    expect(await getMemory("m1")).toBeUndefined()
+    const storedParts = (await listMessages("chat-n4"))[0]?.parts ?? []
+    expect(JSON.stringify(storedParts)).not.toContain(sampleText)
+    expect(storedParts).toContainEqual(
+      expect.objectContaining({
+        type: "sources",
+        sources: expect.arrayContaining([
+          expect.objectContaining({ memoryRef: "m1", title: "" }),
+          expect.objectContaining({
+            memoryRef: "m2",
+            snippet: "Keep this unrelated memory.",
+          }),
+        ]),
+      })
+    )
   })
 
   it("hardDeleteMemories removes the listed rows and returns the count", async () => {
@@ -619,21 +630,6 @@ describe("delete & clear", () => {
 
   it("hardDeleteMemories is a no-op on empty input", async () => {
     expect(await hardDeleteMemories([])).toBe(0)
-  })
-
-  it("setMemoriesPinned pins/unpins the listed rows in one pass", async () => {
-    await createMemory(buildInput({ id: "a", pinned: false }))
-    await createMemory(buildInput({ id: "b", pinned: false }))
-    await setMemoriesPinned(["a", "b"], true)
-    expect((await getMemory("a"))?.pinned).toBe(true)
-    expect((await getMemory("b"))?.pinned).toBe(true)
-    await setMemoriesPinned(["a"], false)
-    expect((await getMemory("a"))?.pinned).toBe(false)
-    expect((await getMemory("b"))?.pinned).toBe(true)
-  })
-
-  it("setMemoriesPinned is a no-op on empty input", async () => {
-    await expect(setMemoriesPinned([], true)).resolves.toBeUndefined()
   })
 })
 
@@ -1183,30 +1179,5 @@ describe("revision-aware delete & clear", () => {
     expect(await listMemoryRevisions("m1")).toEqual([])
     // Listed explicitly, but still history of a deleted owner: no audit row.
     expect(await db.memoryAuditEvents.where("memoryId").equals(m1Revisions[0].id).count()).toBe(0)
-  })
-
-  it("clearMemories on a scope reaches snapshots through their owners", async () => {
-    const { m1Revisions, m2Revisions } = await seedWithHistory()
-    expect(await clearMemories({ scope: "global" })).toBe(2)
-    expect(await listMemories({ includeRevisions: true })).toEqual([])
-    for (const revision of [...m1Revisions, ...m2Revisions]) {
-      expect(await getMemory(revision.id)).toBeUndefined()
-    }
-  })
-
-  it("clearMemories({ status: 'invalidated' }) drops forgotten memories and all revision history", async () => {
-    const { m1Revisions, m2Revisions } = await seedWithHistory()
-    await createMemory(buildInput({ id: "forgotten" }))
-    await invalidateMemory("forgotten")
-
-    // One forgotten memory plus three snapshots.
-    expect(await clearMemories({ status: "invalidated" })).toBe(4)
-
-    expect(await getMemory("forgotten")).toBeUndefined()
-    for (const revision of [...m1Revisions, ...m2Revisions]) {
-      expect(await getMemory(revision.id)).toBeUndefined()
-    }
-    expect((await listMemories()).map((m) => m.id).sort()).toEqual(["m1", "m2"])
-    expect((await getMemory("m1"))?.text).toBe("v3")
   })
 })

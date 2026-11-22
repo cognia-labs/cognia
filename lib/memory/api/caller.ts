@@ -48,11 +48,6 @@ export function localUserCaller(): TrustedMemoryCaller {
   return { principalId: "local-user", transport: "local-ui" }
 }
 
-/** The TUI memory controller — same authority as the local UI. */
-export function cliCaller(): TrustedMemoryCaller {
-  return { principalId: "cli:tui", transport: "cli" }
-}
-
 /** The local MCP bridge process serving configured clients. */
 export function mcpCaller(): TrustedMemoryCaller {
   return { principalId: "mcp:bridge", transport: "mcp" }
@@ -67,23 +62,22 @@ export function pluginCaller(pluginId: string): TrustedMemoryCaller {
 }
 
 /**
- * A remote companion client. `callerDeviceId` is the value the Rust RPC layer
- * stamps over the client's self-asserted id; absent on routes that do not
- * inject it, where the principal degrades to the transport-level one.
+ * A remote companion client. `callerDeviceId` and `pairedReader` are the values
+ * the Rust RPC layer stamps over client-supplied fields; absent on routes that
+ * do not inject a device id, where the principal degrades to the transport-level one.
  */
-export function companionCaller(callerDeviceId?: string): TrustedMemoryCaller {
+export function companionCaller(
+  callerDeviceId?: string,
+  pairedReader?: "owner" | "member"
+): TrustedMemoryCaller {
   return {
     principalId: callerDeviceId ? `companion:${callerDeviceId}` : "companion:device",
     transport: "companion",
+    ...(pairedReader ? { pairedReader } : {}),
   }
 }
 
 /** A workflow node performing a memory operation inside an execution run. */
 export function workflowCaller(runId?: string): TrustedMemoryCaller {
   return { principalId: runId ? `workflow:${runId}` : "workflow", transport: "workflow" }
-}
-
-/** An internal maintenance/extraction worker. */
-export function internalJobCaller(workerId: string): TrustedMemoryCaller {
-  return { principalId: `job:${workerId}`, transport: "internal-job" }
 }
