@@ -34,6 +34,9 @@ pub struct MacOSScheduler {
     available: bool,
     /// LaunchAgents directory path
     agents_dir: PathBuf,
+    /// Command every agent operation runs as `<command…> <args>`. Always
+    /// `["launchctl"]` outside tests, which point it at a stub script.
+    launchctl_command: Vec<String>,
 }
 
 impl MacOSScheduler {
@@ -50,7 +53,150 @@ impl MacOSScheduler {
         Self {
             available,
             agents_dir,
+            launchctl_command: vec!["launchctl".to_string()],
         }
+    }
+
+    /// A `launchctl` invocation (see `launchctl_command`).
+    fn launchctl(&self) -> Command {
+        match self.launchctl_command.split_first() {
+            Some((program, prefix)) => {
+                let mut command = Command::new(program);
+                command.args(prefix);
+                command
+            }
+            None => Command::new("launchctl"),
+        }
+    }
+
+    /// The task a definition describes, loaded under `label`.
+    fn task_from_input(label: &str, input: CreateSystemTaskInput) -> SystemTask {
+        let mut task = SystemTask {
+            id: label.to_string(),
+            name: input.name,
+            description: input.description,
+            trigger: input.trigger,
+            action: input.action,
+            run_level: input.run_level,
+            status: SystemTaskStatus::Enabled,
+            requires_admin: false,
+            tags: input.tags,
+            created_at: Some(now_iso()),
+            updated_at: Some(now_iso()),
+            last_run_at: None,
+            next_run_at: None,
+            last_result: None,
+            metadata_state: TaskMetadataState::Full,
+        };
+        task.requires_admin = task.check_requires_admin();
+        task
+    }
+
+    /// Write a rendered plist and load it.
+    fn install_plist(
+        &self,
+        task: &SystemTask,
+        plist_path: &std::path::Path,
+        content: &str,
+    ) -> Result<()> {
+        if matches!(&task.trigger, SystemTaskTrigger::Once { .. }) {
+            fs::DirBuilder::new()
+                .recursive(true)
+                .mode(0o700)
+                .create(Self::once_marker_root())?;
+        }
+        fs::write(plist_path, content)?;
+        debug!("Wrote plist at {:?}", plist_path);
+
+        let output = self
+            .launchctl()
+            .args(["load", "-w"])
+            .arg(plist_path)
+            .output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error!("Failed to load agent: {}", stderr);
+            return Err(SchedulerError::Platform(stderr.to_string()));
+        }
+        Ok(())
+    }
+
+    /// Remove the one-attempt claim of a one-time plist (only an empty
+    /// directory at the exact owned UUID path), as deleting the plist does.
+    fn remove_once_marker(content: &str) -> std::io::Result<()> {
+        if let Some(marker) =
+            Self::once_guard_marker(content, &Self::extract_program_arguments(content))
+        {
+            match fs::remove_dir(marker) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+
+    /// Replace the plist of the agent already loaded as `task.id`.
+    ///
+    /// The previous plist is kept in memory until the new one is written and
+    /// loaded; a failure puts it back (and reloads it when it was loaded), so
+    /// a failed update leaves the task exactly as it was. Only after success
+    /// is the previous one-time claim removed: the new plist carries a fresh
+    /// one, exactly as a delete followed by a create would leave it.
+    fn replace_plist(&self, task: &SystemTask, content: &str) -> Result<()> {
+        let plist_path = self.agents_dir.join(format!("{}.plist", task.id));
+        let previous = match fs::read_to_string(&plist_path) {
+            Ok(previous) => Some(previous),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+            Err(e) => return Err(e.into()),
+        };
+        let was_loaded = previous.is_some()
+            && self
+                .launchctl()
+                .args(["list", task.id.as_str()])
+                .output()
+                .map(|output| output.status.success())
+                .unwrap_or(false);
+        if previous.is_some() {
+            let _ = self
+                .launchctl()
+                .args(["unload", "-w"])
+                .arg(&plist_path)
+                .output();
+        }
+        if let Err(error) = self.install_plist(task, &plist_path, content) {
+            let restored = match &previous {
+                Some(previous) => fs::write(&plist_path, previous),
+                None => match fs::remove_file(&plist_path) {
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    other => other,
+                },
+            };
+            match restored {
+                Ok(()) if was_loaded => {
+                    let _ = self
+                        .launchctl()
+                        .args(["load", "-w"])
+                        .arg(&plist_path)
+                        .output();
+                }
+                Ok(()) => {}
+                Err(e) => error!(
+                    "Failed to restore {:?} after a failed update: {}",
+                    plist_path, e
+                ),
+            }
+            return Err(error);
+        }
+        if let Some(previous) = &previous {
+            if let Err(e) = Self::remove_once_marker(previous) {
+                warn!(
+                    "Could not remove the previous one-time claim of {}: {}",
+                    task.id, e
+                );
+            }
+        }
+        Ok(())
     }
 
     /// Check if launchctl is available
@@ -616,7 +762,8 @@ impl MacOSScheduler {
         let name = Self::label_to_task(label)?;
 
         // Check status with launchctl
-        let status = Command::new("launchctl")
+        let status = self
+            .launchctl()
             .args(["list", label])
             .output()
             .map(|o| {
@@ -711,60 +858,62 @@ impl SystemScheduler for MacOSScheduler {
             return Err(SchedulerError::TaskAlreadyExists(task_name));
         }
 
-        // Build task object
-        let mut task = SystemTask {
-            id: label.clone(),
-            name: input.name,
-            description: input.description,
-            trigger: input.trigger,
-            action: input.action,
-            run_level: input.run_level,
-            status: SystemTaskStatus::Enabled,
-            requires_admin: false,
-            tags: input.tags,
-            created_at: Some(now_iso()),
-            updated_at: Some(now_iso()),
-            last_run_at: None,
-            next_run_at: None,
-            last_result: None,
-            metadata_state: TaskMetadataState::Full,
-        };
-
-        task.requires_admin = task.check_requires_admin();
-
-        // Generate and write plist
+        let task = Self::task_from_input(&label, input);
         let plist_content = Self::generate_plist(&task)?;
-        if matches!(&task.trigger, SystemTaskTrigger::Once { .. }) {
-            fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(Self::once_marker_root())?;
-        }
-        fs::write(&plist_path, &plist_content)?;
-
-        debug!("Created plist at {:?}", plist_path);
-
-        // Load the agent
-        let output = Command::new("launchctl")
-            .args(["load", "-w"])
-            .arg(&plist_path)
-            .output()?;
-
-        if !output.status.success() {
+        if let Err(error) = self.install_plist(&task, &plist_path, &plist_content) {
             // Clean up plist on failure
             let _ = fs::remove_file(&plist_path);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            error!("Failed to load agent: {}", stderr);
-            return Err(SchedulerError::Platform(stderr.to_string()));
+            return Err(error);
         }
 
         info!("Created macOS task: {}", label);
         Ok(task)
     }
 
+    /// Update a task without ever losing it (F11).
+    ///
+    /// Deleting first and then creating lost the original whenever the create
+    /// failed: a rename onto an occupied label, a definition launchd refused
+    /// to load. The new plist is rendered before anything is touched. A
+    /// rename creates the new agent first (`create_task` refuses an occupied
+    /// label before writing) and only then retires the old one; a same-label
+    /// update replaces the plist in place and restores it on failure.
     async fn update_task(&self, id: &str, input: CreateSystemTaskInput) -> Result<SystemTask> {
-        self.delete_task(id).await?;
-        self.create_task(input).await
+        if !self.available {
+            return Err(SchedulerError::NotAvailable(
+                "launchd not available".to_string(),
+            ));
+        }
+
+        let label = Self::task_to_label(&generate_task_name(&input.name));
+        if label != id {
+            let created = self.create_task(input).await?;
+            if let Err(error) = self.delete_task(id).await {
+                if self.agents_dir.join(format!("{}.plist", id)).exists() {
+                    // The old agent is still there: withdraw the new one so
+                    // the update leaves exactly the definition it started from.
+                    if let Err(rollback) = self.delete_task(&created.id).await {
+                        error!(
+                            "Could not withdraw {} after failing to retire {}: {}",
+                            created.id, id, rollback
+                        );
+                    }
+                    return Err(error);
+                }
+                warn!(
+                    "Renamed {} to {}; retiring the old agent reported: {}",
+                    id, created.id, error
+                );
+            }
+            return Ok(created);
+        }
+
+        fs::create_dir_all(&self.agents_dir)?;
+        let task = Self::task_from_input(id, input);
+        let plist_content = Self::generate_plist(&task)?;
+        self.replace_plist(&task, &plist_content)?;
+        info!("Updated macOS task: {}", id);
+        Ok(task)
     }
 
     async fn delete_task(&self, id: &str) -> Result<bool> {
@@ -775,7 +924,8 @@ impl SystemScheduler for MacOSScheduler {
         }
 
         // Unload the agent
-        let _ = Command::new("launchctl")
+        let _ = self
+            .launchctl()
             .args(["unload", "-w"])
             .arg(self.agents_dir.join(format!("{}.plist", id)))
             .output();
@@ -784,16 +934,7 @@ impl SystemScheduler for MacOSScheduler {
         let plist_path = self.agents_dir.join(format!("{}.plist", id));
         if plist_path.exists() {
             if let Ok(content) = fs::read_to_string(&plist_path) {
-                if let Some(marker) =
-                    Self::once_guard_marker(&content, &Self::extract_program_arguments(&content))
-                {
-                    // Only an empty directory at the exact owned UUID path.
-                    match fs::remove_dir(marker) {
-                        Ok(()) => {}
-                        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                        Err(e) => return Err(e.into()),
-                    }
-                }
+                Self::remove_once_marker(&content)?;
             }
             fs::remove_file(&plist_path)?;
             info!("Deleted macOS task: {}", id);
@@ -832,7 +973,8 @@ impl SystemScheduler for MacOSScheduler {
     async fn enable_task(&self, id: &str) -> Result<bool> {
         let plist_path = self.agents_dir.join(format!("{}.plist", id));
 
-        let output = Command::new("launchctl")
+        let output = self
+            .launchctl()
             .args(["load", "-w"])
             .arg(&plist_path)
             .output()?;
@@ -843,7 +985,8 @@ impl SystemScheduler for MacOSScheduler {
     async fn disable_task(&self, id: &str) -> Result<bool> {
         let plist_path = self.agents_dir.join(format!("{}.plist", id));
 
-        let output = Command::new("launchctl")
+        let output = self
+            .launchctl()
             .args(["unload", "-w"])
             .arg(&plist_path)
             .output()?;
@@ -877,7 +1020,7 @@ impl SystemScheduler for MacOSScheduler {
             });
         }
 
-        let output = Command::new("launchctl").args(["start", id]).output()?;
+        let output = self.launchctl().args(["start", id]).output()?;
 
         let duration_ms = start.elapsed().as_millis() as u64;
 
@@ -1180,6 +1323,7 @@ mod tests {
         let scheduler = MacOSScheduler {
             available: true,
             agents_dir: dir.path().to_path_buf(),
+            launchctl_command: vec!["launchctl".to_string()],
         };
         let result = scheduler.run_task_now(&task.id).await.unwrap();
         assert!(result.success);
@@ -1197,6 +1341,7 @@ mod tests {
         let scheduler = MacOSScheduler {
             available: true,
             agents_dir: dir.path().to_path_buf(),
+            launchctl_command: vec!["launchctl".to_string()],
         };
         for from_env in [false, true] {
             let mut task = once_task("2999-01-01T00:00:00Z");
@@ -1362,6 +1507,7 @@ mod tests {
         let scheduler = MacOSScheduler {
             available: true,
             agents_dir: PathBuf::from("/tmp"),
+            launchctl_command: vec!["launchctl".to_string()],
         };
 
         for expression in [
@@ -1432,5 +1578,189 @@ mod tests {
         );
         // A label outside our namespace entirely is rejected.
         assert_eq!(MacOSScheduler::label_to_task("com.apple.something"), None);
+    }
+
+    fn command_input(name: &str, message: &str) -> CreateSystemTaskInput {
+        CreateSystemTaskInput {
+            name: name.to_string(),
+            description: None,
+            trigger: SystemTaskTrigger::Interval { seconds: 3600 },
+            action: SystemTaskAction::RunCommand {
+                command: "/bin/echo".to_string(),
+                args: vec![message.to_string()],
+                working_dir: None,
+                env: HashMap::new(),
+            },
+            run_level: RunLevel::User,
+            tags: vec![],
+        }
+    }
+
+    /// A scheduler over a temporary agents directory whose `launchctl` is a
+    /// shell script: it logs every call and then runs `body` (which may
+    /// `exit 1` to fail a call). Run through `/bin/sh`, never exec'd.
+    fn stub_scheduler(dir: &std::path::Path, body: &str) -> (MacOSScheduler, PathBuf) {
+        let agents = dir.join("agents");
+        fs::create_dir_all(&agents).unwrap();
+        let log = dir.join("launchctl.log");
+        let script = dir.join("launchctl.sh");
+        fs::write(
+            &script,
+            format!("echo \"$@\" >> '{}'\n{}\nexit 0\n", log.display(), body),
+        )
+        .unwrap();
+        let scheduler = MacOSScheduler {
+            available: true,
+            agents_dir: agents,
+            launchctl_command: vec!["/bin/sh".to_string(), script.display().to_string()],
+        };
+        (scheduler, log)
+    }
+
+    fn plist_of(scheduler: &MacOSScheduler, id: &str) -> Option<Vec<u8>> {
+        fs::read(scheduler.agents_dir.join(format!("{id}.plist"))).ok()
+    }
+
+    #[tokio::test]
+    async fn rename_onto_an_occupied_task_keeps_the_original() {
+        // F11: update used to delete the original before the create failed
+        // (the audit's full-source harness reproduced exactly this).
+        let dir = tempfile::tempdir().unwrap();
+        let (scheduler, _log) = stub_scheduler(dir.path(), "");
+        let original = scheduler
+            .create_task(command_input("original-a", "a"))
+            .await
+            .unwrap();
+        let occupied = scheduler
+            .create_task(command_input("occupied-b", "b"))
+            .await
+            .unwrap();
+        let original_plist = plist_of(&scheduler, &original.id);
+        let occupied_plist = plist_of(&scheduler, &occupied.id);
+
+        let result = scheduler
+            .update_task(&original.id, command_input("occupied-b", "renamed"))
+            .await;
+
+        assert!(matches!(result, Err(SchedulerError::TaskAlreadyExists(_))));
+        assert!(original_plist.is_some());
+        assert_eq!(plist_of(&scheduler, &original.id), original_plist);
+        assert_eq!(plist_of(&scheduler, &occupied.id), occupied_plist);
+    }
+
+    #[tokio::test]
+    async fn rename_creates_the_new_agent_before_retiring_the_old() {
+        let dir = tempfile::tempdir().unwrap();
+        let (scheduler, log) = stub_scheduler(dir.path(), "");
+        let original = scheduler
+            .create_task(command_input("original-a", "a"))
+            .await
+            .unwrap();
+        fs::write(&log, "").unwrap();
+
+        let renamed = scheduler
+            .update_task(&original.id, command_input("renamed", "a"))
+            .await
+            .unwrap();
+
+        assert_eq!(
+            renamed.id,
+            MacOSScheduler::task_to_label(&generate_task_name("renamed"))
+        );
+        assert!(plist_of(&scheduler, &renamed.id).is_some());
+        assert!(plist_of(&scheduler, &original.id).is_none());
+        let calls = fs::read_to_string(&log).unwrap();
+        let path_of = |id: &str| scheduler.agents_dir.join(format!("{id}.plist"));
+        let loaded_new = calls
+            .find(&format!("load -w {}", path_of(&renamed.id).display()))
+            .expect("new agent loaded");
+        let unloaded_old = calls
+            .find(&format!("unload -w {}", path_of(&original.id).display()))
+            .expect("old agent unloaded");
+        assert!(loaded_new < unloaded_old, "{calls}");
+    }
+
+    #[tokio::test]
+    async fn failed_same_label_update_restores_the_previous_plist() {
+        let dir = tempfile::tempdir().unwrap();
+        // launchd refuses to load any definition that runs NEWDEF.
+        let (scheduler, log) = stub_scheduler(
+            dir.path(),
+            "if [ \"$1\" = load ] && grep -q NEWDEF \"$3\"; then exit 1; fi",
+        );
+        let task = scheduler
+            .create_task(command_input("keep", "old"))
+            .await
+            .unwrap();
+        let before = plist_of(&scheduler, &task.id);
+
+        let result = scheduler
+            .update_task(&task.id, command_input("keep", "NEWDEF"))
+            .await;
+
+        assert!(matches!(result, Err(SchedulerError::Platform(_))));
+        assert!(before.is_some());
+        assert_eq!(plist_of(&scheduler, &task.id), before);
+        let calls = fs::read_to_string(&log).unwrap();
+        let reload = format!(
+            "load -w {}",
+            scheduler
+                .agents_dir
+                .join(format!("{}.plist", task.id))
+                .display()
+        );
+        assert_eq!(
+            calls.lines().last(),
+            Some(reload.as_str()),
+            "the restored agent is loaded again: {calls}"
+        );
+    }
+
+    #[tokio::test]
+    async fn invalid_definition_never_touches_the_existing_agent() {
+        let dir = tempfile::tempdir().unwrap();
+        let (scheduler, log) = stub_scheduler(dir.path(), "");
+        let task = scheduler
+            .create_task(command_input("keep", "old"))
+            .await
+            .unwrap();
+        let before = plist_of(&scheduler, &task.id);
+        fs::write(&log, "").unwrap();
+
+        let result = scheduler
+            .update_task(
+                &task.id,
+                CreateSystemTaskInput {
+                    action: SystemTaskAction::OpenUrl {
+                        url: "javascript://x".to_string(),
+                    },
+                    ..command_input("keep", "old")
+                },
+            )
+            .await;
+
+        assert!(matches!(result, Err(SchedulerError::InvalidConfig(_))));
+        assert_eq!(plist_of(&scheduler, &task.id), before);
+        assert_eq!(fs::read_to_string(&log).unwrap(), "", "launchd was touched");
+    }
+
+    #[tokio::test]
+    async fn same_label_update_replaces_the_plist_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let (scheduler, _log) = stub_scheduler(dir.path(), "");
+        let task = scheduler
+            .create_task(command_input("keep", "old"))
+            .await
+            .unwrap();
+
+        let updated = scheduler
+            .update_task(&task.id, command_input("keep", "new"))
+            .await
+            .unwrap();
+
+        assert_eq!(updated.id, task.id);
+        let plist = String::from_utf8(plist_of(&scheduler, &task.id).unwrap()).unwrap();
+        assert!(plist.contains("<string>new</string>"), "{plist}");
+        assert!(!plist.contains("<string>old</string>"), "{plist}");
     }
 }

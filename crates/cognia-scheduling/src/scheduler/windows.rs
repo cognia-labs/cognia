@@ -19,6 +19,15 @@ use super::types::{
     SystemTriggerKind, TaskMetadataState, TaskRunResult, TranslationValidation, TriggerCapability,
 };
 
+/// How an update reaches the new definition (see `update_task`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UpdatePlan {
+    /// Same task name: `/Create /F` replaces it in place.
+    Replace,
+    /// New name: create the new task, then retire the old one.
+    Rename,
+}
+
 /// Windows Task Scheduler implementation
 pub struct WindowsScheduler {
     /// Whether the scheduler is available
@@ -83,17 +92,14 @@ impl WindowsScheduler {
                 ])
             }
             SystemTaskTrigger::Once { run_at } => {
-                // Parse datetime and extract date/time
-                let dt = chrono::DateTime::parse_from_rfc3339(run_at).map_err(|e| {
-                    SchedulerError::InvalidConfig(format!("Invalid datetime: {}", e))
-                })?;
+                let start = Self::once_local_start(run_at)?;
                 Ok(vec![
                     "/SC".to_string(),
                     "ONCE".to_string(),
                     "/SD".to_string(),
-                    dt.format("%m/%d/%Y").to_string(),
+                    start.format("%m/%d/%Y").to_string(),
                     "/ST".to_string(),
-                    dt.format("%H:%M").to_string(),
+                    start.format("%H:%M").to_string(),
                 ])
             }
             SystemTaskTrigger::OnBoot { delay_seconds } => {
@@ -124,6 +130,197 @@ impl WindowsScheduler {
         }
     }
 
+    /// The Task Scheduler path a task with this display name is created at.
+    fn full_task_name(name: &str) -> String {
+        format!("\\{}", generate_task_name(name))
+    }
+
+    /// Task Scheduler names are case-insensitive and rooted at `\`.
+    fn same_task_name(a: &str, b: &str) -> bool {
+        a.trim_start_matches('\\')
+            .eq_ignore_ascii_case(b.trim_start_matches('\\'))
+    }
+
+    fn plan_update(id: &str, new_full_name: &str) -> UpdatePlan {
+        if Self::same_task_name(id, new_full_name) {
+            UpdatePlan::Replace
+        } else {
+            UpdatePlan::Rename
+        }
+    }
+
+    /// The complete `schtasks /Create … /F` argument list for a definition.
+    /// Pure: a definition schtasks cannot express fails here, before any
+    /// existing task is touched. `/F` replaces a task of the same name in
+    /// place, which is what makes a same-name update atomic.
+    fn build_create_args(full_name: &str, input: &CreateSystemTaskInput) -> Result<Vec<String>> {
+        let mut args = vec![
+            "/Create".to_string(),
+            "/TN".to_string(),
+            full_name.to_string(),
+        ];
+
+        // Add trigger arguments
+        args.extend(Self::trigger_to_schtasks_args(&input.trigger)?);
+
+        // Add action
+        let (program, prog_args) = Self::build_action_command(&input.action)?;
+        args.push("/TR".to_string());
+        if prog_args.is_empty() {
+            args.push(format!("\"{}\"", program));
+        } else {
+            args.push(format!("\"{}\" {}", program, prog_args.join(" ")));
+        }
+
+        // Run level
+        if input.run_level == RunLevel::Administrator {
+            args.push("/RL".to_string());
+            args.push("HIGHEST".to_string());
+        }
+
+        // Force create (overwrite)
+        args.push("/F".to_string());
+        Ok(args)
+    }
+
+    fn run_create(args: &[String]) -> Result<()> {
+        debug!("Creating task with args: {:?}", args);
+        let output = Command::new("schtasks").args(args).output()?;
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            error!("Failed to create task: {}", stderr);
+
+            if stderr.contains("Access is denied") {
+                return Err(SchedulerError::AdminRequired(
+                    "Administrator privileges required to create this task".to_string(),
+                ));
+            }
+
+            return Err(SchedulerError::Platform(stderr.to_string()));
+        }
+        Ok(())
+    }
+
+    fn task_exists(&self, full_name: &str) -> Result<bool> {
+        let check = Command::new("schtasks")
+            .args(["/Query", "/TN", full_name])
+            .output()?;
+        Ok(check.status.success())
+    }
+
+    /// The task a definition describes, registered under `full_name`.
+    fn task_from_input(full_name: &str, input: CreateSystemTaskInput) -> SystemTask {
+        let mut task = SystemTask {
+            id: full_name.to_string(),
+            name: input.name,
+            description: input.description,
+            trigger: input.trigger,
+            action: input.action,
+            run_level: input.run_level,
+            status: SystemTaskStatus::Enabled,
+            requires_admin: false,
+            tags: input.tags,
+            created_at: Some(now_iso()),
+            updated_at: Some(now_iso()),
+            last_run_at: None,
+            next_run_at: None,
+            last_result: None,
+            metadata_state: TaskMetadataState::Full,
+        };
+        task.requires_admin = task.check_requires_admin();
+        task
+    }
+
+    /// The local wall-clock minute a one-time trigger starts at.
+    ///
+    /// `/SD` and `/ST` are read in the machine's local time, so formatting the
+    /// input in its own offset moved the run by the difference between that
+    /// offset and the machine's. The instant is converted to local time, and
+    /// an instant with seconds is rounded up to the next minute (`/ST` has
+    /// minute precision) so the task never starts early.
+    fn once_local_start(run_at: &str) -> Result<chrono::DateTime<chrono::Local>> {
+        let dt = chrono::DateTime::parse_from_rfc3339(run_at)
+            .map_err(|e| SchedulerError::InvalidConfig(format!("Invalid datetime: {}", e)))?;
+        let epoch = dt.timestamp() + i64::from(dt.timestamp_subsec_nanos() != 0);
+        let minute = epoch.div_euclid(60) * 60 + if epoch.rem_euclid(60) != 0 { 60 } else { 0 };
+        chrono::DateTime::from_timestamp(minute, 0)
+            .map(|utc| utc.with_timezone(&chrono::Local))
+            .ok_or_else(|| {
+                SchedulerError::InvalidConfig("Datetime is outside the schtasks range".to_string())
+            })
+    }
+
+    /// The months a cron month field names, as schtasks `/M` values, or
+    /// `None` when it names every month.
+    ///
+    /// Accepts numbers 1-12 and JAN-DEC, as single values, `a-b` ranges,
+    /// comma lists and `/n` steps. Anything else is rejected rather than
+    /// widened: a month restriction that is dropped runs the task in months
+    /// the user excluded (ADR-0079: unsupported cron is rejected, never
+    /// approximated).
+    fn parse_month_field(field: &str) -> Result<Option<Vec<&'static str>>> {
+        const MONTHS: [&str; 12] = [
+            "JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC",
+        ];
+        let month = |token: &str| -> Result<u32> {
+            if let Some(index) = MONTHS
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case(token))
+            {
+                return Ok(index as u32 + 1);
+            }
+            Self::parse_cron_number(token, "month", 1, 12)
+        };
+        if field == "*" {
+            return Ok(None);
+        }
+        let mut selected = [false; 12];
+        for part in field.split(',') {
+            let (range, step) = match part.split_once('/') {
+                Some((range, step)) => (range, Self::parse_cron_number(step, "month step", 1, 12)?),
+                None => (part, 1),
+            };
+            let (start, end) = if range == "*" {
+                (1, 12)
+            } else if let Some((start, end)) = range.split_once('-') {
+                (month(start)?, month(end)?)
+            } else {
+                let single = month(range)?;
+                // `5/2` is "from May every second month", as in cron.
+                (single, if part.contains('/') { 12 } else { single })
+            };
+            if start > end {
+                return Err(SchedulerError::InvalidCron(format!(
+                    "Invalid month range: {range}"
+                )));
+            }
+            let mut value = start;
+            while value <= end {
+                selected[(value - 1) as usize] = true;
+                value += step;
+            }
+        }
+        if selected.iter().all(|&on| on) {
+            return Ok(None);
+        }
+        Ok(Some(
+            MONTHS
+                .iter()
+                .zip(selected)
+                .filter_map(|(name, on)| on.then_some(*name))
+                .collect(),
+        ))
+    }
+
+    /// Days in each month schtasks validates `/D` against (February: 29).
+    fn month_length(month: &str) -> u32 {
+        match month {
+            "FEB" => 29,
+            "APR" | "JUN" | "SEP" | "NOV" => 30,
+            _ => 31,
+        }
+    }
+
     /// Convert simplified cron expression to schtasks format
     fn cron_to_schtasks(expression: &str) -> Result<Vec<String>> {
         let parts: Vec<&str> = expression.split_whitespace().collect();
@@ -134,7 +331,41 @@ impl WindowsScheduler {
             )));
         }
 
-        let (minute, hour, dom, _month, dow) = (parts[0], parts[1], parts[2], parts[3], parts[4]);
+        let (minute, hour, dom, month, dow) = (parts[0], parts[1], parts[2], parts[3], parts[4]);
+
+        // A month restriction is expressible only as a MONTHLY schedule on a
+        // fixed day (`/SC MONTHLY /M … /D n`); every other pattern would run
+        // in every month, so it is refused instead of silently widened.
+        if let Some(months) = Self::parse_month_field(month)? {
+            if !(Self::is_cron_number(minute)
+                && Self::is_cron_number(hour)
+                && Self::is_cron_number(dom)
+                && dow == "*")
+            {
+                return Err(SchedulerError::InvalidCron(format!(
+                    "Unsupported cron pattern: {expression} (a month restriction is only \
+                     supported with a fixed minute, hour and day of month)"
+                )));
+            }
+            let minute = Self::parse_minute(minute)?;
+            let hour = Self::parse_hour(hour)?;
+            let day = Self::parse_day_of_month(dom)?;
+            if let Some(short) = months.iter().find(|m| day > Self::month_length(m)) {
+                return Err(SchedulerError::InvalidCron(format!(
+                    "Unsupported cron pattern: {expression} (day {day} does not exist in {short})"
+                )));
+            }
+            return Ok(vec![
+                "/SC".to_string(),
+                "MONTHLY".to_string(),
+                "/M".to_string(),
+                months.join(","),
+                "/D".to_string(),
+                day.to_string(),
+                "/ST".to_string(),
+                format!("{hour:02}:{minute:02}"),
+            ]);
+        }
 
         // Common patterns
         match (minute, hour, dom, dow) {
@@ -783,90 +1014,73 @@ impl SystemScheduler for WindowsScheduler {
             ));
         }
 
-        let task_name = generate_task_name(&input.name);
-        let full_name = format!("\\{}", task_name);
+        let full_name = Self::full_task_name(&input.name);
+        let args = Self::build_create_args(&full_name, &input)?;
 
         // Check if task already exists
-        let check = Command::new("schtasks")
-            .args(["/Query", "/TN", &full_name])
-            .output()?;
-
-        if check.status.success() {
-            return Err(SchedulerError::TaskAlreadyExists(task_name));
+        if self.task_exists(&full_name)? {
+            return Err(SchedulerError::TaskAlreadyExists(
+                full_name.trim_start_matches('\\').to_string(),
+            ));
         }
 
-        // Build command arguments
-        let mut args = vec!["/Create".to_string(), "/TN".to_string(), full_name.clone()];
-
-        // Add trigger arguments
-        let trigger_args = Self::trigger_to_schtasks_args(&input.trigger)?;
-        args.extend(trigger_args);
-
-        // Add action
-        let (program, prog_args) = Self::build_action_command(&input.action)?;
-        args.push("/TR".to_string());
-        if prog_args.is_empty() {
-            args.push(format!("\"{}\"", program));
-        } else {
-            args.push(format!("\"{}\" {}", program, prog_args.join(" ")));
-        }
-
-        // Run level
-        if input.run_level == RunLevel::Administrator {
-            args.push("/RL".to_string());
-            args.push("HIGHEST".to_string());
-        }
-
-        // Force create (overwrite)
-        args.push("/F".to_string());
-
-        debug!("Creating task with args: {:?}", args);
-
-        let output = Command::new("schtasks").args(&args).output()?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            error!("Failed to create task: {}", stderr);
-
-            if stderr.contains("Access is denied") {
-                return Err(SchedulerError::AdminRequired(
-                    "Administrator privileges required to create this task".to_string(),
-                ));
-            }
-
-            return Err(SchedulerError::Platform(stderr.to_string()));
-        }
-
-        info!("Created system task: {}", task_name);
-
-        // Build and return task object
-        let mut task = SystemTask {
-            id: full_name,
-            name: input.name,
-            description: input.description,
-            trigger: input.trigger,
-            action: input.action,
-            run_level: input.run_level,
-            status: SystemTaskStatus::Enabled,
-            requires_admin: false,
-            tags: input.tags,
-            created_at: Some(now_iso()),
-            updated_at: Some(now_iso()),
-            last_run_at: None,
-            next_run_at: None,
-            last_result: None,
-            metadata_state: TaskMetadataState::Full,
-        };
-
-        task.requires_admin = task.check_requires_admin();
-
-        Ok(task)
+        Self::run_create(&args)?;
+        info!("Created system task: {}", full_name);
+        Ok(Self::task_from_input(&full_name, input))
     }
 
+    /// Update a task without ever losing it (F11).
+    ///
+    /// Deleting first and then creating lost the original whenever the create
+    /// failed: a rename onto an occupied name, a definition schtasks refused.
+    /// The new arguments are built before anything is touched. A same-name
+    /// update is one `schtasks /Create /F`, which replaces the definition in
+    /// place and leaves the old one when it fails. A rename creates the new
+    /// task first (refusing an occupied name) and only then retires the old.
     async fn update_task(&self, id: &str, input: CreateSystemTaskInput) -> Result<SystemTask> {
-        // Delete and recreate (schtasks doesn't have a proper update)
-        self.delete_task(id).await?;
-        self.create_task(input).await
+        if !self.available {
+            return Err(SchedulerError::NotAvailable(
+                "Task Scheduler not available".to_string(),
+            ));
+        }
+
+        let full_name = Self::full_task_name(&input.name);
+        let args = Self::build_create_args(&full_name, &input)?;
+        match Self::plan_update(id, &full_name) {
+            UpdatePlan::Replace => {
+                Self::run_create(&args)?;
+                info!("Updated system task: {}", id);
+                Ok(Self::task_from_input(id, input))
+            }
+            UpdatePlan::Rename => {
+                if self.task_exists(&full_name)? {
+                    return Err(SchedulerError::TaskAlreadyExists(
+                        full_name.trim_start_matches('\\').to_string(),
+                    ));
+                }
+                Self::run_create(&args)?;
+                if let Err(error) = self.delete_task(id).await {
+                    if self.task_exists(id).unwrap_or(true) {
+                        // The old task is still there: withdraw the new one so
+                        // the update leaves exactly the definition it started
+                        // from.
+                        if let Err(rollback) = self.delete_task(&full_name).await {
+                            error!(
+                                "Could not withdraw {} after failing to retire {}: {}",
+                                full_name, id, rollback
+                            );
+                        }
+                        return Err(error);
+                    }
+                    warn!(
+                        "Renamed {} to {}; retiring the old task reported: {}",
+                        id, full_name, error
+                    );
+                }
+                info!("Renamed system task {} to {}", id, full_name);
+                Ok(Self::task_from_input(&full_name, input))
+            }
+        }
     }
 
     async fn delete_task(&self, id: &str) -> Result<bool> {
@@ -1045,7 +1259,7 @@ impl SystemScheduler for WindowsScheduler {
     fn get_trigger_capabilities(&self) -> Vec<TriggerCapability> {
         derive_trigger_capabilities(|kind| {
             match kind {
-            SystemTriggerKind::Cron => (true, false, vec![], vec!["Converted to schtasks schedule (MINUTE/HOURLY/DAILY/WEEKLY/MONTHLY). Complex cron patterns may not be fully expressible.".to_string()]),
+            SystemTriggerKind::Cron => (true, false, vec![], vec!["Converted to schtasks schedule (MINUTE/HOURLY/DAILY/WEEKLY/MONTHLY). Patterns schtasks cannot express exactly are rejected, including a month restriction on anything but a fixed day of the month.".to_string()]),
             SystemTriggerKind::Interval => (true, false, vec![], vec!["Uses schtasks MINUTE schedule. Minimum granularity is 1 minute.".to_string()]),
             SystemTriggerKind::Once => (true, false, vec![], vec![]),
             SystemTriggerKind::OnBoot => (true, true, vec![], vec!["Uses schtasks ONSTART. Requires administrator privileges.".to_string()]),
@@ -1101,26 +1315,24 @@ impl SystemScheduler for WindowsScheduler {
                     native_representation: Some(format!("schtasks: /SC MINUTE /MO {}", minutes)),
                 }
             }
-            SystemTaskTrigger::Once { run_at } => {
-                match chrono::DateTime::parse_from_rfc3339(run_at) {
-                    Ok(dt) => TranslationValidation {
-                        valid: true,
-                        errors: vec![],
-                        warnings: vec![],
-                        native_representation: Some(format!(
-                            "schtasks: /SC ONCE /SD {} /ST {}",
-                            dt.format("%m/%d/%Y"),
-                            dt.format("%H:%M")
-                        )),
-                    },
-                    Err(e) => TranslationValidation {
-                        valid: false,
-                        errors: vec![format!("Invalid datetime: {}", e)],
-                        warnings: vec![],
-                        native_representation: None,
-                    },
-                }
-            }
+            SystemTaskTrigger::Once { run_at } => match Self::once_local_start(run_at) {
+                Ok(start) => TranslationValidation {
+                    valid: true,
+                    errors: vec![],
+                    warnings: vec![],
+                    native_representation: Some(format!(
+                        "schtasks: /SC ONCE /SD {} /ST {}",
+                        start.format("%m/%d/%Y"),
+                        start.format("%H:%M")
+                    )),
+                },
+                Err(e) => TranslationValidation {
+                    valid: false,
+                    errors: vec![e.to_string()],
+                    warnings: vec![],
+                    native_representation: None,
+                },
+            },
             SystemTaskTrigger::OnBoot { delay_seconds } => {
                 let repr = if *delay_seconds > 0 {
                     let mins = (*delay_seconds / 60).clamp(1, 59);
@@ -1391,5 +1603,209 @@ mod tests {
             scheduler.validate_trigger_translation(&SystemTaskTrigger::Interval { seconds: 30 });
         assert!(result.valid);
         assert!(!result.warnings.is_empty());
+    }
+
+    fn scheduler() -> WindowsScheduler {
+        WindowsScheduler {
+            available: true,
+            elevated: false,
+        }
+    }
+
+    fn command_input(name: &str, trigger: SystemTaskTrigger) -> CreateSystemTaskInput {
+        CreateSystemTaskInput {
+            name: name.to_string(),
+            description: None,
+            trigger,
+            action: SystemTaskAction::RunCommand {
+                command: "cmd.exe".to_string(),
+                args: vec!["/C".to_string(), "echo".to_string(), "ok".to_string()],
+                working_dir: None,
+                env: std::collections::HashMap::new(),
+            },
+            run_level: RunLevel::User,
+            tags: vec![],
+        }
+    }
+
+    fn local_of(utc: &str) -> chrono::DateTime<chrono::Local> {
+        chrono::DateTime::parse_from_rfc3339(utc)
+            .unwrap()
+            .with_timezone(&chrono::Local)
+    }
+
+    #[test]
+    fn once_start_is_the_local_minute_of_the_absolute_instant() {
+        // `/SD` `/ST` are local time; the input's own offset used to be
+        // written as if it were the machine's.
+        let start = WindowsScheduler::once_local_start("2026-11-18T09:00:00+08:00").unwrap();
+        assert_eq!(start, local_of("2026-11-18T01:00:00Z"));
+        // Seconds round up to the next minute: never early.
+        let start = WindowsScheduler::once_local_start("2026-11-18T01:00:30Z").unwrap();
+        assert_eq!(start, local_of("2026-11-18T01:01:00Z"));
+        assert!(matches!(
+            WindowsScheduler::once_local_start("tomorrow"),
+            Err(SchedulerError::InvalidConfig(_))
+        ));
+
+        let expected = local_of("2026-11-18T01:00:00Z");
+        let trigger = SystemTaskTrigger::Once {
+            run_at: "2026-11-18T09:00:00+08:00".to_string(),
+        };
+        let args = WindowsScheduler::trigger_to_schtasks_args(&trigger).unwrap();
+        assert_eq!(
+            args,
+            vec![
+                "/SC".to_string(),
+                "ONCE".to_string(),
+                "/SD".to_string(),
+                expected.format("%m/%d/%Y").to_string(),
+                "/ST".to_string(),
+                expected.format("%H:%M").to_string(),
+            ]
+        );
+        let validation = scheduler().validate_trigger_translation(&trigger);
+        assert_eq!(
+            validation.native_representation,
+            Some(format!(
+                "schtasks: /SC ONCE /SD {} /ST {}",
+                expected.format("%m/%d/%Y"),
+                expected.format("%H:%M")
+            ))
+        );
+    }
+
+    #[test]
+    fn cron_month_restriction_is_expressed_exactly_or_refused() {
+        let monthly = |months: &str, day: &str| {
+            vec![
+                "/SC".to_string(),
+                "MONTHLY".to_string(),
+                "/M".to_string(),
+                months.to_string(),
+                "/D".to_string(),
+                day.to_string(),
+                "/ST".to_string(),
+                "09:00".to_string(),
+            ]
+        };
+        let convert = |expression: &str| WindowsScheduler::cron_to_schtasks(expression);
+        assert_eq!(convert("0 9 15 1 *").unwrap(), monthly("JAN", "15"));
+        assert_eq!(
+            convert("0 9 15 jan,MAR *").unwrap(),
+            monthly("JAN,MAR", "15")
+        );
+        assert_eq!(
+            convert("0 9 1 */3 *").unwrap(),
+            monthly("JAN,APR,JUL,OCT", "1")
+        );
+        assert_eq!(convert("0 9 1 5/3 *").unwrap(), monthly("MAY,AUG,NOV", "1"));
+        assert_eq!(convert("0 9 30 3-4 *").unwrap(), monthly("MAR,APR", "30"));
+        // Every month named is no restriction at all.
+        assert_eq!(
+            convert("0 9 1 1-12 *").unwrap(),
+            convert("0 9 1 * *").unwrap()
+        );
+
+        // Daily-in-January used to equal daily-all-year: a schedule wider
+        // than the one asked for. Every such pattern is now refused.
+        for expression in [
+            "0 9 * 1 *",
+            "*/5 * * 1 *",
+            "0 * * 6 *",
+            "* * * 1 *",
+            "0 9 * 1 1",
+            "0 9 15 1 1",
+            // schtasks refuses a /D that one of the /M months lacks.
+            "0 9 31 2 *",
+            "0 9 31 1,4 *",
+            // Not months at all.
+            "0 9 15 99 *",
+            "0 9 15 0 *",
+            "0 9 15 FOO *",
+            "0 9 15 6-3 *",
+            "0 9 15 1/0 *",
+        ] {
+            assert!(
+                matches!(convert(expression), Err(SchedulerError::InvalidCron(_))),
+                "expected {expression} to be refused, got {:?}",
+                convert(expression)
+            );
+            let validation = scheduler().validate_trigger_translation(&SystemTaskTrigger::Cron {
+                expression: expression.to_string(),
+                timezone: None,
+            });
+            assert!(!validation.valid, "{expression} validated");
+        }
+        // An unrestricted month still converts as before.
+        assert_eq!(
+            convert("0 9 * * *").unwrap(),
+            vec!["/SC", "DAILY", "/ST", "09:00"]
+                .into_iter()
+                .map(String::from)
+                .collect::<Vec<_>>()
+        );
+        let validation = scheduler().validate_trigger_translation(&SystemTaskTrigger::Cron {
+            expression: "0 9 15 1 *".to_string(),
+            timezone: None,
+        });
+        assert!(validation.valid);
+        assert!(validation
+            .native_representation
+            .unwrap()
+            .contains("/SC MONTHLY /M JAN /D 15 /ST 09:00"));
+    }
+
+    #[test]
+    fn update_replaces_in_place_only_for_the_same_task_name() {
+        let daily = WindowsScheduler::full_task_name("daily");
+        assert_eq!(daily, "\\Cognia_daily");
+        assert_eq!(
+            WindowsScheduler::plan_update("\\Cognia_daily", &daily),
+            UpdatePlan::Replace
+        );
+        // Task Scheduler names are case-insensitive; a listed id may lack the
+        // leading backslash.
+        assert_eq!(
+            WindowsScheduler::plan_update("Cognia_DAILY", &daily),
+            UpdatePlan::Replace
+        );
+        let weekly = WindowsScheduler::full_task_name("weekly");
+        assert_eq!(
+            WindowsScheduler::plan_update("\\Cognia_daily", &weekly),
+            UpdatePlan::Rename
+        );
+    }
+
+    #[test]
+    fn create_args_are_complete_and_validated_before_anything_runs() {
+        let interval = SystemTaskTrigger::Interval { seconds: 600 };
+        let args = WindowsScheduler::build_create_args("\\Cognia_x", &command_input("x", interval))
+            .unwrap();
+        assert_eq!(&args[..3], ["/Create", "/TN", "\\Cognia_x"]);
+        assert_eq!(args.last().map(String::as_str), Some("/F"));
+        assert!(args.windows(2).any(|w| w == ["/MO", "10"]), "{args:?}");
+
+        // An update builds these first, so a definition schtasks cannot take
+        // fails before the existing task is touched.
+        let month_restricted = SystemTaskTrigger::Cron {
+            expression: "0 9 * 1 *".to_string(),
+            timezone: None,
+        };
+        let month_restricted = command_input("x", month_restricted);
+        assert!(matches!(
+            WindowsScheduler::build_create_args("\\Cognia_x", &month_restricted),
+            Err(SchedulerError::InvalidCron(_))
+        ));
+        let bad_url = CreateSystemTaskInput {
+            action: SystemTaskAction::OpenUrl {
+                url: "javascript://x".to_string(),
+            },
+            ..command_input("x", SystemTaskTrigger::Interval { seconds: 600 })
+        };
+        assert!(matches!(
+            WindowsScheduler::build_create_args("\\Cognia_x", &bad_url),
+            Err(SchedulerError::InvalidConfig(_))
+        ));
     }
 }

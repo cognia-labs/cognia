@@ -15,7 +15,9 @@ use super::types::{
     RunLevel, SystemTask, SystemTaskAction, SystemTaskStatus, SystemTaskTrigger, TaskMetadataState,
 };
 
-fn normalize_id(id: &str) -> String {
+/// The form two ids of the same OS task share (Task Scheduler names are
+/// case-insensitive and may or may not carry the leading `\`).
+pub(crate) fn normalize_id(id: &str) -> String {
     id.trim().trim_start_matches('\\').to_lowercase()
 }
 

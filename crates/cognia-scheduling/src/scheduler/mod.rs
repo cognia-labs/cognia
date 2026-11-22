@@ -498,10 +498,8 @@ impl SchedulerState {
                 Ok(Some(task))
             }
             PendingOperation::Update { task_id, input } => {
-                let mut task = self.scheduler().update_task(&task_id, input).await?;
-                task.metadata_state = TaskMetadataState::Full;
-                self.persist_task_metadata(&task);
-                Ok(Some(task))
+                let task = self.scheduler().update_task(&task_id, input).await?;
+                Ok(Some(self.record_updated_task(&task_id, task)))
             }
             PendingOperation::Delete { task_id } => {
                 let _ = self.scheduler().delete_task(&task_id).await?;
@@ -599,10 +597,21 @@ impl SchedulerState {
             ));
         }
 
-        let mut task = self.scheduler().update_task(id, input).await?;
+        let task = self.scheduler().update_task(id, input).await?;
+        Ok(Ok(self.record_updated_task(id, task)))
+    }
+
+    /// Store the metadata of a task an update produced. A rename gives the
+    /// task a new OS id (the id derives from the name), so the old id's row
+    /// is dropped too: left behind, it answers `get_task(old_id)` with a
+    /// degraded ghost of a task that no longer exists.
+    fn record_updated_task(&self, previous_id: &str, mut task: SystemTask) -> SystemTask {
         task.metadata_state = TaskMetadataState::Full;
+        if metadata_store::normalize_id(&task.id) != metadata_store::normalize_id(previous_id) {
+            self.delete_task_metadata(previous_id);
+        }
         self.persist_task_metadata(&task);
-        Ok(Ok(task))
+        task
     }
 
     /// Delete a task
@@ -864,6 +873,9 @@ mod tests {
     #[derive(Default)]
     struct MockScheduler {
         tasks: Mutex<HashMap<String, SystemTask>>,
+        /// Answer an update the way a rename does on a real backend: the
+        /// task comes back under a new id and the old id is gone.
+        rename_on_update: bool,
     }
 
     #[async_trait]
@@ -916,8 +928,14 @@ mod tests {
             if !tasks.contains_key(id) {
                 return Err(SchedulerError::TaskNotFound(id.to_string()));
             }
+            let new_id = if self.rename_on_update {
+                tasks.remove(id);
+                format!("{id}-renamed")
+            } else {
+                id.to_string()
+            };
             let task = SystemTask {
-                id: id.to_string(),
+                id: new_id.clone(),
                 name: input.name,
                 description: input.description,
                 trigger: input.trigger,
@@ -933,7 +951,7 @@ mod tests {
                 last_result: None,
                 metadata_state: TaskMetadataState::Full,
             };
-            tasks.insert(id.to_string(), task.clone());
+            tasks.insert(new_id, task.clone());
             Ok(task)
         }
 
@@ -1033,6 +1051,82 @@ mod tests {
             pending_confirmations: RwLock::new(HashMap::new()),
             alarm: OnceCell::new(),
         }
+    }
+
+    fn build_renaming_state_with_metadata(path: PathBuf) -> SchedulerState {
+        let scheduler: OnceCell<Arc<dyn SystemScheduler>> = OnceCell::new();
+        let _ = scheduler.set(Arc::new(MockScheduler {
+            rename_on_update: true,
+            ..MockScheduler::default()
+        }));
+        SchedulerState {
+            scheduler,
+            metadata_db_path: Some(path),
+            metadata_store: OnceCell::new(),
+            pending_confirmations: RwLock::new(HashMap::new()),
+            alarm: OnceCell::new(),
+        }
+    }
+
+    #[tokio::test]
+    async fn renaming_update_drops_the_old_ids_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = build_renaming_state_with_metadata(dir.path().join("meta.sqlite"));
+        let created = state
+            .create_task_with_confirmation(interval_command_input("before"), true)
+            .await
+            .expect("create")
+            .expect("created");
+        let store = state.metadata().expect("store");
+        let has = |id: &str| store.get_task_metadata(id, None).unwrap().is_some();
+        assert!(has(&created.id));
+
+        let updated = state
+            .update_task(&created.id, interval_command_input("after"), true)
+            .await
+            .expect("update")
+            .expect("updated");
+
+        assert_ne!(updated.id, created.id);
+        assert!(
+            !has(&created.id),
+            "the renamed task's old id still answers with a ghost"
+        );
+        assert_eq!(
+            store
+                .get_task_metadata(&updated.id, None)
+                .unwrap()
+                .map(|task| task.name),
+            Some("after".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn confirmed_renaming_update_drops_the_old_ids_metadata() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = build_renaming_state_with_metadata(dir.path().join("meta.sqlite"));
+        let created = state
+            .create_task_with_confirmation(interval_command_input("before"), true)
+            .await
+            .expect("create")
+            .expect("created");
+        let confirmation = state
+            .update_task(&created.id, risky_script_input("after"), false)
+            .await
+            .expect("update")
+            .expect_err("a script update asks for confirmation");
+
+        let updated = state
+            .confirm_task(&confirmation.confirmation_id)
+            .await
+            .expect("confirm")
+            .expect("updated");
+
+        let store = state.metadata().expect("store");
+        let has = |id: &str| store.get_task_metadata(id, None).unwrap().is_some();
+        assert_ne!(updated.id, created.id);
+        assert!(!has(&created.id));
+        assert!(has(&updated.id));
     }
 
     #[test]

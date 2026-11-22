@@ -7,7 +7,7 @@ import type {
   ScheduledTask,
   SchedulerTimingDriver,
   TaskExecution,
-  TaskExecutionResult,
+  TaskExecutorResult,
 } from "@/types/scheduler"
 import { registerTaskPrewarmer, unregisterTaskPrewarmer } from "./prewarm"
 
@@ -1455,7 +1455,7 @@ it("F16: a one-shot task with maxRuns: 1 keeps its scheduled retry armed in the 
   await schedulerDb.createTask(task)
 
   const executor = jest
-    .fn<Promise<TaskExecutionResult>, [ScheduledTask, TaskExecution]>(async (_t, exec) => ({
+    .fn<Promise<TaskExecutorResult>, [ScheduledTask, TaskExecution]>(async (_t, exec) => ({
       success: true,
       output: { origin: exec.originExecutionId },
     }))
