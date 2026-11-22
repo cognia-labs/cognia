@@ -81,7 +81,7 @@ jobs:
       - uses: docker/setup-buildx-action@v4
       # The raw Buildx CLI needs Actions' cache runtime variables exported;
       # docker/build-push-action normally supplies these for its own builds.
-      - uses: crazy-max/ghaction-github-runtime@v3
+      - uses: crazy-max/ghaction-github-runtime@v4
       - name: Checkout the pinned cognia-services
         uses: ./.github/actions/checkout-cognia-services
       - name: Build service images
