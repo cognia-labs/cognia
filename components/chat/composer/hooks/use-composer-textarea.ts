@@ -91,7 +91,18 @@ export function useComposerTextarea(input: ComposerTextareaInput) {
         linkFolding.fold(e.target.value, e.target.selectionStart ?? e.target.value.length)
       }
     },
-    [textInput, history, isComposing, linkFolding, props.session]
+    [
+      textInput,
+      history,
+      isComposing,
+      linkFolding,
+      props.session,
+      acceptedPredictionRef,
+      chipOverlayRef,
+      ghostOverlayRef,
+      setCaret,
+      setCommandErrors,
+    ]
   )
 
   // Leaving the box settles every remaining URL, including one just pasted with
@@ -115,7 +126,7 @@ export function useComposerTextarea(input: ComposerTextareaInput) {
         setActiveParamId(null)
       }
     },
-    [activeParamId, paramTokenAt, setActiveParamId]
+    [activeParamId, paramTokenAt, setActiveParamId, setCaret]
   )
 
   /**
@@ -165,7 +176,7 @@ export function useComposerTextarea(input: ComposerTextareaInput) {
     if (isComposing) return
     ta.style.height = "auto"
     ta.style.height = `${Math.min(ta.scrollHeight, COMPOSER_MAX_HEIGHT_PX)}px`
-  }, [textValue, isComposing])
+  }, [textValue, isComposing, textareaRef])
 
   // Imperative handle: insert `@name ` at the caret. Used by the desktop
   // shell's member list to mention a teammate without going through any
@@ -195,7 +206,7 @@ export function useComposerTextarea(input: ComposerTextareaInput) {
         textareaRef.current?.focus()
       },
     }),
-    [textInput]
+    [textInput, setCaret, textareaRef]
   )
   return { onChange, onSelect, onTextareaMouseUp, onBlur }
 }

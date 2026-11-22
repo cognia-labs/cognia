@@ -591,7 +591,7 @@ export function useAgentChat() {
         },
         evt
       ),
-    [registry, getExecutionHandle]
+    [registry, getExecutionHandle, silenceWatchdogRef]
   )
 
   // Subscribe to sidecar events once. Desktop gets them via Tauri events;
@@ -706,6 +706,7 @@ export function useAgentChat() {
       enqueueClaudeEvent,
       getExecutionHandle,
       executionHandleDirectory,
+      silenceWatchdogRef,
     ]
   )
 
