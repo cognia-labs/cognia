@@ -32,23 +32,34 @@ export function extractMapRows(md) {
   for (const line of section.split("\n")) {
     if (!line.startsWith("|")) continue
     const cells = line.split("|").map((c) => c.trim())
-    // cells[0] is the empty string before the leading pipe.
-    const [subsystem, livesIn, , adrCell] = cells.slice(1)
+    // cells[0] and cells.at(-1) are the empty strings outside the outer pipes.
+    // Support both 3-column (Subsystem | Lives in | ADR) and 4-column (+ Schema) tables.
+    const dataCells = cells.slice(1, -1)
+    const subsystem = dataCells[0]
+    const livesIn = dataCells[1]
+    const adrCell = dataCells.at(-1)
     if (!subsystem || subsystem === "Subsystem" || /^-+$/.test(subsystem)) continue
     // Only literal paths are checkable. The "Lives in" column also carries
     // brace expansions (`app/{sw,manifest}.ts`), elisions
-    // (`packages/document/.../html-parser.ts`) and bare prose identifiers
-    // (`SchedulerDatabase`, `AppSettings.gitSettings.panel`); reporting those
-    // as missing files is a false positive that trains readers to ignore the
-    // gate. A checkable path contains a separator and no wildcard syntax.
+    // (`packages/document/.../html-parser.ts`), template placeholders
+    // (`lib/connectors/adapters/<vendor>/contribution.ts`), scoped package
+    // names (`@cognia/ocr`), leading-slash routes/commands (`/pet`), external
+    // repo prefixes (`cognia-services:services/sync-server/`), and bare prose
+    // identifiers (`SchedulerDatabase`, `AppSettings.gitSettings.panel`);
+    // reporting those as missing files is a false positive that trains readers
+    // to ignore the gate. A checkable path contains a separator and no wildcard
+    // or non-local-path syntax.
     const livesInPaths = [...(livesIn ?? "").matchAll(/`([^`]+)`/g)]
       .map((m) => m[1])
       .filter(
         (p) =>
           p.includes("/") &&
+          !p.startsWith("@") &&
+          !p.startsWith("/") &&
           !p.includes("*") &&
           !p.includes(":") &&
           !p.includes("{") &&
+          !p.includes("<") &&
           !p.includes("...")
       )
     const adrs = [...(adrCell ?? "").matchAll(/\b(\d{4})\b/g)].map((m) => Number(m[1]))

@@ -1887,22 +1887,6 @@ export const LEDGER_WRITERS = [
   "appendRunObservation",
 ]
 const TABLE_WRITE_METHODS = "(?:add|put|bulkAdd|bulkPut|update|modify|upsert)"
-function tableReceiver(node) {
-  node = unwrap(node)
-  if (ts.isPropertyAccessExpression(node)) return node.name.text
-  if (ts.isElementAccessExpression(node) && ts.isStringLiteralLike(node.argumentExpression))
-    return node.argumentExpression.text
-  if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
-    if (
-      node.expression.name.text === "table" &&
-      node.arguments[0] &&
-      ts.isStringLiteralLike(node.arguments[0])
-    )
-      return node.arguments[0].text
-    return tableReceiver(node.expression.expression)
-  }
-  return null
-}
 function ledgerBinding(ctx, file, symbol) {
   const found = symbolIn(ctx, file, symbol)
   return (
@@ -2085,26 +2069,6 @@ function shadowsImport(from, name) {
         )
           return true
       }
-  }
-  return false
-}
-function dexieHandle(ctx, file, symbol) {
-  const found = symbolIn(ctx, file, symbol)
-  if (!found) return false
-  const isDexie = dexieBindings(ctx, found.file),
-    value = unwrap(found.node)
-  if (ts.isNewExpression(value)) {
-    if (isDexie(value.expression)) return true
-    const cls = symbolIn(ctx, found.file, value.expression.getText())
-    return (
-      !!cls &&
-      ts.isClassDeclaration(cls.node) &&
-      cls.node.heritageClauses?.some(
-        (c) =>
-          c.token === ts.SyntaxKind.ExtendsKeyword &&
-          c.types.some((t) => dexieBindings(ctx, cls.file)(t.expression))
-      )
-    )
   }
   return false
 }

@@ -880,7 +880,7 @@ for (const direction of ["download", "upload"])
       const table = {
         update: async (id, patch) => Object.assign(row, patch),
         where: () => ({
-          equals: (status) => ({
+          equals: () => ({
             toArray: async () => [],
             sortBy: () =>
               new Promise((resolve) => {

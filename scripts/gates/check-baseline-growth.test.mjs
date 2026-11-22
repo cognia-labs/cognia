@@ -221,7 +221,7 @@ test("exception: a complete record is valid", () => {
 })
 
 test("exception: allowRemoval is explicit and can replace allowGrowth", () => {
-  const { allowGrowth, ...removal } = GOOD
+  const { allowGrowth: _allowGrowth, ...removal } = GOOD
   assert.deepEqual(
     validateException("2026-11-01-remove.json", { ...removal, allowRemoval: true }, CONFIG),
     []
@@ -237,7 +237,7 @@ test("exception: allowRemoval is explicit and can replace allowGrowth", () => {
 })
 
 test("config: stable ratchet ids are mandatory and unique", () => {
-  const { id, ...withoutId } = RATCHET
+  const { id: _id, ...withoutId } = RATCHET
   assert.ok(validateConfig({ ratchets: [withoutId] }).some((p) => p.includes("id")))
   assert.ok(
     validateConfig({ ratchets: [RATCHET, { ...RATCHET, file: "other.json" }] }).some((p) =>
@@ -456,7 +456,7 @@ test("e2e: a removed ratchet needs a new allowRemoval record for every measure",
     const removed = analyze({ cwd: repo.dir, argBase: base, env: {} })
     assert.equal(removed.ok, false)
     assert.equal(removed.rows[0].reason, "ratchet removed")
-    const { allowGrowth, ...record } = GOOD
+    const { allowGrowth: _allowGrowth, ...record } = GOOD
     repo.write("scripts/gates/baseline-exceptions/2026-11-01-remove.json", {
       ...record,
       file: E2E_CONFIG.ratchets[0].file,
@@ -509,7 +509,7 @@ test("e2e: removing a measure from the config still needs its removal exception"
     const base = repo.commit("base")
     repo.write("scripts/gates/baseline-growth.json", E2E_CONFIG)
     assert.equal(analyze({ cwd: repo.dir, argBase: base, env: {} }).ok, false)
-    const { allowGrowth, ...record } = GOOD
+    const { allowGrowth: _allowGrowth, ...record } = GOOD
     repo.write("scripts/gates/baseline-exceptions/2026-11-01-remove.json", {
       ...record,
       file: original.file,
@@ -528,7 +528,7 @@ test("e2e: whole-file removal needs a new removal record, never an old one", () 
   try {
     repo.write("scripts/gates/baseline-growth.json", E2E_CONFIG)
     repo.write(E2E_CONFIG.ratchets[0].file, { files: ["a"] })
-    const { allowGrowth, ...record } = GOOD
+    const { allowGrowth: _allowGrowth, ...record } = GOOD
     repo.write("scripts/gates/baseline-exceptions/2026-11-01-old.json", {
       ...record,
       file: E2E_CONFIG.ratchets[0].file,

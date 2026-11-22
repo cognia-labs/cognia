@@ -48,6 +48,25 @@ test("extractMapRows parses rows, skips header/divider, filters globs and symbol
   assert.deepEqual(rows[2].adrs, [63])
 })
 
+test("extractMapRows supports 3-column tables and skips package names, routes, and placeholders", () => {
+  const md = `# CLAUDE.md
+
+## Subsystem Map
+
+| Subsystem | Lives in | ADR |
+| --------- | -------- | --- |
+| Connectors | \`lib/connectors/\`, \`lib/connectors/adapters/<vendor>/contribution.ts\`, \`@cognia/ocr\`, \`/pet\`, \`cognia-services:services/sync-server/\` | 0009, 0258 |
+`
+  const rows = extractMapRows(md)
+  assert.deepEqual(rows, [
+    {
+      subsystem: "Connectors",
+      livesIn: ["lib/connectors/"],
+      adrs: [9, 258],
+    },
+  ])
+})
+
 test("extractMapRows returns [] when there is no Subsystem Map section", () => {
   assert.deepEqual(extractMapRows("# CLAUDE.md\n\nno map here"), [])
 })
